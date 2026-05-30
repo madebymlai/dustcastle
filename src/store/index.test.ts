@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
-import { provisionStore } from "./index.js";
+import { isStageableSource, provisionStore } from "./index.js";
 
 // The store dispatch (slice 2b): which importer a detection routes to, and how
 // unbuilt importers are gated. These cases throw inside the `switch` before any
@@ -50,5 +50,39 @@ describe("provisionStore dispatch (slice 2b importer routing)", () => {
     expect(() =>
       provision({ ecosystem: "node", packageManager: "mystery" as PackageManager, importer: "fetchMysteryDeps" }),
     ).toThrowError(/unsupported importer fetchMysteryDeps/);
+  });
+});
+
+describe("isStageableSource (the staged-build-source filter)", () => {
+  it("stages real project source", () => {
+    for (const p of ["src/app.py", "pyproject.toml", "poetry.lock", "requirements.txt", "go.mod", "package.json"]) {
+      expect(isStageableSource(p)).toBe(true);
+    }
+  });
+
+  it("excludes VCS metadata and nix build outputs", () => {
+    for (const p of ["/proj/.git", "/proj/result", "/proj/result-2", "/proj/result-bin"]) {
+      expect(isStageableSource(p)).toBe(false);
+    }
+  });
+
+  it("excludes per-ecosystem dependency dirs (node_modules, vendor)", () => {
+    expect(isStageableSource("/proj/node_modules")).toBe(false);
+    expect(isStageableSource("/proj/vendor")).toBe(false);
+  });
+
+  it("excludes Python envs and dev caches (.venv and the rest — the node_modules analogues)", () => {
+    for (const name of [".venv", ".tox", "__pycache__", ".mypy_cache", ".pytest_cache"]) {
+      expect(isStageableSource(`/proj/${name}`)).toBe(false);
+      // nested too — cpSync filters every entry by basename
+      expect(isStageableSource(`/proj/pkg/${name}`)).toBe(false);
+    }
+  });
+
+  it("does not over-match names that merely contain a skipped token", () => {
+    // `.venv` is excluded, but `.venvrc` / `myvendor` are real source.
+    expect(isStageableSource("/proj/.venvrc")).toBe(true);
+    expect(isStageableSource("/proj/myvendor")).toBe(true);
+    expect(isStageableSource("/proj/results.txt")).toBe(true);
   });
 });

@@ -211,14 +211,32 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
   };
 }
 
+// Names excluded from the staged build source: VCS metadata, nix build outputs,
+// and per-ecosystem dependency/cache dirs that are rebuilt purely from the lockfile
+// and never belong in the build (node's `node_modules`/Go's `vendor`, and Python's
+// `.venv` + dev caches — the Python analogues, often hundreds of MB).
+const STAGE_SKIP: ReadonlySet<string> = new Set([
+  ".git",
+  "vendor",
+  "result",
+  "node_modules",
+  ".venv",
+  ".tox",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+]);
+
+/** Whether a source entry is staged into the build (false ⇒ excluded). */
+export function isStageableSource(path: string): boolean {
+  const name = basename(path);
+  return !STAGE_SKIP.has(name) && !name.startsWith("result-");
+}
+
 function stageSource(projectDir: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
   // Stage the project source, excluding build artifacts and VCS metadata.
-  const skip = new Set([".git", "vendor", "result", "node_modules"]);
-  cpSync(projectDir, dest, {
-    recursive: true,
-    filter: (src) => !skip.has(basename(src)) && !basename(src).startsWith("result-"),
-  });
+  cpSync(projectDir, dest, { recursive: true, filter: isStageableSource });
 }
 
 function runNixBuild(
