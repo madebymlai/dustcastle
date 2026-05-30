@@ -27,20 +27,22 @@ export interface ResolveImpurityInput {
 /**
  * The run-layer glue for the impurity policy (ADR 0004): figure out whether the
  * project needs an impure build (read from its lockfile), then run the pure
- * decision machine. Only Node has impure install scripts in v1; everything else
- * is always pure.
+ * decision machine. The gate fires for any manager that carries an
+ * impuritySignal — Node's impure install scripts and Python's sdist-only /
+ * no-wheel deps both route here (ADR 0006 amendment, laimk-hse.4); a manager with
+ * no signal (Go) is always pure.
  */
 export function resolveImpurity(input: ResolveImpurityInput): ImpurityDecision {
   const { cwd, detection } = input;
-  if (detection.ecosystem !== "node") return { kind: "pure" };
 
-  // The lockfile that carries the install-script signal, and how to read it, are
-  // owned by the manager's Registry descriptor (ADR 0006 — the lockfile names the
-  // manager). Every node manager has an impuritySignal (yarn/bun's is always-false
-  // by design, ADR 0004), so the lookup is total here.
+  // The lockfile that carries the impurity signal, and how to read it, are owned
+  // by the manager's Registry descriptor (ADR 0006 — the lockfile names the
+  // manager). A manager without a signal (Go) builds pure unconditionally.
   const { impuritySignal } = packageManagerDescriptor(detection.packageManager);
-  const lockPath = join(cwd, impuritySignal!.lockfile);
-  const impurityNeeded = impuritySignal!.needsImpurity(readTextSafe(lockPath));
+  if (impuritySignal === undefined) return { kind: "pure" };
+
+  const lockPath = join(cwd, impuritySignal.lockfile);
+  const impurityNeeded = impuritySignal.needsImpurity(readTextSafe(lockPath));
   const lockfileHash = hashFileOr(lockPath, detection.packageManager);
   const priorConsent = readPriorConsent(cwd, lockfileHash);
 

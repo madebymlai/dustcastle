@@ -116,10 +116,19 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(sig?.needsImpurity("anything")).toBe(false);
     });
 
-    it.each(["go", "pip"] as const)("%s has no impuritySignal in this slice", (pm) => {
-      // Only Node has impure install scripts in v1; Python's sdist-only routing is
-      // a later slice (laimk-hse.4), so pip carries no impuritySignal yet.
-      expect(packageManagerDescriptor(pm).impuritySignal).toBeUndefined();
+    it("pip carries a conservative-pure signal over requirements.txt (laimk-hse.4)", () => {
+      // pip consumes requirements.txt directly, which has no in-file wheel-vs-sdist
+      // signal, so the static reader is conservative-pure; --only-binary=:all: keeps
+      // it honest at build time. The richer uv.lock/poetry.lock readers live in
+      // src/impurity/python.ts and become each manager's signal when uv/poetry land.
+      const sig = packageManagerDescriptor("pip").impuritySignal;
+      expect(sig?.lockfile).toBe("requirements.txt");
+      expect(sig?.needsImpurity("idna==3.7 --hash=sha256:aaa")).toBe(false);
+    });
+
+    it("go has no impuritySignal — it builds pure unconditionally", () => {
+      // Go has no impure install scripts; a manager with no signal is always pure.
+      expect(packageManagerDescriptor("go").impuritySignal).toBeUndefined();
     });
   });
 

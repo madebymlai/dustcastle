@@ -32,6 +32,7 @@ const node: Detection = { ecosystem: "node", packageManager: "npm", importer: "f
 const pnpm: Detection = { ecosystem: "node", packageManager: "pnpm", importer: "fetchPnpmDeps" };
 const yarn: Detection = { ecosystem: "node", packageManager: "yarn", importer: "fetchYarnDeps" };
 const go: Detection = { ecosystem: "go", packageManager: "go", importer: "buildGoModule" };
+const pip: Detection = { ecosystem: "python", packageManager: "pip", importer: "pip-FOD" };
 
 const cleanLock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "app" } } });
 const scriptedLock = JSON.stringify({
@@ -44,10 +45,20 @@ const scriptedPnpmLock =
   "lockfileVersion: '9.0'\n\npackages:\n\n  esbuild@0.21.0:\n    resolution: {integrity: sha512-beef}\n    requiresBuild: true\n";
 
 describe("resolveImpurity (run-layer policy glue)", () => {
-  it("is always pure for a non-Node ecosystem (Go never has impure installs)", () => {
+  it("is always pure for a manager with no impuritySignal (Go never has impure installs)", () => {
     const dir = repo({});
     const decision = resolveImpurity({ cwd: dir, detection: go, mode: "deny", headless: true, env: {} });
     expect(decision).toEqual({ kind: "pure" });
+  });
+
+  it("routes a Python pip project through the impurity gate (requirements.txt is conservative-pure)", () => {
+    // pip carries an impuritySignal over requirements.txt (laimk-hse.4), so a
+    // Python project flows through the decision machine rather than being skipped.
+    // The static signal is conservative-pure; --only-binary=:all: keeps the FOD
+    // honest at build time (an sdist-only dep hard-fails and surfaces).
+    const dir = repo({ "requirements.txt": "idna==3.7 --hash=sha256:aaa" });
+    const decision = resolveImpurity({ cwd: dir, detection: pip, mode: "deny", headless: true, env: {} });
+    expect(decision.kind).toBe("pure");
   });
 
   it("is pure for a Node project whose lockfile has no install scripts", () => {

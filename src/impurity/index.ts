@@ -1,5 +1,10 @@
 import type { Ecosystem } from "../detect/index.js";
 
+// The Python impurity-signal readers (laimk-hse.4) live in a standalone, pure
+// module and are re-exported here alongside the npm/pnpm readers so every
+// lockfile→needsImpurity reader is discoverable from one barrel.
+export { poetryLockNeedsImpurity, requirementsNeedsImpurity, uvLockNeedsImpurity } from "./python.js";
+
 /**
  * The impurity policy (ADR 0004). A project's deps are Nix-built pure/offline by
  * default; when a dep genuinely can't build hermetically (a `postinstall` that

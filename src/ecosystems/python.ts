@@ -1,4 +1,5 @@
 import { generatePythonBuild } from "../nix/python.js";
+import { requirementsNeedsImpurity } from "../impurity/index.js";
 import {
   DEFAULT_PYTHON_INTERPRETERS,
   parsePythonVersionFile,
@@ -38,8 +39,20 @@ const pip: PackageManagerDescriptor = {
   // The pip-FOD has one discoverable aggregate hash; it lands in `pythonDepsHash`
   // (rather than overloading npmDepsHash) — ADR 0006 amendment, hash-field note.
   outputHashField: "pythonDepsHash",
-  // No impuritySignal yet (sdist-only routing is a later slice — laimk-hse.4) and
-  // no lockOnlyResolve yet (loose-manifest pin-then-pure is laimk-hse.5). A
+  // The lockfile-read impurity signal (ADR 0004, laimk-hse.4). pip consumes
+  // `requirements.txt` directly, which carries NO in-file wheel-vs-sdist signal,
+  // so the static reader is conservative-pure. The pure FOD's `--only-binary=:all:`
+  // keeps that honest at build time: an sdist-only / no-wheel dep hard-fails the
+  // hash-pinned download and routes to the existing impure container path
+  // (allow/ask/deny + scoped egress, ADR 0004/0005) — never a silent build from
+  // source. The richer uv.lock/poetry.lock wheel-vs-sdist readers live in
+  // `src/impurity/python.ts` and become each manager's signal when uv/poetry land
+  // as Package Managers (later children of laimk-hse).
+  impuritySignal: {
+    lockfile: "requirements.txt",
+    needsImpurity: (lockText) => requirementsNeedsImpurity(lockText),
+  },
+  // No lockOnlyResolve yet (loose-manifest pin-then-pure is laimk-hse.5). A
   // hash-pinned requirements.txt is already lock-grade and builds pure.
 };
 
