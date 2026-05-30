@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { PACKAGE_MANAGERS, packageManagerDescriptor } from "../ecosystems/index.js";
+import type { PackageManager } from "../ecosystems/index.js";
 
 /**
  * Pin-then-pure (ADR 0006c). A loose manifest — a `package.json` with no
@@ -19,27 +21,33 @@ export interface ResolveCommand {
 
 /**
  * The manager-specific lock-only resolve: produce the lockfile WITHOUT installing
- * `node_modules` or downloading/running scripts. npm and pnpm both expose a
- * first-class lockfile-only resolve; yarn classic does not, so it (and anything
- * unknown) is gated honestly rather than built wrong (the bun-gate pattern).
+ * `node_modules` or downloading/running scripts. The decision is now DERIVED from
+ * the Registry's per-manager `lockOnlyResolve` state (ADR 0001/0006c) rather than
+ * a per-manager switch here: npm and pnpm carry a runnable `command`; yarn classic
+ * carries a `gated` state with its actionable reason (no clean lockfile-only
+ * resolve — the bun-gate honesty pattern); a manager with no `lockOnlyResolve`
+ * (bun, go — gated at provision or already locked) and anything unknown falls back
+ * to the generic loose-manifest error.
  */
 export function lockOnlyResolve(packageManager: string): ResolveCommand {
-  switch (packageManager) {
-    case "npm":
-      return { command: "npm", args: ["install", "--package-lock-only"], lockfile: "package-lock.json" };
-    case "pnpm":
-      return { command: "pnpm", args: ["install", "--lockfile-only"], lockfile: "pnpm-lock.yaml" };
-    case "yarn":
-      throw new Error(
-        "pin-then-pure: yarn has no clean lockfile-only resolve — commit a yarn.lock, or use " +
-          "npm/pnpm, to build pure (ADR 0006c). dustcastle won't run a full yarn install just to pin.",
-      );
-    default:
-      throw new Error(
-        `pin-then-pure: cannot resolve a loose manifest for ${packageManager} — no lockfile-only ` +
-          "resolve is supported (npm and pnpm are; ADR 0006c). Commit a lockfile to build pure.",
-      );
+  const resolve = isPackageManager(packageManager)
+    ? packageManagerDescriptor(packageManager).lockOnlyResolve
+    : undefined;
+  if (resolve?.kind === "command") {
+    return { command: resolve.command, args: resolve.args, lockfile: resolve.lockfile };
   }
+  if (resolve?.kind === "gated") {
+    throw new Error(resolve.reason);
+  }
+  throw new Error(
+    `pin-then-pure: cannot resolve a loose manifest for ${packageManager} — no lockfile-only ` +
+      "resolve is supported (npm and pnpm are; ADR 0006c). Commit a lockfile to build pure.",
+  );
+}
+
+const PACKAGE_MANAGER_SET = new Set<string>(PACKAGE_MANAGERS);
+function isPackageManager(name: string): name is PackageManager {
+  return PACKAGE_MANAGER_SET.has(name);
 }
 
 /** The minimal result of a resolve invocation the orchestration reasons about. */

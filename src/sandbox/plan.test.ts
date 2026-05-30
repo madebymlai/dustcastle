@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Detection } from "../detect/index.js";
+import type { PackageManager } from "../ecosystems/index.js";
 import type { Provisioned } from "../store/index.js";
 import { planSandbox } from "./plan.js";
 
@@ -134,7 +135,7 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
     // The impure install must use the manager that signalled — and from the
     // committed lockfile (frozen/immutable), so an impure build still can't drift.
     const impure = { kind: "allowlist", hosts: ["registry.npmjs.org"] } as const;
-    const cmd = (packageManager: string, importer: string) =>
+    const cmd = (packageManager: PackageManager, importer: string) =>
       planSandbox({
         provisioned: nodeProvisioned,
         detection: { ecosystem: "node", packageManager, importer },

@@ -3,11 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Detection } from "../detect/index.js";
+import { packageManagerDescriptor } from "../ecosystems/index.js";
 import {
   decideImpurity,
   impurityMarkerJson,
-  npmLockNeedsImpurity,
-  pnpmLockNeedsImpurity,
   type ImpurityDecision,
   type ImpurityMarker,
   type ImpurityMode,
@@ -35,8 +34,13 @@ export function resolveImpurity(input: ResolveImpurityInput): ImpurityDecision {
   const { cwd, detection } = input;
   if (detection.ecosystem !== "node") return { kind: "pure" };
 
-  const lockPath = join(cwd, lockfileName(detection.packageManager));
-  const impurityNeeded = lockNeedsImpurity(detection.packageManager, lockPath);
+  // The lockfile that carries the install-script signal, and how to read it, are
+  // owned by the manager's Registry descriptor (ADR 0006 — the lockfile names the
+  // manager). Every node manager has an impuritySignal (yarn/bun's is always-false
+  // by design, ADR 0004), so the lookup is total here.
+  const { impuritySignal } = packageManagerDescriptor(detection.packageManager);
+  const lockPath = join(cwd, impuritySignal!.lockfile);
+  const impurityNeeded = impuritySignal!.needsImpurity(readTextSafe(lockPath));
   const lockfileHash = hashFileOr(lockPath, detection.packageManager);
   const priorConsent = readPriorConsent(cwd, lockfileHash);
 
@@ -119,44 +123,6 @@ export function gitRemoteHost(cwd: string): string | undefined {
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return undefined;
   return parseGitRemoteHost(result.stdout.trim());
-}
-
-/** The lockfile that carries a manager's install-script signal (ADR 0006 names the manager). */
-function lockfileName(packageManager: string): string {
-  switch (packageManager) {
-    case "pnpm":
-      return "pnpm-lock.yaml";
-    case "yarn":
-      return "yarn.lock";
-    case "bun":
-      return "bun.lock";
-    default:
-      return "package-lock.json"; // npm
-  }
-}
-
-/**
- * Whether the manager's lockfile signals an impure build (ADR 0004), read straight
- * from the lockfile per manager rather than inferred from a failed build. npm
- * records `hasInstallScript`; pnpm records `requiresBuild: true`.
- *
- * yarn.lock (v1) carries NO install-script metadata — yarn's build policy lives in
- * `package.json#dependenciesMeta.built` / `.yarnrc`, not the lockfile — so a yarn
- * project always resolves pure. That's the safe default, not a gap: the pure
- * `yarnConfigHook` provision never runs untrusted scripts, so faking a signal the
- * lockfile can't carry would be worse than honest (the bun-gate honesty pattern).
- * bun is gated at provision; there is nothing to detect here either.
- */
-function lockNeedsImpurity(packageManager: string, lockPath: string): boolean {
-  switch (packageManager) {
-    case "pnpm":
-      return pnpmLockNeedsImpurity(readTextSafe(lockPath));
-    case "yarn":
-    case "bun":
-      return false;
-    default:
-      return npmLockNeedsImpurity(readJsonSafe(lockPath)); // npm
-  }
 }
 
 function readTextSafe(path: string): string | undefined {
