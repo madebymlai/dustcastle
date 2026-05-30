@@ -1,0 +1,10 @@
+{
+  "name": "egress-probe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stands in for an untrusted dependency that runs code at install time. Its postinstall is exactly what ADR 0005's egress allowlist must contain.",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  }
+}

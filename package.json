@@ -1,0 +1,35 @@
+{
+  "name": "dustcastle",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A global toolchain manager for AI coding agent sandboxes — one shared, deduplicated Nix store instead of per-project image builds.",
+  "type": "module",
+  "bin": {
+    "dustcastle": "./dist/cli/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "dev": "tsx src/cli/main.ts",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:e2e": "vitest run --project e2e",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ai-hero/sandcastle": "0.6.6",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

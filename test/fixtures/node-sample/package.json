@@ -1,0 +1,12 @@
+{
+  "name": "sample",
+  "version": "0.0.0",
+  "private": true,
+  "description": "dustcastle Node e2e fixture — one real dep + a built-in node:test.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "is-number": "7.0.0"
+  }
+}

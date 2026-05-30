@@ -1,0 +1,13 @@
+{
+  "name": "sample",
+  "version": "0.0.0",
+  "private": true,
+  "description": "dustcastle impure-allow e2e fixture: a real registry dep (is-number) plus a local dep with a postinstall, so the lockfile reports hasInstallScript and the build is impure.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "egress-probe": "file:./egress-probe",
+    "is-number": "7.0.0"
+  }
+}
