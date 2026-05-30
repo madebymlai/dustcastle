@@ -52,3 +52,37 @@ A second, broader survey (minimal detectors + SBOM-grade lockfile parsers) confi
 - Detection and the [ADR 0004](0004-project-deps-pure-default-explicit-impurity.md) build read the **same artifact** (the lockfile), so the router and the importer fold together naturally.
 - The pin-then-pure step needs a one-time network resolve per loose manifest — overlaps with the egress-allowlist work in [ADR 0005](0005-sandbox-secrets-and-egress.md).
 - The importer table and version-file list need per-Ecosystem maintenance as package managers appear (a new JS package manager = one new row), but each addition is local and small.
+
+## Amendment (2026-05-30): the Python Importer is a pip-FOD, not uv2nix/poetry2nix
+
+The importer table above lists `uv.lock → uv2nix`, `poetry.lock → poetry2nix`, and section (c)
+names `requirements.txt` the pin-then-pure poster child. For **Python**, those importer choices
+are **superseded**. dustcastle's Python Importer is a single **pip fixed-output derivation
+(pip-FOD)** — the direct `fetchNpmDeps` analogue:
+
+- a network-enabled FOD runs `pip download --only-binary=:all: --require-hashes` (one aggregate
+  output hash, discovered via the existing fake → mismatch → real probe), then a
+  network-isolated step runs `pip install --no-index --find-links` to assemble the Project Deps
+  offline. Wheels run no install-time code, so assembly is pure by construction.
+- **uv and poetry are export front-ends to this one Importer** (`uv export` / `poetry export` →
+  hash-pinned requirements), not separate importers. `requirements.txt` is consumed directly; a
+  loose/unpinned manifest is resolved once via `uv pip compile --generate-hashes` — pin-then-pure
+  (c) still holds, but the *pure build* is now a pip-FOD, not an eval-time per-package fetch.
+
+**Why not uv2nix/poetry2nix.** Both are **external flake inputs** (not in nixpkgs), which would
+break dustcastle's nixpkgs-via-`fetchTarball`-only invariant and contradict [ADR 0001](0001-nix-store-as-the-toolchain-mechanism.md)'s
+"own the engine, no heavyweight external dependency"; poetry2nix is additionally unmaintained.
+The pip-FOD stays in nixpkgs, reuses the aggregate-hash machinery unchanged, and honours the
+lockfile's own hashes. Validated end-to-end under nix-portable (spike laimk-hse.1, 2026-05-30):
+discovery loop, network-in-FOD + cold toolchain fetch, offline install, and byte-reproducible
+download all confirmed.
+
+**Hash field.** The pip-FOD has one discoverable aggregate hash, so `provisionStore`'s existing
+Pass-1 discover / Pass-2 build loop and `outputHashField` are reused **unchanged**. `Provisioned`
+gains a `pythonDepsHash` field and `OutputHashField` a matching `"pythonDepsHash"` variant (rather
+than overloading `npmDepsHash`); no skip-discovery machinery is introduced.
+
+**Carried caveat.** A wheel set is keyed by `(platform, python-version, abi)`; for native packages
+the discovered hash is keyed per `(system, pythonVersion)` and `pip download` pins
+`--platform/--python-version/--implementation/--abi`. Sdist-only / no-wheel packages hard-fail
+under `--only-binary=:all:` and route to the impure container path ([ADR 0004](0004-project-deps-pure-default-explicit-impurity.md)/[ADR 0005](0005-sandbox-secrets-and-egress.md)).
