@@ -70,6 +70,13 @@ export interface BuildContext {
   readonly depsHash: string;
   /** The Nix `src` path the build runs against (the store stages source here). */
   readonly src?: string;
+  /**
+   * The resolved Toolchain version (ADR 0006b), threaded from `Detection`. Each
+   * generator adapts it as its semantics require — Python reads it as the nixpkgs
+   * interpreter attr (`python311`) the pip-FOD builds against; Node/Go currently
+   * hardcode their runtime and ignore it. Undefined when detection found no version.
+   */
+  readonly toolchainVersion?: string;
 }
 
 /**

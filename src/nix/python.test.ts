@@ -43,6 +43,19 @@ describe("generatePythonBuild (ADR 0006 pip-FOD Importer)", () => {
     expect(build.expression).toContain("--find-links=");
   });
 
+  it("builds against the resolved interpreter, defaulting to python312 when unset (laimk-hse.3)", () => {
+    const hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    // No interpreter supplied → the default the resolver-less path uses.
+    expect(generatePythonBuild({ pname: "app", pythonDepsHash: hash }).expression).toContain(
+      "python = pkgs.python312;",
+    );
+    // The resolver's pick (ADR 0006b) is threaded through to the actual build, so a
+    // repo asking for 3.11 builds against python311 — not the hardcoded default.
+    const pinned = generatePythonBuild({ pname: "app", pythonDepsHash: hash, interpreter: "python311" });
+    expect(pinned.expression).toContain("python = pkgs.python311;");
+    expect(pinned.expression).not.toContain("pkgs.python312");
+  });
+
   it("emits self-contained nixpkgs via fetchTarball — no external flake inputs (ADR 0001/0006)", () => {
     const build = generatePythonBuild({
       pname: "app",

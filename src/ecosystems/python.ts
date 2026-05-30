@@ -35,6 +35,9 @@ const pip: PackageManagerDescriptor = {
       pname: ctx.pname,
       pythonDepsHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
+      // Build against the interpreter the resolver picked (laimk-hse.3); the pip-FOD
+      // defaults to python312 only when detection found no version.
+      ...(ctx.toolchainVersion !== undefined ? { interpreter: ctx.toolchainVersion } : {}),
     }),
   // The pip-FOD has one discoverable aggregate hash; it lands in `pythonDepsHash`
   // (rather than overloading npmDepsHash) — ADR 0006 amendment, hash-field note.
@@ -90,6 +93,9 @@ const uv: PackageManagerDescriptor = {
       pname: ctx.pname,
       pythonDepsHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
+      // Build against the interpreter the resolver picked (laimk-hse.3); the pip-FOD
+      // defaults to python312 only when detection found no version.
+      ...(ctx.toolchainVersion !== undefined ? { interpreter: ctx.toolchainVersion } : {}),
     }),
   // The same single aggregate pip-FOD hash, landing in pythonDepsHash (not npmDepsHash).
   outputHashField: "pythonDepsHash",
@@ -149,6 +155,9 @@ const poetry: PackageManagerDescriptor = {
       pname: ctx.pname,
       pythonDepsHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
+      // Build against the interpreter the resolver picked (laimk-hse.3); the pip-FOD
+      // defaults to python312 only when detection found no version.
+      ...(ctx.toolchainVersion !== undefined ? { interpreter: ctx.toolchainVersion } : {}),
     }),
   // The same single aggregate pip-FOD hash, landing in pythonDepsHash (not npmDepsHash).
   outputHashField: "pythonDepsHash",

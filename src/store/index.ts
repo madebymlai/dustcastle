@@ -138,7 +138,17 @@ interface BuildContext {
  * neither. The descriptor's `outputHashField` names which field to populate.
  */
 function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Provisioned {
-  const build = (depsHash: string) => descriptor.generateBuild({ pname: ctx.pname, depsHash, src: "./src" });
+  const build = (depsHash: string) =>
+    descriptor.generateBuild({
+      pname: ctx.pname,
+      depsHash,
+      src: "./src",
+      // Thread the resolved Toolchain version (ADR 0006b) so the importer builds
+      // against the requested interpreter (Python; laimk-hse.3). Node/Go ignore it.
+      ...(spec.detection.toolchainVersion !== undefined
+        ? { toolchainVersion: spec.detection.toolchainVersion }
+        : {}),
+    });
   const attrs = build(FAKE_VENDOR_HASH).attrs;
   const write = (depsHash: string) =>
     writeFileSync(join(ctx.buildDir, "default.nix"), build(depsHash).expression);
