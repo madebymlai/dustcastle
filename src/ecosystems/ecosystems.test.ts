@@ -159,11 +159,24 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       if (r?.kind === "gated") expect(r.reason).toMatch(/yarn/i);
     });
 
-    it.each(["bun", "go", "pip"] as const)("%s has no lockOnlyResolve", (pm) => {
-      // pip's loose-manifest pin-then-pure (`uv pip compile --generate-hashes`) is
-      // a later slice (laimk-hse.5); a hash-pinned requirements.txt is already
-      // lock-grade, so this tracer slice carries no lockOnlyResolve for pip.
+    it.each(["bun", "go"] as const)("%s has no lockOnlyResolve", (pm) => {
+      // bun is gated at provision; go's manifests ARE its lockfile (always pinned),
+      // so neither needs a loose-manifest resolve.
       expect(packageManagerDescriptor(pm).lockOnlyResolve).toBeUndefined();
+    });
+
+    it("pip resolves a loose manifest with `uv pip compile --generate-hashes` (laimk-hse.5)", () => {
+      // The loose Python case (unpinned/hash-less requirements.txt, abstract
+      // pyproject) is resolved ONCE into a VISIBLE, hash-pinned requirements.txt
+      // via the validated spike command (ADR 0006c amendment). uv is a pure export
+      // front-end to the pip-FOD, not a separate Importer.
+      const r = packageManagerDescriptor("pip").lockOnlyResolve;
+      expect(r).toEqual({
+        kind: "command",
+        command: "uv",
+        args: ["pip", "compile", "--generate-hashes", "requirements.in", "-o", "requirements.txt"],
+        lockfile: "requirements.txt",
+      });
     });
   });
 

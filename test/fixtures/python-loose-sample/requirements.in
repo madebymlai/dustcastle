@@ -1,0 +1,8 @@
+# The LOOSE Python source (ADR 0006c, laimk-hse.5): bare, unpinned package names —
+# resolvable but NOT lock-grade. dustcastle resolves this ONCE via
+# `uv pip compile --generate-hashes requirements.in -o requirements.txt`, producing
+# a VISIBLE, hash-pinned requirements.txt (the committed artifact), after which the
+# build runs pure/offline through the pip-FOD. Pure-Python, wheel-only deps so the
+# nixpkgs python in the FOD downloads them regardless of the compiling interpreter.
+idna
+urllib3

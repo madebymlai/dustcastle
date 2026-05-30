@@ -109,6 +109,21 @@ export function stagePythonProject(root: string): string {
   return projectDir;
 }
 
+// The LOOSE Python fixture (ADR 0006c, laimk-hse.5): an abstract pyproject.toml
+// (the manifest marker) + a loose, unpinned requirements.in (idna, urllib3) and NO
+// lock-grade requirements.txt, so detection flags it `loose`. dustcastle resolves
+// it ONCE into a hash-pinned requirements.txt (`uv pip compile --generate-hashes`),
+// then builds PURE via the pip-FOD. Drives the gated pin-then-pure Python e2e.
+export const PYTHON_LOOSE_SAMPLE = resolve(process.cwd(), "test/fixtures/python-loose-sample");
+
+/** Stage the loose Python sample under a "sample"-named dir (pname matches the warm Store). */
+export function stagePythonLooseProject(root: string): string {
+  const projectDir = join(root, "sample");
+  mkdirSync(projectDir);
+  cpSync(PYTHON_LOOSE_SAMPLE, projectDir, { recursive: true });
+  return projectDir;
+}
+
 // The impure-allow Node fixture (ADR 0004/0005): a real registry dep (is-number)
 // + a local dep with a postinstall, so the lockfile reports hasInstallScript and
 // the build resolves impure. Drives the live egress-enforcement e2e: a real

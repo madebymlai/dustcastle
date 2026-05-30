@@ -68,9 +68,19 @@ function detectEcosystem(
   });
 
   // A manifest with no lockfile is resolvable-but-unpinned: pin-then-pure (0006c).
-  // This is structurally node-only — Go's manifests (go.mod/go.sum) ARE its
-  // lockfiles, so a present Go manifest always implies a present lockfile.
-  const loose = manifestPresent && lockfileManager === undefined;
+  // For Node this is structurally "manifest present, no lockfile" — Go's manifests
+  // (go.mod/go.sum) ARE its lockfiles, so a present Go manifest always implies a
+  // present lockfile. Python overrides with a CONTENT-based reader, because its
+  // requirements.txt is BOTH the manifest AND the lockfile (a present-but-not-
+  // lock-grade requirements.txt, or an abstract pyproject, is loose; ADR 0006c).
+  const loose =
+    ecosystem.isLooseManifest !== undefined
+      ? ecosystem.isLooseManifest({
+          manifestPresent,
+          hasLockfile: lockfileManager !== undefined,
+          readFile: (name) => (has(name) ? readFileSync(join(dir, name), "utf8") : undefined),
+        })
+      : manifestPresent && lockfileManager === undefined;
 
   return {
     ecosystem: ecosystem.ecosystem,

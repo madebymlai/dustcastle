@@ -157,6 +157,16 @@ export interface ToolchainVersionInput {
   readonly readVersionFile: (name: string) => string | undefined;
 }
 
+/** The inputs an Ecosystem's loose-manifest reader threads (ADR 0006c). */
+export interface LooseManifestInput {
+  /** Whether a manifest marker file is present in the directory. */
+  readonly manifestPresent: boolean;
+  /** Whether a lockfile naming one of the Ecosystem's managers is present. */
+  readonly hasLockfile: boolean;
+  /** Read a repo file's text by name (`requirements.txt`, `pyproject.toml`). */
+  readonly readFile: (name: string) => string | undefined;
+}
+
 /**
  * The DETECTION grain (CONTEXT.md: Ecosystem). How an Ecosystem recognises itself
  * in a directory, resolves which of its Package Managers a repo uses, and reads
@@ -180,4 +190,13 @@ export interface EcosystemDescriptor {
   readonly readDeclaredManager?: (manifest: string | undefined) => PackageManager | undefined;
   /** Read the requested Toolchain version (ADR 0006b). Absent when none applies. */
   readonly readToolchainVersion?: (input: ToolchainVersionInput) => string | undefined;
+  /**
+   * Decide whether a directory is a LOOSE manifest needing pin-then-pure (ADR
+   * 0006c). Absent for Ecosystems whose "manifest present but no lockfile" IS the
+   * loose test (Node's package.json) — the generic default covers them. Present
+   * for Python, where `requirements.txt` is BOTH the manifest AND the lockfile, so
+   * loose-ness is a CONTENT decision (unpinned/hash-less requirements.txt, or an
+   * abstract pyproject with no lock), not a file-presence one.
+   */
+  readonly isLooseManifest?: (input: LooseManifestInput) => boolean;
 }

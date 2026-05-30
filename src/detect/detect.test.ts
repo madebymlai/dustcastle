@@ -297,4 +297,39 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     expect(ecos).toContain("node");
     expect(ecos).toContain("python");
   });
+
+  // Loose-manifest pin-then-pure (ADR 0006c, laimk-hse.5). Unlike Node, where
+  // requirements-presence implies a lockfile, a Python requirements.txt is the
+  // pip-FOD's lockfile ONLY when it is lock-grade (== + --hash). A loose one is
+  // flagged `loose` so dustcastle resolves it ONCE (uv pip compile) then builds pure.
+  it("flags an UNPINNED requirements.txt as loose (pin-then-pure, ADR 0006c)", () => {
+    const dir = repo({ "requirements.txt": "idna\nurllib3\n" });
+
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "pip", loose: true });
+  });
+
+  it("flags a hash-LESS pinned requirements.txt as loose (the pip-FOD needs hashes)", () => {
+    const dir = repo({ "requirements.txt": "idna==3.10\nurllib3==2.2.3\n" });
+
+    expect(detect(dir)[0]?.loose).toBe(true);
+  });
+
+  it("flags an ABSTRACT pyproject.toml (no lock, no requirements.txt) as loose", () => {
+    const dir = repo({
+      "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna", "urllib3"]\n',
+    });
+
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", loose: true });
+  });
+
+  it("does NOT flag a lock-grade requirements.txt as loose even with an abstract pyproject", () => {
+    // pyproject is abstract, but the hash-pinned requirements.txt IS the lockfile,
+    // so the build runs pure directly — no resolve needed.
+    const dir = repo({
+      "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna"]\n',
+      "requirements.txt": PINNED_REQUIREMENTS,
+    });
+
+    expect(detect(dir)[0]?.loose).toBeUndefined();
+  });
 });

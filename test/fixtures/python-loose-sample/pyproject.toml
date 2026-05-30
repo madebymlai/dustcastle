@@ -1,0 +1,9 @@
+# Manifest marker so detection recognises this directory as Python (ADR 0006a).
+# It is ABSTRACT (deps mirror requirements.in, nothing pinned), and there is no
+# lock-grade requirements.txt, so detection flags it `loose` — dustcastle resolves
+# requirements.in ONCE into a hash-pinned requirements.txt, then builds pure.
+[project]
+name = "python-loose-sample"
+version = "0.0.0"
+requires-python = ">=3.9"
+dependencies = ["idna", "urllib3"]

@@ -22,6 +22,17 @@ describe("lockOnlyResolve (the lock-only resolve invocation — ADR 0006c)", () 
     expect(resolve.lockfile).toBe("pnpm-lock.yaml");
   });
 
+  it("resolves a loose pip manifest with `uv pip compile --generate-hashes` (laimk-hse.5)", () => {
+    // A loose Python manifest (unpinned/hash-less requirements.txt, abstract
+    // pyproject) resolves ONCE into a VISIBLE, hash-pinned requirements.txt, then
+    // builds pure via the pip-FOD (ADR 0006c amendment). uv is a pure export
+    // front-end, not a separate Importer.
+    const resolve = lockOnlyResolve("pip");
+    expect(resolve.command).toBe("uv");
+    expect(resolve.args).toEqual(["pip", "compile", "--generate-hashes", "requirements.in", "-o", "requirements.txt"]);
+    expect(resolve.lockfile).toBe("requirements.txt");
+  });
+
   it("gates yarn with an actionable error (no clean lockfile-only resolve)", () => {
     // Yarn classic has no first-class lockfile-only resolve; rather than build it
     // wrong, dustcastle gates it honestly (the bun-gate pattern).
@@ -55,5 +66,22 @@ describe("pinLooseManifest (the one-time online resolve — ADR 0006c)", () => {
     expect(() => pinLooseManifest({ cwd: "/proj", packageManager: "npm", run })).toThrow(
       /lock-only resolve failed/i,
     );
+  });
+
+  it("runs the pip loose resolve (uv pip compile) and surfaces the generated requirements.txt", () => {
+    // The Python pin-then-pure path (laimk-hse.5): the one-time online resolve runs
+    // `uv pip compile --generate-hashes`, producing the VISIBLE, committed lock.
+    const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+    const run = (command: string, args: readonly string[], cwd: string): ResolveResult => {
+      calls.push({ command, args, cwd });
+      return OK;
+    };
+
+    const pinned = pinLooseManifest({ cwd: "/py", packageManager: "pip", run });
+
+    expect(calls).toEqual([
+      { command: "uv", args: ["pip", "compile", "--generate-hashes", "requirements.in", "-o", "requirements.txt"], cwd: "/py" },
+    ]);
+    expect(pinned.lockfile).toBe("requirements.txt");
   });
 });

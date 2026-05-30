@@ -10,6 +10,7 @@ export type {
   EcosystemDescriptor,
   ImpuritySignal,
   LockOnlyResolve,
+  LooseManifestInput,
   OutputHashField,
   PackageManager,
   PackageManagerDescriptor,
