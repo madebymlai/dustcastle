@@ -41,15 +41,21 @@ export function uvLockNeedsImpurity(lockText: string | undefined): boolean {
 
 /**
  * Whether a `poetry.lock` needs an impure build (ADR 0004). poetry.lock is TOML:
- * each `[[package]]` block has a `[package.files]` section listing every artifact
- * by filename. A package is sdist-only — and so impure — when it has a files
- * section whose entries are all sdists (`.tar.gz` / `.zip`) with no `.whl`. A
- * block with no files section builds nothing and stays pure.
+ * each `[[package]]` block lists every artifact by filename. A package is
+ * sdist-only — and so impure — when it has a files listing whose entries are all
+ * sdists (`.tar.gz` / `.zip`) with no `.whl`. A block with no files listing builds
+ * nothing and stays pure.
+ *
+ * Real poetry (2.x, lock-version 2.1) emits an inline `files = [{file = "…"}, …]`
+ * ARRAY; older poetry (lock-version 2.0) emitted a `[package.files]` sub-table of
+ * `"<filename>" = "<hash>"`. `filenamesInFilesSection` reads BOTH (laimk-hse.7
+ * spike: the wheels-only `poetry export → pip-FOD` path was validated against real
+ * poetry 2.4.1, whose array form the old table-only scan silently missed — every
+ * real lock read as pure, hiding a genuine sdist-only dep).
  */
 export function poetryLockNeedsImpurity(lockText: string | undefined): boolean {
   if (typeof lockText !== "string" || lockText.trim() === "") return false;
   return splitTomlPackages(lockText).some((block) => {
-    if (!/^\s*\[package\.files\]/m.test(block)) return false;
     const files = filenamesInFilesSection(block);
     if (files.length === 0) return false;
     return !files.some((name) => name.endsWith(".whl"));
@@ -90,25 +96,26 @@ function splitTomlPackages(lockText: string): readonly string[] {
 }
 
 /**
- * Collect the artifact filenames listed under a poetry `[package.files]` section.
- * The section lists one `"<filename>" = "<hash>"` entry per artifact (poetry also
- * emits an array-of-tables form; the keys are filenames either way), so we read
- * the left-hand side of each assignment up to the next sub-table header.
+ * Collect the artifact filenames a poetry `[[package]]` block lists, across both
+ * lock formats (the block is already isolated by `splitTomlPackages`, so a
+ * whole-block scan can't bleed across packages):
+ *   - poetry 2.x (lock-version 2.1): `files = [{file = "name", hash = "…"}, …]`
+ *   - poetry <2.x (lock-version 2.0): a `[package.files]` sub-table of
+ *     `"name-1.0.tar.gz" = "sha256:…"`
+ * Both pin the filename in a quoted string, so we read it off each `file = "…"`
+ * field (array form) or each `"<filename>.{whl,tar.gz,…}" =` key (table form).
+ * Only artifact lines carry such tokens — `name`/`version`/`extras` lines don't.
  */
 function filenamesInFilesSection(block: string): readonly string[] {
-  const lines = block.split("\n");
-  const start = lines.findIndex((l) => /^\s*\[package\.files\]/.test(l));
-  if (start === -1) return [];
   const names: string[] = [];
-  for (const line of lines.slice(start + 1)) {
-    if (/^\s*\[/.test(line)) break; // next sub-table ends the files section
-    // poetry array-of-tables form: `{ file = "name-1.0.tar.gz", hash = "..." }`
-    const fileField = /file\s*=\s*"([^"]+)"/.exec(line);
+  for (const line of block.split("\n")) {
+    // array form: `{ file = "name-1.0.tar.gz", hash = "..." }`
+    const fileField = /\bfile\s*=\s*"([^"]+)"/.exec(line);
     if (fileField?.[1] !== undefined) {
       names.push(fileField[1]);
       continue;
     }
-    // inline form: `name-1.0-py3-none-any.whl = "sha256:..."`
+    // table-key form: `name-1.0-py3-none-any.whl = "sha256:..."`
     const key = /^\s*"?([^"=\s]+\.(?:whl|tar\.gz|zip|tar\.bz2))"?\s*=/.exec(line);
     if (key?.[1] !== undefined) names.push(key[1]);
   }

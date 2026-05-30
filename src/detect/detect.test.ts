@@ -402,4 +402,26 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     // The richer lockfile wins: precedence is uv.lock > poetry.lock.
     expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "uv" });
   });
+
+  // A richer lockfile with NO committed requirements.txt is NOT loose (laimk-hse.7):
+  // the export front-end materialises requirements.txt at provision time, so the
+  // project is lock-pinned. (Before the fix, the requirements.txt-only loose reader
+  // wrongly flagged every such repo loose — the common real-world uv/poetry shape.)
+  it("does NOT flag a uv.lock repo (no requirements.txt) as loose — uv.lock is the lock", () => {
+    const dir = repo({
+      "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna"]\n',
+      "uv.lock": 'version = 1\n\n[[package]]\nname = "idna"\nversion = "3.10"\n',
+    });
+
+    expect(detect(dir)[0]?.loose).toBeUndefined();
+  });
+
+  it("does NOT flag a poetry.lock repo (no requirements.txt) as loose — poetry.lock is the lock", () => {
+    const dir = repo({
+      "pyproject.toml": '[tool.poetry]\nname = "app"\n',
+      "poetry.lock": '[[package]]\nname = "idna"\nversion = "3.10"\n',
+    });
+
+    expect(detect(dir)[0]?.loose).toBeUndefined();
+  });
 });

@@ -127,19 +127,14 @@ const uv: PackageManagerDescriptor = {
  * richer lockfile: it beats a co-present `requirements.txt`, and loses to `uv.lock`
  * (precedence uv.lock > poetry.lock > requirements.txt, ADR 0006d).
  *
- * UNLIKE uv, poetry ALSO carries an honest `provisionGate` (ADR 0001: a gated
- * manager is a first-class Registry state, not an ad-hoc throw — the bun-gate
- * pattern). The spike (laimk-hse.1) validated the pip-FOD pure path end-to-end via
- * `uv export`, but did NOT prove `poetry export` hermetic — `poetry export` lives
- * in the separable `poetry-plugin-export`, resolves against poetry's own
- * environment, and its `--hash` output covers BOTH wheels and sdists rather than
- * the wheels-only, `--require-hashes`-clean shape the pip-FOD needs. Rather than
- * ship a build that might silently resolve from the network or fail the FOD,
- * detection still ROUTES poetry (so a poetry repo is recognised and surfaces an
- * actionable reason), but provisioning gates with that reason until `poetry export`
- * hermeticity is proven (then the gate is simply dropped, as for uv). All the
- * descriptor data — the export front-end, the impurity reader, the pip-FOD build —
- * is wired and unit-tested, so lifting the gate is a one-line change, not a rewrite.
+ * The laimk-hse.7 spike PROVED `poetry export` hermetic against real poetry 2.4.1:
+ * its `--require-hashes` output is `--only-binary=:all:`-clean (it emits a wheel
+ * hash alongside each sdist hash, exactly as `uv export` does — harmless, since the
+ * FOD downloads only the wheel and just needs its hash in the set) and feeds the
+ * pip-FOD to the SAME aggregate hash as `uv export` for the same deps, building
+ * pure/offline under nix-portable. So poetry carries NO `provisionGate` — like uv,
+ * it provisions through the pure path. (The spike also corrected the export command
+ * and the poetry.lock impurity reader for real poetry's 2.1 lock format.)
  */
 const poetry: PackageManagerDescriptor = {
   packageManager: "poetry",
@@ -162,14 +157,15 @@ const poetry: PackageManagerDescriptor = {
   // The same single aggregate pip-FOD hash, landing in pythonDepsHash (not npmDepsHash).
   outputHashField: "pythonDepsHash",
   // The export front-end (ADR 0006 amendment): `poetry export` emits the Importer's
-  // hash-pinned requirements.txt from poetry.lock. `--without-hashes=false` keeps
-  // the per-artifact hashes (poetry's flag is opt-OUT, so we explicitly opt in) the
-  // pip-FOD's `--require-hashes` download needs. Carried as descriptor data so
-  // dustcastle never reaches for poetry2nix — poetry is a front-end to one Importer.
-  // (Behind the provisionGate below until export hermeticity is proven.)
+  // hash-pinned requirements.txt from poetry.lock. Hashes are ON by default — the
+  // per-artifact hashes the pip-FOD's `--require-hashes` download needs — so no flag
+  // is required (`--without-hashes` is a boolean OPT-OUT; poetry-plugin-export 1.10
+  // rejects the `--without-hashes=false` value form the laimk-hse.7 spike caught).
+  // Carried as descriptor data so dustcastle never reaches for poetry2nix — poetry
+  // is a front-end to the one pip-FOD Importer.
   exportFrontEnd: {
     command: "poetry",
-    args: ["export", "--format", "requirements.txt", "--without-hashes=false", "-o", "requirements.txt"],
+    args: ["export", "--format", "requirements.txt", "-o", "requirements.txt"],
     requirementsFile: "requirements.txt",
   },
   // The impurity signal reuses the slice-4 poetry.lock reader (ADR 0004): a package
@@ -180,21 +176,10 @@ const poetry: PackageManagerDescriptor = {
     lockfile: "poetry.lock",
     needsImpurity: (lockText) => poetryLockNeedsImpurity(lockText),
   },
-  // The honest provision gate (ADR 0001, the bun-gate pattern). `poetry export`
-  // hermeticity is UNPROVEN by the spike (only `uv export` was validated), so
-  // provisioning surfaces this actionable reason rather than shipping a build that
-  // might resolve from the network or hand the pip-FOD a wheel+sdist requirements
-  // file. Detection still routes poetry; lifting this gate (once export is proven
-  // hermetic) is dropping this one field — the rest of the descriptor is ready.
-  provisionGate: {
-    reason:
-      "dustcastle: poetry is detected, but provisioning is gated — `poetry export`'s " +
-      "hermeticity is not yet proven (the spike validated only `uv export`). poetry " +
-      "export resolves against poetry's own environment and emits hashes for sdists as " +
-      "well as wheels, which the wheels-only `--require-hashes` pip-FOD cannot assume. " +
-      "Pin a hash-pinned, wheels-only requirements.txt (or `uv export` from a uv.lock) " +
-      "to build pure today; poetry's export front-end ships once it is proven hermetic.",
-  },
+  // No provisionGate: the laimk-hse.7 spike proved `poetry export` hermetic, so
+  // poetry provisions through the same pure pip-FOD path as uv (the gate the
+  // bun-gate honesty pattern reserved for an unproven front-end is no longer
+  // warranted — see the docstring above).
 };
 
 export const PYTHON_MANAGERS: readonly PackageManagerDescriptor[] = [uv, poetry, pip];
@@ -232,16 +217,20 @@ export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
  * 0006c). A present `requirements.txt` is the pip-FOD's lockfile ONLY when it is
  * lock-grade (every requirement `==`-pinned and `--hash`-bearing); a present-but-
  * not-lock-grade file (unpinned, hash-less, or mixed) is loose. With no
- * requirements.txt at all, an abstract pyproject.toml/setup.py (no lock) is loose
- * too — its declared deps have nothing pinning them yet.
+ * requirements.txt, a RICHER lockfile (`uv.lock` / `poetry.lock`) is lock-grade —
+ * its export front-end materialises the hash-pinned requirements.txt at provision
+ * time (laimk-hse.6/.7), so the project is NOT loose. Only an abstract
+ * pyproject.toml/setup.py with NO lock at all is loose — its declared deps have
+ * nothing pinning them yet.
  */
-function detectPythonLoose({ manifestPresent, readFile }: LooseManifestInput): boolean {
+function detectPythonLoose({ manifestPresent, hasLockfile, readFile }: LooseManifestInput): boolean {
   if (!manifestPresent) return false;
   const requirements = readFile("requirements.txt");
   if (requirements !== undefined) {
     // requirements.txt present: lock-grade builds pure directly; otherwise resolve.
     return !requirementsIsLockGrade(requirements);
   }
-  // No requirements.txt: an abstract pyproject/setup.py with no lock is loose.
-  return true;
+  // No requirements.txt: a uv.lock / poetry.lock is the lock (its export front-end
+  // produces requirements.txt). Loose only when there is no lock at all.
+  return !hasLockfile;
 }

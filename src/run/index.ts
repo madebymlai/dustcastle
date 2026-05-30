@@ -72,9 +72,10 @@ export interface PreparedRun {
    */
   readonly pinned?: Pinned;
   /**
-   * The requirements.txt an export front-end produced from a richer lockfile (uv;
-   * ADR 0006 amendment), surfaced (never silent). Undefined for managers that
-   * consume their lockfile directly (pip) or are gated (poetry).
+   * The requirements.txt an export front-end produced from a richer lockfile (uv's
+   * `uv export`, poetry's `poetry export`; ADR 0006 amendment / laimk-hse.7),
+   * surfaced (never silent). Undefined for managers that consume their lockfile
+   * directly (pip) or are still gated (bun).
    */
   readonly exported?: Exported;
 }

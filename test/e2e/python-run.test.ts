@@ -172,21 +172,22 @@ describe("dustcastle run (laimk-hse.6: uv front-end → the SAME pip-FOD pure pa
   );
 });
 
-describe("dustcastle run (laimk-hse.7: poetry front-end — honest provisionGate, NOT a wrong build)", () => {
-  // The poetry analogue of the slice-2 Python gate, in its HONEST form. A poetry
-  // project (poetry.lock present, beating a co-present requirements.txt and losing
-  // to uv.lock → detection routes the `poetry` Package Manager) is DETECTED and
-  // wired to the SAME pip-FOD via the `poetry export` front-end — but `poetry
-  // export`'s hermeticity was NOT validated by the spike (only `uv export` was), so
-  // rather than ship a build that might resolve from the network or hand the pip-FOD
-  // a wheel+sdist requirements file, provisioning GATES with an actionable reason
-  // (ADR 0001, the bun-gate honesty pattern). This case asserts exactly that: poetry
-  // routes, and `prepareRun` surfaces the gate reason rather than building. When
-  // `poetry export` is proven hermetic the gate is a one-field drop and this becomes
-  // the offline-pytest build above. Gated by DUSTCASTLE_E2E=1; do NOT run a real nix
-  // build in the implementing workflow.
+describe("dustcastle run (laimk-hse.7: poetry front-end → the SAME pip-FOD pure path)", () => {
+  // The poetry analogue of the slice-2 Python gate. A poetry project (poetry.lock
+  // present, beating a co-present requirements.txt and losing to uv.lock → detection
+  // routes the `poetry` Package Manager) provisions through the IDENTICAL pip-FOD:
+  // `poetry export --format requirements.txt` materialises the hash-pinned
+  // requirements (the export front-end, carried as descriptor data — NOT poetry2nix),
+  // then the network-ON wheelhouse FOD + offline `pip install --no-index` assembly
+  // runs exactly as for pip/uv. The laimk-hse.7 spike PROVED `poetry export` hermetic
+  // (wheels-only, --require-hashes clean, same aggregate hash as uv export), so the
+  // honest provisionGate is dropped. The container is fully OFFLINE; deps come from
+  // the RO Store. The fixture is wheels-only hash-pinned, so it's pure. Requires
+  // `poetry` on PATH (the export front-end runs at provision). Gated by
+  // DUSTCASTLE_E2E=1; it self-skips otherwise — do NOT run real nix builds in the
+  // implementing workflow.
   e2e(
-    "detects python/poetry and surfaces the honest provisionGate reason (no nix build)",
+    "detects python/poetry and runs `python -m pytest` green inside a container, offline, deps from the RO Store",
     async () => {
       const root = mkdtempSync(join(tmpdir(), "dustcastle-python-poetry-run-"));
       tmps.push(root);
@@ -194,17 +195,49 @@ describe("dustcastle run (laimk-hse.7: poetry front-end — honest provisionGate
 
       // Detection routes poetry (poetry.lock beats requirements.txt, loses to uv.lock,
       // ADR 0006d); the Importer is STILL the pip-FOD (the poetry export front-end).
-      const { detect } = await import("../../src/detect/index.js");
-      const detection = detect(projectDir)[0];
-      expect(detection?.ecosystem).toBe("python");
-      expect(detection?.packageManager).toBe("poetry");
-      expect(detection?.importer).toBe("pip-FOD");
+      const prepared = prepareRun({ cwd: projectDir });
+      expect(prepared.detection.ecosystem).toBe("python");
+      expect(prepared.detection.packageManager).toBe("poetry");
+      expect(prepared.detection.importer).toBe("pip-FOD");
+      expect(prepared.impurity.kind).toBe("pure");
+      expect(prepared.plan.podmanOptions.network).toBe("none");
+      // The discovered aggregate hash lands in pythonDepsHash (same pip-FOD).
+      expect(prepared.provisioned.pythonDepsHash).toBeTruthy();
 
-      // prepareRun reaches the store dispatch, which throws the descriptor's honest
-      // provisionGate reason (ADR 0001) — never a silent or wrong build. Lifting the
-      // gate (once `poetry export` is proven hermetic) turns this into the offline
-      // pytest build above.
-      expect(() => prepareRun({ cwd: projectDir })).toThrow(/poetry export/i);
+      const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
+      const handle = await provider.create({
+        worktreePath: projectDir,
+        hostRepoPath: projectDir,
+        mounts: [{ hostPath: projectDir, sandboxPath: "/home/agent/workspace", readonly: false }],
+        env: prepared.plan.podmanOptions.env ?? {},
+      });
+
+      try {
+        const cwd = "/home/agent/workspace";
+        const log = (line: string) => process.stderr.write(`   | ${line}\n`);
+
+        // The python Toolchain resolves from the read-only Store mount.
+        const which = await handle.exec("command -v python && python --version", { cwd, onLine: log });
+        expect(which.exitCode).toBe(0);
+        expect(which.stdout).toContain("/nix/store/");
+
+        // Truly offline: a DNS lookup of PyPI must fail inside the container.
+        const net = await handle.exec("getent hosts pypi.org || echo OFFLINE_OK", { cwd, onLine: log });
+        expect(net.stdout).toContain("OFFLINE_OK");
+
+        // dustcastle's per-project staging: site-packages copied from the RO Store.
+        for (const command of prepared.plan.setupCommands) {
+          const setup = await handle.exec(command, { cwd, onLine: log });
+          expect(setup.exitCode).toBe(0);
+        }
+
+        // THE GATE: the project's tests pass, offline, from the shared Store.
+        const test = await handle.exec("python -m pytest -q", { cwd, onLine: log });
+        expect(test.exitCode).toBe(0);
+        expect(test.stdout).toMatch(/2 passed|passed/);
+      } finally {
+        await handle.close();
+      }
     },
   );
 });

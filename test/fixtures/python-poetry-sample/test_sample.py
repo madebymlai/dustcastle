@@ -1,12 +1,12 @@
 """The offline test gate for the poetry front-end → pip-FOD path (laimk-hse.7).
 
 Same gate as python-sample/python-uv-sample: imports the two deps that poetry.lock
-pinned (and that `poetry export` would materialise into requirements.txt for the
-pip-FOD), asserting a trivial fact about each, so `python -m pytest` proves the deps
-are present and importable entirely offline from the Store-staged site-packages.
+pinned (and that `poetry export` materialises into requirements.txt for the pip-FOD),
+asserting a trivial fact about each, so `python -m pytest` proves the deps are present
+and importable entirely offline from the Store-staged site-packages.
 
-This gate only runs once poetry's provisionGate is lifted (export proven hermetic);
-until then the gated e2e asserts dustcastle surfaces the honest gate reason instead.
+The laimk-hse.7 spike proved `poetry export` hermetic, so the provisionGate is dropped
+and this runs the real offline-pytest build (like the uv case), not a gate assertion.
 """
 
 import idna

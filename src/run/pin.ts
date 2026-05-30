@@ -115,16 +115,16 @@ export interface ExportOptions {
 /**
  * Run a manager's EXPORT FRONT-END (ADR 0006 amendment) to materialise the pip-FOD's
  * hash-pinned `requirements.txt` from its OWN lockfile, in place, BEFORE provisioning.
- * uv carries `uv export --format requirements-txt`; pip (which consumes
- * `requirements.txt` directly) and gated managers (poetry — it throws at provision)
- * have nothing to run, so this returns `undefined` and the run pipeline skips it.
- * Throws an actionable error if the export fails, so a project never proceeds to a
- * build whose requirements were never produced.
+ * uv carries `uv export --format requirements-txt` and poetry `poetry export`
+ * (laimk-hse.7); pip consumes `requirements.txt` directly, and a still-gated manager
+ * (e.g. bun) throws at provision — so this returns `undefined` and the run pipeline
+ * skips it. Throws an actionable error if the export fails, so a project never
+ * proceeds to a build whose requirements were never produced.
  */
 export function exportRequirements(opts: ExportOptions): Exported | undefined {
   if (!isPackageManager(opts.packageManager)) return undefined;
   const descriptor = packageManagerDescriptor(opts.packageManager);
-  // A gated manager (poetry) throws at provision; don't bother running its export.
+  // A still-gated manager throws at provision; don't bother running its export.
   if (descriptor.provisionGate !== undefined) return undefined;
   const frontEnd = descriptor.exportFrontEnd;
   if (frontEnd === undefined) return undefined;

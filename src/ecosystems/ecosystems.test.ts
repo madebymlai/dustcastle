@@ -309,20 +309,20 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       const front = packageManagerDescriptor("poetry").exportFrontEnd;
       expect(front).toEqual({
         command: "poetry",
-        args: ["export", "--format", "requirements.txt", "--without-hashes=false", "-o", "requirements.txt"],
+        // Hashes are ON by default; no `--without-hashes` flag (it is a boolean
+        // opt-out, and poetry-plugin-export 1.10 rejects the `=false` value form
+        // the laimk-hse.7 spike caught).
+        args: ["export", "--format", "requirements.txt", "-o", "requirements.txt"],
         requirementsFile: "requirements.txt",
       });
     });
 
-    it("carries an honest provisionGate (poetry export hermeticity is unproven, ADR 0001)", () => {
-      // The bun-gate honesty pattern (ADR 0001: a gated manager is a first-class
-      // Registry state, not an ad-hoc throw). `poetry export` was NOT validated
-      // hermetic by the spike (only uv export was), so rather than ship a wrong
-      // build poetry surfaces an actionable gate naming poetry and the front-end.
-      const gate = packageManagerDescriptor("poetry").provisionGate;
-      expect(gate).toBeDefined();
-      expect(gate?.reason).toMatch(/poetry/i);
-      expect(gate?.reason).toMatch(/export/i);
+    it("has no provisionGate (the laimk-hse.7 spike proved poetry export hermetic, like uv)", () => {
+      // The spike validated `poetry export` end-to-end through the pip-FOD (pure,
+      // offline, same aggregate hash as `uv export`), so the honest bun-gate the
+      // unproven front-end once warranted (ADR 0001) is dropped — poetry now
+      // provisions through the same pure path as uv/pip.
+      expect(packageManagerDescriptor("poetry").provisionGate).toBeUndefined();
     });
 
     it("reuses the poetry.lock impurity reader (laimk-hse.4): sdist-only fires, wheels stay pure", () => {

@@ -118,6 +118,51 @@ describe("poetryLockNeedsImpurity (poetry.lock files list; sdist-only ⇒ impure
     expect(poetryLockNeedsImpurity("")).toBe(false);
     expect(poetryLockNeedsImpurity(undefined)).toBe(false);
   });
+
+  // Real poetry (2.x, lock-version 2.1) emits an inline `files = [{file = "…"}, …]`
+  // ARRAY rather than a `[package.files]` sub-table — the form the laimk-hse.7 spike
+  // exercised against poetry 2.4.1. The old table-only scan missed it (every real
+  // lock read as pure); these lock the array form in.
+  describe("real poetry 2.x inline `files = [...]` array form (lock-version 2.1)", () => {
+    const wheelArrayPkg = [
+      "[[package]]",
+      'name = "urllib3"',
+      'version = "2.7.0"',
+      'groups = ["main"]',
+      "files = [",
+      '    {file = "urllib3-2.7.0-py3-none-any.whl", hash = "sha256:aaa"},',
+      '    {file = "urllib3-2.7.0.tar.gz", hash = "sha256:bbb"},',
+      "]",
+    ].join("\n");
+
+    const sdistOnlyArrayPkg = [
+      "[[package]]",
+      'name = "legacy-thing"',
+      'version = "1.0"',
+      'groups = ["main"]',
+      "files = [",
+      '    {file = "legacy-thing-1.0.tar.gz", hash = "sha256:ccc"},',
+      "]",
+    ].join("\n");
+
+    it("is pure when a package's array lists a wheel alongside its sdist", () => {
+      expect(poetryLockNeedsImpurity(wheelArrayPkg)).toBe(false);
+    });
+
+    it("flags impurity when a package's array is all sdists (no wheel)", () => {
+      expect(poetryLockNeedsImpurity([wheelArrayPkg, "", sdistOnlyArrayPkg].join("\n"))).toBe(true);
+    });
+
+    it("does not let an `[package.extras]` sub-table mask the files array", () => {
+      const withExtras = [
+        wheelArrayPkg,
+        "",
+        "[package.extras]",
+        'socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]',
+      ].join("\n");
+      expect(poetryLockNeedsImpurity(withExtras)).toBe(false);
+    });
+  });
 });
 
 describe("requirementsNeedsImpurity (no in-file signal ⇒ conservative-pure)", () => {

@@ -75,7 +75,11 @@ break dustcastle's nixpkgs-via-`fetchTarball`-only invariant and contradict [ADR
 The pip-FOD stays in nixpkgs, reuses the aggregate-hash machinery unchanged, and honours the
 lockfile's own hashes. Validated end-to-end under nix-portable (spike laimk-hse.1, 2026-05-30):
 discovery loop, network-in-FOD + cold toolchain fetch, offline install, and byte-reproducible
-download all confirmed.
+download all confirmed. A follow-up spike (laimk-hse.7, 2026-05-30) confirmed `poetry export`
+is interchangeable with `uv export` as a pip-FOD input — its `--require-hashes` output is
+`--only-binary=:all:`-clean and yields the *same* aggregate hash for the same deps — so poetry
+provisions the pure path with no gate (the wheel+sdist hashes both front-ends emit are harmless:
+the FOD downloads only the wheel and just needs its hash in the set).
 
 **Hash field.** The pip-FOD has one discoverable aggregate hash, so `provisionStore`'s existing
 Pass-1 discover / Pass-2 build loop and `outputHashField` are reused **unchanged**. `Provisioned`

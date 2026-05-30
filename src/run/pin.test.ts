@@ -112,14 +112,21 @@ describe("exportRequirements (the export front-end — ADR 0006 amendment)", () 
     expect(called).toBe(false);
   });
 
-  it("is a no-op for gated poetry — provisioning surfaces the gate, so the export is skipped", () => {
-    let called = false;
-    const run = (): ResolveResult => {
-      called = true;
+  it("runs `poetry export` to materialise requirements.txt from poetry.lock (laimk-hse.7)", () => {
+    // poetry was gated until the spike proved `poetry export` hermetic; it now runs
+    // the front-end like uv. Hashes are ON by default, so no `--without-hashes` flag.
+    const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+    const run = (command: string, args: readonly string[], cwd: string): ResolveResult => {
+      calls.push({ command, args, cwd });
       return OK;
     };
-    expect(exportRequirements({ cwd: "/po", packageManager: "poetry", run })).toBeUndefined();
-    expect(called).toBe(false);
+
+    const exported = exportRequirements({ cwd: "/po", packageManager: "poetry", run });
+
+    expect(calls).toEqual([
+      { command: "poetry", args: ["export", "--format", "requirements.txt", "-o", "requirements.txt"], cwd: "/po" },
+    ]);
+    expect(exported?.requirementsFile).toBe("requirements.txt");
   });
 
   it("throws an actionable error when the export fails (no un-materialised build proceeds)", () => {
