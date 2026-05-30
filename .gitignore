@@ -16,3 +16,6 @@ spike-go-store/
 
 # Test scratch
 /test/.tmp/
+
+# Local agent harness config (per-machine, not project state)
+.claude/
