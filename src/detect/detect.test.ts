@@ -332,4 +332,34 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
 
     expect(detect(dir)[0]?.loose).toBeUndefined();
   });
+
+  // uv Package Manager (laimk-hse.6). `uv.lock` is a real lockfile that beats a
+  // co-present requirements.txt (ADR 0006d: "a repo with both uv.lock and
+  // requirements.txt uses uv"). uv is an EXPORT FRONT-END to the same pip-FOD —
+  // `uv export --format requirements-txt` produces the hash-pinned requirements,
+  // so the importer is still pip-FOD (not uv2nix), per the ADR 0006 amendment.
+  it("routes a uv.lock repo to uv (the pip-FOD Importer via the uv export front-end)", () => {
+    const dir = repo({
+      "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna"]\n',
+      "uv.lock": "version = 1\n\n[[package]]\nname = \"idna\"\nversion = \"3.10\"\n",
+    });
+
+    expect(detect(dir)).toHaveLength(1);
+    expect(detect(dir)[0]).toMatchObject({
+      ecosystem: "python",
+      packageManager: "uv",
+      importer: "pip-FOD",
+    });
+  });
+
+  it("uv.lock beats a co-present requirements.txt (a repo with both uses uv, ADR 0006d)", () => {
+    const dir = repo({
+      "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna"]\n',
+      "uv.lock": "version = 1\n\n[[package]]\nname = \"idna\"\nversion = \"3.10\"\n",
+      "requirements.txt": PINNED_REQUIREMENTS,
+    });
+
+    // The richer lockfile wins: precedence is uv.lock > requirements.txt.
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "uv" });
+  });
 });

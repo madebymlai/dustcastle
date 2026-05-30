@@ -25,6 +25,9 @@ const EXPECTED_IMPORTER: Record<PackageManager, string> = {
   bun: "fetchBunDeps",
   go: "buildGoModule",
   pip: "pip-FOD",
+  // uv is an EXPORT FRONT-END to the same pip-FOD (ADR 0006 amendment), NOT a
+  // separate Importer / uv2nix — so it derives the pip-FOD importer too.
+  uv: "pip-FOD",
 };
 
 describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
@@ -32,8 +35,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     expect(ECOSYSTEMS.map((e) => e.ecosystem)).toEqual(["go", "node", "python"]);
   });
 
-  it("curates exactly the six known Package Managers", () => {
-    expect([...PACKAGE_MANAGERS].sort()).toEqual(["bun", "go", "npm", "pip", "pnpm", "yarn"]);
+  it("curates exactly the seven known Package Managers", () => {
+    expect([...PACKAGE_MANAGERS].sort()).toEqual(["bun", "go", "npm", "pip", "pnpm", "uv", "yarn"]);
   });
 
   describe.each(PACKAGE_MANAGERS)("Package Manager descriptor: %s", (pm) => {
@@ -60,7 +63,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
 
     it("marks which Provisioned field carries the discovered hash", () => {
-      const expected = pm === "go" ? "vendorHash" : pm === "pip" ? "pythonDepsHash" : "npmDepsHash";
+      const expected =
+        pm === "go" ? "vendorHash" : pm === "pip" || pm === "uv" ? "pythonDepsHash" : "npmDepsHash";
       expect(d.outputHashField).toBe(expected);
     });
   });
@@ -202,7 +206,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     it("python's manifest markers are pyproject.toml/requirements.txt/setup.py", () => {
       const python = ecosystemFor("python");
       expect(python.manifests).toEqual(["pyproject.toml", "requirements.txt", "setup.py"]);
-      expect(python.managers).toEqual(["pip"]);
+      // uv leads pip in precedence (uv.lock > requirements.txt, laimk-hse.6).
+      expect(python.managers).toEqual(["uv", "pip"]);
       expect(python.defaultManager).toBe("pip");
     });
 
@@ -217,6 +222,76 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(build.expression).toContain("pip download");
       expect(build.expression).toContain("--only-binary=:all:");
       expect(build.expression).toContain('outputHash = "sha256-AAA="');
+    });
+  });
+
+  describe("the uv Package Manager is an export front-end to the pip-FOD (laimk-hse.6)", () => {
+    it("registers uv as a python Package Manager whose Importer is the pip-FOD (not uv2nix)", () => {
+      const uv = packageManagerDescriptor("uv");
+      expect(uv.ecosystem).toBe("python");
+      expect(uv.importer).toBe("pip-FOD");
+    });
+
+    it("signals on uv.lock (the real lockfile that beats requirements.txt)", () => {
+      expect(packageManagerDescriptor("uv").lockfiles).toEqual(["uv.lock"]);
+    });
+
+    it("lands the discovered hash in pythonDepsHash (the same pip-FOD aggregate hash)", () => {
+      expect(packageManagerDescriptor("uv").outputHashField).toBe("pythonDepsHash");
+    });
+
+    it("has no provisionGate (the pip-FOD is supported)", () => {
+      expect(packageManagerDescriptor("uv").provisionGate).toBeUndefined();
+    });
+
+    it("carries the `uv export --format requirements-txt` front-end that feeds the pip-FOD", () => {
+      // uv produces the Importer's hash-pinned requirements via `uv export` — carried
+      // as descriptor data, NOT a separate Importer (ADR 0006 amendment).
+      const front = packageManagerDescriptor("uv").exportFrontEnd;
+      expect(front).toEqual({
+        command: "uv",
+        args: ["export", "--format", "requirements-txt", "-o", "requirements.txt"],
+        requirementsFile: "requirements.txt",
+      });
+    });
+
+    it("reuses the uv.lock impurity reader (laimk-hse.4): sdist-only fires, wheels stay pure", () => {
+      const sig = packageManagerDescriptor("uv").impuritySignal;
+      expect(sig?.lockfile).toBe("uv.lock");
+      // A package with an sdist but no wheels is sdist-only → impure.
+      expect(
+        sig?.needsImpurity("[[package]]\nname = \"x\"\n\n[package.sdist]\nurl = \"x.tar.gz\"\n"),
+      ).toBe(true);
+      // A package with wheels stays pure.
+      expect(
+        sig?.needsImpurity("[[package]]\nname = \"x\"\n\n[[package.wheels]]\nurl = \"x.whl\"\n"),
+      ).toBe(false);
+    });
+
+    it("generates the SAME pip-FOD NixBuild as pip (uv only changes how requirements are produced)", () => {
+      const build = packageManagerDescriptor("uv").generateBuild({
+        pname: "sample",
+        depsHash: "sha256-AAA=",
+        src: "./src",
+      });
+      expect(build.attrs).toEqual({ toolchain: "python", deps: "deps", app: "app" });
+      expect(build.expression).toContain("pip download");
+      expect(build.expression).toContain("--only-binary=:all:");
+      expect(build.expression).toContain('outputHash = "sha256-AAA="');
+    });
+  });
+
+  describe("the Python Ecosystem orders uv ahead of pip (uv.lock > requirements.txt, ADR 0006d)", () => {
+    it("registers both managers in lockfile-precedence order", () => {
+      const python = ecosystemFor("python");
+      expect(python.managers).toEqual(["uv", "pip"]);
+      // The ordered managers' lockfiles ARE the precedence: uv.lock beats requirements.txt.
+      const lockfilesInOrder = python.managers.flatMap((pm) => packageManagerDescriptor(pm).lockfiles);
+      expect(lockfilesInOrder).toEqual(["uv.lock", "requirements.txt"]);
+    });
+
+    it("keeps pip as the defaultManager (the fallback when no lockfile pins one)", () => {
+      expect(ecosystemFor("python").defaultManager).toBe("pip");
     });
   });
 

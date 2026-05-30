@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { prepareRun } from "../../src/run/index.js";
-import { stagePythonProject } from "./fixture.js";
+import { stagePythonProject, stagePythonUvProject } from "./fixture.js";
 
 // laimk-hse.2 RED→GREEN GATE (the Python pip-FOD ecosystem path):
 //   a hash-pinned, wheels-only requirements.txt project → dustcastle provisions it
@@ -96,6 +96,72 @@ describe("dustcastle run (laimk-hse.2: Python pip-FOD pure path, ADR 0002/0003/0
 
         // THE GATE: the project's tests pass, offline, from the shared Store.
         // PYTHONPATH=site (set by the plan's env) lets pytest import the staged deps.
+        const test = await handle.exec("python -m pytest -q", { cwd, onLine: log });
+        expect(test.exitCode).toBe(0);
+        expect(test.stdout).toMatch(/2 passed|passed/);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+});
+
+describe("dustcastle run (laimk-hse.6: uv front-end → the SAME pip-FOD pure path)", () => {
+  // The uv analogue of the slice-2 Python gate. A uv project (uv.lock present,
+  // beating a co-present requirements.txt → detection routes the `uv` Package
+  // Manager) provisions through the IDENTICAL pip-FOD: `uv export --format
+  // requirements-txt` materialises the hash-pinned requirements (the export
+  // front-end, carried as descriptor data — NOT uv2nix), then the network-ON
+  // wheelhouse FOD + offline `pip install --no-index` assembly runs exactly as for
+  // pip. The container is fully OFFLINE; deps come entirely from the RO Store. The
+  // fixture is wheels-only hash-pinned, so it's pure. Gated by DUSTCASTLE_E2E=1; it
+  // self-skips otherwise — do NOT run real nix builds in the implementing workflow.
+  e2e(
+    "detects python/uv and runs `python -m pytest` green inside a container, offline, deps from the RO Store",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "dustcastle-python-uv-run-"));
+      tmps.push(root);
+      const projectDir = stagePythonUvProject(root);
+
+      // The uv.lock outranks the co-present requirements.txt (ADR 0006d): a repo
+      // with both uses uv. The Importer is STILL the pip-FOD (the export front-end).
+      const prepared = prepareRun({ cwd: projectDir });
+      expect(prepared.detection.ecosystem).toBe("python");
+      expect(prepared.detection.packageManager).toBe("uv");
+      expect(prepared.detection.importer).toBe("pip-FOD");
+      expect(prepared.impurity.kind).toBe("pure");
+      expect(prepared.plan.podmanOptions.network).toBe("none");
+      // The discovered aggregate hash lands in pythonDepsHash (same pip-FOD).
+      expect(prepared.provisioned.pythonDepsHash).toBeTruthy();
+
+      const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
+      const handle = await provider.create({
+        worktreePath: projectDir,
+        hostRepoPath: projectDir,
+        mounts: [{ hostPath: projectDir, sandboxPath: "/home/agent/workspace", readonly: false }],
+        env: prepared.plan.podmanOptions.env ?? {},
+      });
+
+      try {
+        const cwd = "/home/agent/workspace";
+        const log = (line: string) => process.stderr.write(`   | ${line}\n`);
+
+        // The python Toolchain resolves from the read-only Store mount.
+        const which = await handle.exec("command -v python && python --version", { cwd, onLine: log });
+        expect(which.exitCode).toBe(0);
+        expect(which.stdout).toContain("/nix/store/");
+
+        // Truly offline: a DNS lookup of PyPI must fail inside the container.
+        const net = await handle.exec("getent hosts pypi.org || echo OFFLINE_OK", { cwd, onLine: log });
+        expect(net.stdout).toContain("OFFLINE_OK");
+
+        // dustcastle's per-project staging: site-packages copied from the RO Store.
+        for (const command of prepared.plan.setupCommands) {
+          const setup = await handle.exec(command, { cwd, onLine: log });
+          expect(setup.exitCode).toBe(0);
+        }
+
+        // THE GATE: the project's tests pass, offline, from the shared Store.
         const test = await handle.exec("python -m pytest -q", { cwd, onLine: log });
         expect(test.exitCode).toBe(0);
         expect(test.stdout).toMatch(/2 passed|passed/);

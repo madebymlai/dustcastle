@@ -8,6 +8,7 @@ export type {
   Detection,
   Ecosystem,
   EcosystemDescriptor,
+  ExportFrontEnd,
   ImpuritySignal,
   LockOnlyResolve,
   LooseManifestInput,

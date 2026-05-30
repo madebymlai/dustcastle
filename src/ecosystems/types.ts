@@ -24,7 +24,7 @@ export type Ecosystem = "node" | "go" | "python";
  * (CONTEXT.md: Package Manager). A closed union — the lockfile names one of these,
  * which selects the Importer. Go is still a Package Manager, not a special case.
  */
-export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip";
+export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip" | "uv";
 
 /**
  * What detection concludes about one directory: which Ecosystem it is, the
@@ -113,6 +113,23 @@ export interface ProvisionGate {
   readonly reason: string;
 }
 
+/**
+ * The export FRONT-END a Package Manager runs to produce the pip-FOD's input — a
+ * hash-pinned `requirements.txt` — from its own lockfile (ADR 0006 amendment). uv
+ * carries `uv export --format requirements-txt` (poetry would carry `poetry export`
+ * later); the EXPORTED requirements then feed the SAME pip-FOD Importer, so uv is a
+ * front-end to that one Importer, NOT a separate importer / uv2nix. Absent for a
+ * manager that consumes its lockfile directly (pip reads `requirements.txt` as-is).
+ */
+export interface ExportFrontEnd {
+  /** The front-end binary to run (`uv`). */
+  readonly command: string;
+  /** Its args, emitting the hash-pinned requirements file (`export --format requirements-txt …`). */
+  readonly args: readonly string[];
+  /** The requirements file the export writes — the visible artifact the pip-FOD consumes. */
+  readonly requirementsFile: string;
+}
+
 /** Which Provisioned field carries the discovered/supplied deps hash (load-bearing). */
 export type OutputHashField = "vendorHash" | "npmDepsHash" | "pythonDepsHash";
 
@@ -145,6 +162,12 @@ export interface PackageManagerDescriptor {
   readonly impuritySignal?: ImpuritySignal;
   /** The pin-then-pure lock-only resolve (ADR 0006c). Absent for gated/already-locked managers. */
   readonly lockOnlyResolve?: LockOnlyResolve;
+  /**
+   * The export front-end that produces the Importer's hash-pinned requirements from
+   * this manager's own lockfile (ADR 0006 amendment). Present for uv (`uv export`);
+   * absent for pip, which consumes `requirements.txt` directly.
+   */
+  readonly exportFrontEnd?: ExportFrontEnd;
   /** The honest provision gate (ADR 0001). Present only for bun in v1. */
   readonly provisionGate?: ProvisionGate;
 }

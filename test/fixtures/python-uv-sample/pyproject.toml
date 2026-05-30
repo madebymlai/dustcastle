@@ -1,0 +1,10 @@
+[project]
+name = "sample"
+version = "0.0.0"
+requires-python = ">=3.11"
+# The abstract deps; uv.lock pins them and `uv export --format requirements-txt`
+# materialises the hash-pinned requirements.txt the pip-FOD consumes (laimk-hse.6).
+dependencies = [
+    "idna==3.17",
+    "urllib3==2.7.0",
+]

@@ -1,0 +1,12 @@
+# The EXPORTED, hash-pinned requirements (laimk-hse.6) — the pip-FOD's input,
+# produced from uv.lock by the uv export front-end:
+#    uv export --format requirements-txt -o requirements.txt
+# Wheels-only + hash-pinned, so `pip download --only-binary=:all: --require-hashes`
+# succeeds and the offline assembly is pure. Same shape as python-sample so it hits
+# the same warm Store wheelhouse.
+idna==3.17 \
+    --hash=sha256:466e48829084efe2548012b855df21540b96f2e20e51bd124c851536556a592c \
+    --hash=sha256:5eb0cb53bc467c12eadcf6de83163ad8527cec9416f44b9b61b19caedad2b87f
+urllib3==2.7.0 \
+    --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
+    --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897

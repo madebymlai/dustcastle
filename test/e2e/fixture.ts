@@ -109,6 +109,23 @@ export function stagePythonProject(root: string): string {
   return projectDir;
 }
 
+// The uv Python fixture (laimk-hse.6): a `uv.lock` (the real lockfile, beating a
+// co-present requirements.txt → detection routes the `uv` Package Manager) +
+// pyproject.toml + the EXPORTED hash-pinned requirements.txt the uv export
+// front-end materialises (`uv export --format requirements-txt`), which the SAME
+// pip-FOD Importer consumes. Same deps (idna + urllib3, pure-Python wheels) as
+// python-sample, so it hits the same warm Store wheelhouse and builds PURE. Its
+// live build is proven by the gated uv case in test/e2e/python-run.test.ts.
+export const PYTHON_UV_SAMPLE = resolve(process.cwd(), "test/fixtures/python-uv-sample");
+
+/** Stage the uv Python sample under a "sample"-named dir (pname matches the warm Store). */
+export function stagePythonUvProject(root: string): string {
+  const projectDir = join(root, "sample");
+  mkdirSync(projectDir);
+  cpSync(PYTHON_UV_SAMPLE, projectDir, { recursive: true });
+  return projectDir;
+}
+
 // The LOOSE Python fixture (ADR 0006c, laimk-hse.5): an abstract pyproject.toml
 // (the manifest marker) + a loose, unpinned requirements.in (idna, urllib3) and NO
 // lock-grade requirements.txt, so detection flags it `loose`. dustcastle resolves

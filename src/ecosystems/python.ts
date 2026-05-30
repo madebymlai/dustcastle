@@ -1,5 +1,5 @@
 import { generatePythonBuild } from "../nix/python.js";
-import { requirementsNeedsImpurity } from "../impurity/index.js";
+import { requirementsNeedsImpurity, uvLockNeedsImpurity } from "../impurity/index.js";
 import { requirementsIsLockGrade } from "./python-loose.js";
 import {
   DEFAULT_PYTHON_INTERPRETERS,
@@ -15,12 +15,11 @@ import type { EcosystemDescriptor, LooseManifestInput, PackageManagerDescriptor 
  * `fetchNpmDeps` analogue, NOT uv2nix/poetry2nix (external flake inputs would
  * break the nixpkgs-via-`fetchTarball`-only invariant).
  *
- * This tracer slice wires ONE Package Manager (`pip`) consuming a hash-pinned,
- * wheels-only `requirements.txt` directly. uv and poetry are export FRONT-ENDS to
- * this same Importer (later slices), loose-manifest pin-then-pure (`uv pip compile
- * --generate-hashes`), the impurity/sdist routing, and toolchain-version resolution
- * are deliberately out of this slice (later children of laimk-hse). They extend
- * this file; this slice does not stub them with wrong behaviour.
+ * Two Package Managers feed this one Importer: `pip` consumes a hash-pinned,
+ * wheels-only `requirements.txt` directly, and `uv` is an export FRONT-END
+ * (`uv export --format requirements-txt`) producing those same requirements from
+ * `uv.lock` (laimk-hse.6) — NOT uv2nix. poetry (another export front-end) is a
+ * later child of laimk-hse; it extends this file the same way uv does.
  */
 
 const pip: PackageManagerDescriptor = {
@@ -69,14 +68,61 @@ const pip: PackageManagerDescriptor = {
   },
 };
 
-export const PYTHON_MANAGERS: readonly PackageManagerDescriptor[] = [pip];
+/**
+ * uv as a Python Package Manager (laimk-hse.6). uv is an EXPORT FRONT-END to the
+ * SAME pip-FOD Importer, NOT uv2nix — `uv export --format requirements-txt`
+ * produces the hash-pinned requirements (carried as `exportFrontEnd` descriptor
+ * data), which then feed the identical `generatePythonBuild` pip-FOD as pip. This
+ * keeps the nixpkgs-via-`fetchTarball`-only invariant (ADR 0006 amendment / ADR 0001):
+ * no external flake input. `uv.lock` is a real, richer lockfile that beats a
+ * co-present `requirements.txt` in detection precedence (ADR 0006d).
+ */
+const uv: PackageManagerDescriptor = {
+  packageManager: "uv",
+  ecosystem: "python",
+  // The Importer is the pip-FOD (same as pip) — uv only changes how the hash-pinned
+  // requirements get PRODUCED (the export front-end below), never how they're built.
+  importer: "pip-FOD",
+  // uv's real lockfile; it signals uv and outranks requirements.txt (ADR 0006d).
+  lockfiles: ["uv.lock"],
+  generateBuild: (ctx) =>
+    generatePythonBuild({
+      pname: ctx.pname,
+      pythonDepsHash: ctx.depsHash,
+      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
+    }),
+  // The same single aggregate pip-FOD hash, landing in pythonDepsHash (not npmDepsHash).
+  outputHashField: "pythonDepsHash",
+  // The export front-end (ADR 0006 amendment): `uv export --format requirements-txt`
+  // emits the Importer's hash-pinned requirements.txt from uv.lock, after which the
+  // build is the identical pip-FOD pure/offline path. Carried as descriptor data so
+  // dustcastle never reaches for uv2nix — uv is a front-end to one Importer.
+  exportFrontEnd: {
+    command: "uv",
+    args: ["export", "--format", "requirements-txt", "-o", "requirements.txt"],
+    requirementsFile: "requirements.txt",
+  },
+  // The impurity signal reuses the slice-4 uv.lock reader (ADR 0004): a package
+  // that ships an sdist but no wheels is sdist-only — impure — and routes to the
+  // container path; wheel-bearing packages stay pure. uv.lock carries this
+  // wheel-vs-sdist fact directly, unlike requirements.txt (whose static signal is
+  // conservative-pure), so uv gets the richer reader.
+  impuritySignal: {
+    lockfile: "uv.lock",
+    needsImpurity: (lockText) => uvLockNeedsImpurity(lockText),
+  },
+};
+
+export const PYTHON_MANAGERS: readonly PackageManagerDescriptor[] = [uv, pip];
 
 export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "python",
   // The manifest markers that say "this directory is Python" (ADR 0006a).
   manifests: ["pyproject.toml", "requirements.txt", "setup.py"],
-  // A single Package Manager in this tracer slice (uv/poetry are later children).
-  managers: ["pip"],
+  // The ordering IS the lockfile precedence (ADR 0006d): uv.lock > requirements.txt —
+  // a repo with both uses uv (laimk-hse.6). poetry is a later child.
+  managers: ["uv", "pip"],
+  // pip stays the fallback when no lockfile pins a manager (a bare/abstract manifest).
   defaultManager: "pip",
   // No declared-manager resolver: Python has one Package Manager in v1 (pip).
   // The Toolchain version comes from `.python-version` (an exact minor pin) and/or
