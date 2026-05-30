@@ -1,5 +1,9 @@
 # dustcastle
 
+<p align="center">
+  <img src="docs/dustcastle.png" width="480" alt="dustcastle — a castle built from dust">
+</p>
+
 ```
                                                                         
                                ░▒▒▄▒▒▄▒▒░                               
