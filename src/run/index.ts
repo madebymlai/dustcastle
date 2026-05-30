@@ -19,7 +19,7 @@ import { closureSizeBytes } from "../store/ceiling.js";
 import { upsertRecency } from "../store/recency.js";
 import { spawnAutoGc } from "../cli/autogc.js";
 import { gitRemoteHost, resolveImpurity, writeImpurityMarker } from "./impurity.js";
-import { pinLooseManifest, type Pinned, type ResolveRunner } from "./pin.js";
+import { exportRequirements, pinLooseManifest, type Exported, type Pinned, type ResolveRunner } from "./pin.js";
 import { agentAuthMounts, DUSTCASTLE_HOME } from "../config/global.js";
 
 export interface PrepareOptions {
@@ -50,6 +50,12 @@ export interface PrepareOptions {
    * Tests/e2e override it; defaults to a real spawn of the manager's resolve.
    */
   readonly pin?: ResolveRunner;
+  /**
+   * Inject the export front-end runner (ADR 0006 amendment) — the `uv export` step
+   * that materialises the pip-FOD's requirements.txt from uv.lock. Tests/e2e
+   * override it; defaults to a real spawn.
+   */
+  readonly export?: ResolveRunner;
 }
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
@@ -65,6 +71,12 @@ export interface PreparedRun {
    * Undefined when the manifest was already lock-pinned.
    */
   readonly pinned?: Pinned;
+  /**
+   * The requirements.txt an export front-end produced from a richer lockfile (uv;
+   * ADR 0006 amendment), surfaced (never silent). Undefined for managers that
+   * consume their lockfile directly (pip) or are gated (poetry).
+   */
+  readonly exported?: Exported;
 }
 
 /**
@@ -116,6 +128,18 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
     writeImpurityMarker(opts.cwd, impurity.marker);
   }
 
+  // Export front-end (ADR 0006 amendment). A manager whose own lockfile isn't the
+  // pip-FOD's input — uv (uv.lock) — materialises the hash-pinned requirements.txt
+  // IN PLACE before provisioning, so the staged source carries the file the
+  // importer reads. A no-op for pip (reads requirements.txt directly) and gated
+  // poetry. Surfaced (never silent), like the pin step.
+  const exported = exportRequirements({
+    cwd: opts.cwd,
+    packageManager: detection.packageManager,
+    ...(opts.export !== undefined ? { run: opts.export } : {}),
+    ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+  });
+
   const provisioned = provisionStore({
     projectDir: opts.cwd,
     detection,
@@ -144,6 +168,7 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
     }),
     impurity,
     ...(pinned !== undefined ? { pinned } : {}),
+    ...(exported !== undefined ? { exported } : {}),
   };
 }
 

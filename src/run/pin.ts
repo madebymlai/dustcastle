@@ -96,6 +96,52 @@ export function pinLooseManifest(opts: PinOptions): Pinned {
   return { lockfile: resolve.lockfile };
 }
 
+/** What the export front-end produced: the hash-pinned requirements file (surfaced). */
+export interface Exported {
+  readonly requirementsFile: string;
+}
+
+export interface ExportOptions {
+  /** The project directory to materialise the requirements file in. */
+  readonly cwd: string;
+  /** The package manager detection chose (selects the export front-end). */
+  readonly packageManager: string;
+  /** Inject a runner (tests); defaults to a real spawn. */
+  readonly run?: ResolveRunner;
+  /** Surface progress (never silent — the generated requirements file is visible). */
+  readonly onLine?: (line: string) => void;
+}
+
+/**
+ * Run a manager's EXPORT FRONT-END (ADR 0006 amendment) to materialise the pip-FOD's
+ * hash-pinned `requirements.txt` from its OWN lockfile, in place, BEFORE provisioning.
+ * uv carries `uv export --format requirements-txt`; pip (which consumes
+ * `requirements.txt` directly) and gated managers (poetry — it throws at provision)
+ * have nothing to run, so this returns `undefined` and the run pipeline skips it.
+ * Throws an actionable error if the export fails, so a project never proceeds to a
+ * build whose requirements were never produced.
+ */
+export function exportRequirements(opts: ExportOptions): Exported | undefined {
+  if (!isPackageManager(opts.packageManager)) return undefined;
+  const descriptor = packageManagerDescriptor(opts.packageManager);
+  // A gated manager (poetry) throws at provision; don't bother running its export.
+  if (descriptor.provisionGate !== undefined) return undefined;
+  const frontEnd = descriptor.exportFrontEnd;
+  if (frontEnd === undefined) return undefined;
+
+  const run = opts.run ?? defaultResolve;
+  opts.onLine?.(`export: producing ${frontEnd.requirementsFile} from the lockfile (${frontEnd.command})`);
+  const result = run(frontEnd.command, frontEnd.args, opts.cwd);
+  if (result.status !== 0) {
+    throw new Error(
+      `export: ${opts.packageManager} front-end failed (exit ${result.status}) producing ` +
+        `${frontEnd.requirementsFile}:\n${result.stderr.slice(-2000)}`,
+    );
+  }
+  opts.onLine?.(`export: generated ${frontEnd.requirementsFile} (the pip-FOD input)`);
+  return { requirementsFile: frontEnd.requirementsFile };
+}
+
 function defaultResolve(command: string, args: readonly string[], cwd: string): ResolveResult {
   const r = spawnSync(command, [...args], { cwd, encoding: "utf8" });
   const stderr = r.stderr ?? (r.error instanceof Error ? r.error.message : "");
