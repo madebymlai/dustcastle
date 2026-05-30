@@ -1,0 +1,32 @@
+# A minimal, real-shape poetry.lock (laimk-hse.7). Both deps ship pure-Python
+# WHEELS (the `[package.files]` entries end in `.whl`), so the poetry.lock impurity
+# reader keeps them PURE — the same deps as python-sample/python-uv-sample, so once
+# `poetry export` is proven hermetic this hits the same warm Store wheelhouse.
+# `poetry.lock` signals the poetry Package Manager and outranks a co-present
+# requirements.txt, while losing to uv.lock (precedence uv.lock > poetry.lock >
+# requirements.txt, ADR 0006d).
+
+[[package]]
+name = "idna"
+version = "3.17"
+description = "Internationalized Domain Names in Applications (IDNA)"
+optional = false
+python-versions = ">=3.6"
+
+[package.files]
+"idna-3.17-py3-none-any.whl" = "sha256:466e48829084efe2548012b855df21540b96f2e20e51bd124c851536556a592c"
+
+[[package]]
+name = "urllib3"
+version = "2.7.0"
+description = "HTTP library with thread-safe connection pooling"
+optional = false
+python-versions = ">=3.9"
+
+[package.files]
+"urllib3-2.7.0-py3-none-any.whl" = "sha256:50f17a0b8d4d24f5a96e3a9f6f47b9b9eb33e3c8b7f4a8a4c8b6d0e2a1f7c3d9"
+
+[metadata]
+lock-version = "2.0"
+python-versions = "^3.11"
+content-hash = "0000000000000000000000000000000000000000000000000000000000000000"

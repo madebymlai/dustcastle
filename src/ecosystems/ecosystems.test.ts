@@ -28,6 +28,9 @@ const EXPECTED_IMPORTER: Record<PackageManager, string> = {
   // uv is an EXPORT FRONT-END to the same pip-FOD (ADR 0006 amendment), NOT a
   // separate Importer / uv2nix — so it derives the pip-FOD importer too.
   uv: "pip-FOD",
+  // poetry is likewise an export FRONT-END (`poetry export`) to the SAME pip-FOD,
+  // NOT poetry2nix (an external flake input) — so it derives the pip-FOD importer.
+  poetry: "pip-FOD",
 };
 
 describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
@@ -35,8 +38,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     expect(ECOSYSTEMS.map((e) => e.ecosystem)).toEqual(["go", "node", "python"]);
   });
 
-  it("curates exactly the seven known Package Managers", () => {
-    expect([...PACKAGE_MANAGERS].sort()).toEqual(["bun", "go", "npm", "pip", "pnpm", "uv", "yarn"]);
+  it("curates exactly the eight known Package Managers", () => {
+    expect([...PACKAGE_MANAGERS].sort()).toEqual(["bun", "go", "npm", "pip", "pnpm", "poetry", "uv", "yarn"]);
   });
 
   describe.each(PACKAGE_MANAGERS)("Package Manager descriptor: %s", (pm) => {
@@ -64,7 +67,11 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
 
     it("marks which Provisioned field carries the discovered hash", () => {
       const expected =
-        pm === "go" ? "vendorHash" : pm === "pip" || pm === "uv" ? "pythonDepsHash" : "npmDepsHash";
+        pm === "go"
+          ? "vendorHash"
+          : pm === "pip" || pm === "uv" || pm === "poetry"
+            ? "pythonDepsHash"
+            : "npmDepsHash";
       expect(d.outputHashField).toBe(expected);
     });
   });
@@ -206,8 +213,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     it("python's manifest markers are pyproject.toml/requirements.txt/setup.py", () => {
       const python = ecosystemFor("python");
       expect(python.manifests).toEqual(["pyproject.toml", "requirements.txt", "setup.py"]);
-      // uv leads pip in precedence (uv.lock > requirements.txt, laimk-hse.6).
-      expect(python.managers).toEqual(["uv", "pip"]);
+      // uv > poetry > pip in precedence (uv.lock > poetry.lock > requirements.txt).
+      expect(python.managers).toEqual(["uv", "poetry", "pip"]);
       expect(python.defaultManager).toBe("pip");
     });
 
@@ -281,13 +288,77 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
   });
 
-  describe("the Python Ecosystem orders uv ahead of pip (uv.lock > requirements.txt, ADR 0006d)", () => {
-    it("registers both managers in lockfile-precedence order", () => {
+  describe("the poetry Package Manager is an export front-end to the pip-FOD (laimk-hse.7)", () => {
+    it("registers poetry as a python Package Manager whose Importer is the pip-FOD (not poetry2nix)", () => {
+      const poetry = packageManagerDescriptor("poetry");
+      expect(poetry.ecosystem).toBe("python");
+      expect(poetry.importer).toBe("pip-FOD");
+    });
+
+    it("signals on poetry.lock", () => {
+      expect(packageManagerDescriptor("poetry").lockfiles).toEqual(["poetry.lock"]);
+    });
+
+    it("lands the discovered hash in pythonDepsHash (the same pip-FOD aggregate hash)", () => {
+      expect(packageManagerDescriptor("poetry").outputHashField).toBe("pythonDepsHash");
+    });
+
+    it("carries the `poetry export` front-end that feeds the pip-FOD", () => {
+      // poetry produces the Importer's hash-pinned requirements via `poetry export`
+      // — carried as descriptor data, NOT a separate Importer / poetry2nix.
+      const front = packageManagerDescriptor("poetry").exportFrontEnd;
+      expect(front).toEqual({
+        command: "poetry",
+        args: ["export", "--format", "requirements.txt", "--without-hashes=false", "-o", "requirements.txt"],
+        requirementsFile: "requirements.txt",
+      });
+    });
+
+    it("carries an honest provisionGate (poetry export hermeticity is unproven, ADR 0001)", () => {
+      // The bun-gate honesty pattern (ADR 0001: a gated manager is a first-class
+      // Registry state, not an ad-hoc throw). `poetry export` was NOT validated
+      // hermetic by the spike (only uv export was), so rather than ship a wrong
+      // build poetry surfaces an actionable gate naming poetry and the front-end.
+      const gate = packageManagerDescriptor("poetry").provisionGate;
+      expect(gate).toBeDefined();
+      expect(gate?.reason).toMatch(/poetry/i);
+      expect(gate?.reason).toMatch(/export/i);
+    });
+
+    it("reuses the poetry.lock impurity reader (laimk-hse.4): sdist-only fires, wheels stay pure", () => {
+      const sig = packageManagerDescriptor("poetry").impuritySignal;
+      expect(sig?.lockfile).toBe("poetry.lock");
+      // A package whose files section lists only an sdist (no wheel) is impure.
+      expect(
+        sig?.needsImpurity('[[package]]\nname = "x"\n\n[package.files]\n"x-1.0.tar.gz" = "sha256:aaa"\n'),
+      ).toBe(true);
+      // A package with a wheel stays pure.
+      expect(
+        sig?.needsImpurity('[[package]]\nname = "x"\n\n[package.files]\n"x-1.0-py3-none-any.whl" = "sha256:bbb"\n'),
+      ).toBe(false);
+    });
+
+    it("generates the SAME pip-FOD NixBuild as pip (poetry only changes how requirements are produced)", () => {
+      const build = packageManagerDescriptor("poetry").generateBuild({
+        pname: "sample",
+        depsHash: "sha256-AAA=",
+        src: "./src",
+      });
+      expect(build.attrs).toEqual({ toolchain: "python", deps: "deps", app: "app" });
+      expect(build.expression).toContain("pip download");
+      expect(build.expression).toContain("--only-binary=:all:");
+      expect(build.expression).toContain('outputHash = "sha256-AAA="');
+    });
+  });
+
+  describe("the Python Ecosystem orders uv > poetry > pip (lockfile precedence, ADR 0006d)", () => {
+    it("registers all three managers in lockfile-precedence order", () => {
       const python = ecosystemFor("python");
-      expect(python.managers).toEqual(["uv", "pip"]);
-      // The ordered managers' lockfiles ARE the precedence: uv.lock beats requirements.txt.
+      expect(python.managers).toEqual(["uv", "poetry", "pip"]);
+      // The ordered managers' lockfiles ARE the precedence: uv.lock > poetry.lock >
+      // requirements.txt — a richer lockfile beats the looser one (ADR 0006d).
       const lockfilesInOrder = python.managers.flatMap((pm) => packageManagerDescriptor(pm).lockfiles);
-      expect(lockfilesInOrder).toEqual(["uv.lock", "requirements.txt"]);
+      expect(lockfilesInOrder).toEqual(["uv.lock", "poetry.lock", "requirements.txt"]);
     });
 
     it("keeps pip as the defaultManager (the fallback when no lockfile pins one)", () => {

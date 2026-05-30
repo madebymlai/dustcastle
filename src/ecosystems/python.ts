@@ -1,5 +1,5 @@
 import { generatePythonBuild } from "../nix/python.js";
-import { requirementsNeedsImpurity, uvLockNeedsImpurity } from "../impurity/index.js";
+import { poetryLockNeedsImpurity, requirementsNeedsImpurity, uvLockNeedsImpurity } from "../impurity/index.js";
 import { requirementsIsLockGrade } from "./python-loose.js";
 import {
   DEFAULT_PYTHON_INTERPRETERS,
@@ -113,15 +113,91 @@ const uv: PackageManagerDescriptor = {
   },
 };
 
-export const PYTHON_MANAGERS: readonly PackageManagerDescriptor[] = [uv, pip];
+/**
+ * poetry as a Python Package Manager (laimk-hse.7). Like uv, poetry is an EXPORT
+ * FRONT-END to the SAME pip-FOD Importer, NOT poetry2nix — `poetry export`
+ * produces the hash-pinned requirements (carried as `exportFrontEnd` data) that
+ * feed the identical `generatePythonBuild` pip-FOD. `poetry.lock` is a real,
+ * richer lockfile: it beats a co-present `requirements.txt`, and loses to `uv.lock`
+ * (precedence uv.lock > poetry.lock > requirements.txt, ADR 0006d).
+ *
+ * UNLIKE uv, poetry ALSO carries an honest `provisionGate` (ADR 0001: a gated
+ * manager is a first-class Registry state, not an ad-hoc throw — the bun-gate
+ * pattern). The spike (laimk-hse.1) validated the pip-FOD pure path end-to-end via
+ * `uv export`, but did NOT prove `poetry export` hermetic — `poetry export` lives
+ * in the separable `poetry-plugin-export`, resolves against poetry's own
+ * environment, and its `--hash` output covers BOTH wheels and sdists rather than
+ * the wheels-only, `--require-hashes`-clean shape the pip-FOD needs. Rather than
+ * ship a build that might silently resolve from the network or fail the FOD,
+ * detection still ROUTES poetry (so a poetry repo is recognised and surfaces an
+ * actionable reason), but provisioning gates with that reason until `poetry export`
+ * hermeticity is proven (then the gate is simply dropped, as for uv). All the
+ * descriptor data — the export front-end, the impurity reader, the pip-FOD build —
+ * is wired and unit-tested, so lifting the gate is a one-line change, not a rewrite.
+ */
+const poetry: PackageManagerDescriptor = {
+  packageManager: "poetry",
+  ecosystem: "python",
+  // The Importer is the pip-FOD (same as pip/uv) — poetry only changes how the
+  // hash-pinned requirements get PRODUCED (the export front-end below), not built.
+  importer: "pip-FOD",
+  // poetry's real lockfile; it signals poetry, outranks requirements.txt, and is
+  // outranked by uv.lock (ADR 0006d: uv.lock > poetry.lock > requirements.txt).
+  lockfiles: ["poetry.lock"],
+  generateBuild: (ctx) =>
+    generatePythonBuild({
+      pname: ctx.pname,
+      pythonDepsHash: ctx.depsHash,
+      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
+    }),
+  // The same single aggregate pip-FOD hash, landing in pythonDepsHash (not npmDepsHash).
+  outputHashField: "pythonDepsHash",
+  // The export front-end (ADR 0006 amendment): `poetry export` emits the Importer's
+  // hash-pinned requirements.txt from poetry.lock. `--without-hashes=false` keeps
+  // the per-artifact hashes (poetry's flag is opt-OUT, so we explicitly opt in) the
+  // pip-FOD's `--require-hashes` download needs. Carried as descriptor data so
+  // dustcastle never reaches for poetry2nix — poetry is a front-end to one Importer.
+  // (Behind the provisionGate below until export hermeticity is proven.)
+  exportFrontEnd: {
+    command: "poetry",
+    args: ["export", "--format", "requirements.txt", "--without-hashes=false", "-o", "requirements.txt"],
+    requirementsFile: "requirements.txt",
+  },
+  // The impurity signal reuses the slice-4 poetry.lock reader (ADR 0004): a package
+  // whose `[package.files]` lists only an sdist (no `.whl`) is sdist-only — impure —
+  // and routes to the container path; wheel-bearing packages stay pure. poetry.lock
+  // carries this wheel-vs-sdist fact directly, so poetry gets the richer reader.
+  impuritySignal: {
+    lockfile: "poetry.lock",
+    needsImpurity: (lockText) => poetryLockNeedsImpurity(lockText),
+  },
+  // The honest provision gate (ADR 0001, the bun-gate pattern). `poetry export`
+  // hermeticity is UNPROVEN by the spike (only `uv export` was validated), so
+  // provisioning surfaces this actionable reason rather than shipping a build that
+  // might resolve from the network or hand the pip-FOD a wheel+sdist requirements
+  // file. Detection still routes poetry; lifting this gate (once export is proven
+  // hermetic) is dropping this one field — the rest of the descriptor is ready.
+  provisionGate: {
+    reason:
+      "dustcastle: poetry is detected, but provisioning is gated — `poetry export`'s " +
+      "hermeticity is not yet proven (the spike validated only `uv export`). poetry " +
+      "export resolves against poetry's own environment and emits hashes for sdists as " +
+      "well as wheels, which the wheels-only `--require-hashes` pip-FOD cannot assume. " +
+      "Pin a hash-pinned, wheels-only requirements.txt (or `uv export` from a uv.lock) " +
+      "to build pure today; poetry's export front-end ships once it is proven hermetic.",
+  },
+};
+
+export const PYTHON_MANAGERS: readonly PackageManagerDescriptor[] = [uv, poetry, pip];
 
 export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "python",
   // The manifest markers that say "this directory is Python" (ADR 0006a).
   manifests: ["pyproject.toml", "requirements.txt", "setup.py"],
-  // The ordering IS the lockfile precedence (ADR 0006d): uv.lock > requirements.txt —
-  // a repo with both uses uv (laimk-hse.6). poetry is a later child.
-  managers: ["uv", "pip"],
+  // The ordering IS the lockfile precedence (ADR 0006d): uv.lock > poetry.lock >
+  // requirements.txt — a repo with both uv.lock and another uses uv (laimk-hse.6),
+  // a repo with poetry.lock + requirements.txt uses poetry (laimk-hse.7).
+  managers: ["uv", "poetry", "pip"],
   // pip stays the fallback when no lockfile pins a manager (a bare/abstract manifest).
   defaultManager: "pip",
   // No declared-manager resolver: Python has one Package Manager in v1 (pip).

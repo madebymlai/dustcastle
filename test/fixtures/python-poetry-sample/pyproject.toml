@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "sample"
+version = "0.0.0"
+description = "poetry fixture for the gated poetry export → pip-FOD path (laimk-hse.7)"
+authors = []
+# The abstract deps; poetry.lock pins them and `poetry export` would materialise the
+# hash-pinned requirements.txt the pip-FOD consumes — once export hermeticity is
+# proven. Until then provisioning is gated (the bun-gate honesty pattern, ADR 0001).
+
+[tool.poetry.dependencies]
+python = "^3.11"
+idna = "3.17"
+urllib3 = "2.7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

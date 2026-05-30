@@ -38,6 +38,15 @@ describe("provisionStore dispatch (slice 2b importer routing)", () => {
     ).toThrowError(/bun importer is not yet supported/);
   });
 
+  it("gates poetry explicitly: `poetry export` hermeticity is not yet proven (laimk-hse.7)", () => {
+    // poetry is DETECTED and routes to the pip-FOD, but provisioning surfaces the
+    // honest gate (ADR 0001, the bun-gate pattern) rather than shipping a build off
+    // an unproven-hermetic `poetry export`. Lifting the gate is a one-field change.
+    expect(() =>
+      provision({ ecosystem: "python", packageManager: "poetry", importer: "pip-FOD" }),
+    ).toThrowError(/poetry export/i);
+  });
+
   it("rejects an unknown importer with a clear, listing error", () => {
     // The closed `PackageManager` union (laimk-mhg.6) makes a name outside the
     // Registry unrepresentable in well-typed code, so this case CASTS to exercise

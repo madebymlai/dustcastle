@@ -126,6 +126,25 @@ export function stagePythonUvProject(root: string): string {
   return projectDir;
 }
 
+// The poetry Python fixture (laimk-hse.7): a `poetry.lock` (the real lockfile,
+// beating a co-present requirements.txt and losing to uv.lock → detection routes the
+// `poetry` Package Manager) + a poetry-shaped pyproject.toml. poetry is an EXPORT
+// FRONT-END (`poetry export`) to the SAME pip-FOD — NOT poetry2nix — but its export
+// hermeticity is UNPROVEN by the spike, so dustcastle GATES provisioning (the
+// bun-gate honesty pattern, ADR 0001) rather than shipping a wrong build. Same deps
+// (idna + urllib3, pure-Python wheels) as python-sample, so once the gate is lifted
+// it hits the same warm Store wheelhouse. Drives the gated poetry case in
+// test/e2e/python-run.test.ts (which asserts the honest gate today, not a build).
+export const PYTHON_POETRY_SAMPLE = resolve(process.cwd(), "test/fixtures/python-poetry-sample");
+
+/** Stage the poetry Python sample under a "sample"-named dir (pname matches the warm Store). */
+export function stagePythonPoetryProject(root: string): string {
+  const projectDir = join(root, "sample");
+  mkdirSync(projectDir);
+  cpSync(PYTHON_POETRY_SAMPLE, projectDir, { recursive: true });
+  return projectDir;
+}
+
 // The LOOSE Python fixture (ADR 0006c, laimk-hse.5): an abstract pyproject.toml
 // (the manifest marker) + a loose, unpinned requirements.in (idna, urllib3) and NO
 // lock-grade requirements.txt, so detection flags it `loose`. dustcastle resolves

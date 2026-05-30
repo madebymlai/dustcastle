@@ -362,4 +362,44 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     // The richer lockfile wins: precedence is uv.lock > requirements.txt.
     expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "uv" });
   });
+
+  // poetry Package Manager (laimk-hse.7). `poetry.lock` is a real lockfile that
+  // beats a co-present requirements.txt but loses to uv.lock (ADR 0006d precedence:
+  // uv.lock > poetry.lock > requirements.txt). poetry is an EXPORT FRONT-END
+  // (`poetry export`) to the same pip-FOD — not poetry2nix — so the importer is
+  // still pip-FOD per the ADR 0006 amendment.
+  it("routes a poetry.lock repo to poetry (the pip-FOD Importer via the poetry export front-end)", () => {
+    const dir = repo({
+      "pyproject.toml": '[tool.poetry]\nname = "app"\n\n[tool.poetry.dependencies]\nidna = "3.10"\n',
+      "poetry.lock": '[[package]]\nname = "idna"\nversion = "3.10"\n',
+    });
+
+    expect(detect(dir)).toHaveLength(1);
+    expect(detect(dir)[0]).toMatchObject({
+      ecosystem: "python",
+      packageManager: "poetry",
+      importer: "pip-FOD",
+    });
+  });
+
+  it("poetry.lock beats a co-present requirements.txt (poetry > requirements.txt, ADR 0006d)", () => {
+    const dir = repo({
+      "pyproject.toml": '[tool.poetry]\nname = "app"\n',
+      "poetry.lock": '[[package]]\nname = "idna"\nversion = "3.10"\n',
+      "requirements.txt": PINNED_REQUIREMENTS,
+    });
+
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "poetry" });
+  });
+
+  it("uv.lock beats a co-present poetry.lock (uv > poetry, ADR 0006d)", () => {
+    const dir = repo({
+      "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna"]\n',
+      "uv.lock": 'version = 1\n\n[[package]]\nname = "idna"\nversion = "3.10"\n',
+      "poetry.lock": '[[package]]\nname = "idna"\nversion = "3.10"\n',
+    });
+
+    // The richer lockfile wins: precedence is uv.lock > poetry.lock.
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "uv" });
+  });
 });

@@ -24,7 +24,7 @@ export type Ecosystem = "node" | "go" | "python";
  * (CONTEXT.md: Package Manager). A closed union — the lockfile names one of these,
  * which selects the Importer. Go is still a Package Manager, not a special case.
  */
-export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip" | "uv";
+export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip" | "uv" | "poetry";
 
 /**
  * What detection concludes about one directory: which Ecosystem it is, the
@@ -116,10 +116,11 @@ export interface ProvisionGate {
 /**
  * The export FRONT-END a Package Manager runs to produce the pip-FOD's input — a
  * hash-pinned `requirements.txt` — from its own lockfile (ADR 0006 amendment). uv
- * carries `uv export --format requirements-txt` (poetry would carry `poetry export`
- * later); the EXPORTED requirements then feed the SAME pip-FOD Importer, so uv is a
- * front-end to that one Importer, NOT a separate importer / uv2nix. Absent for a
- * manager that consumes its lockfile directly (pip reads `requirements.txt` as-is).
+ * carries `uv export --format requirements-txt` and poetry carries `poetry export`
+ * (laimk-hse.7); the EXPORTED requirements then feed the SAME pip-FOD Importer, so
+ * each is a front-end to that one Importer, NOT a separate importer / uv2nix /
+ * poetry2nix. Absent for a manager that consumes its lockfile directly (pip reads
+ * `requirements.txt` as-is).
  */
 export interface ExportFrontEnd {
   /** The front-end binary to run (`uv`). */

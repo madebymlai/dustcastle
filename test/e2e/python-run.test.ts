@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { prepareRun } from "../../src/run/index.js";
-import { stagePythonProject, stagePythonUvProject } from "./fixture.js";
+import { stagePythonPoetryProject, stagePythonProject, stagePythonUvProject } from "./fixture.js";
 
 // laimk-hse.2 RED→GREEN GATE (the Python pip-FOD ecosystem path):
 //   a hash-pinned, wheels-only requirements.txt project → dustcastle provisions it
@@ -168,6 +168,43 @@ describe("dustcastle run (laimk-hse.6: uv front-end → the SAME pip-FOD pure pa
       } finally {
         await handle.close();
       }
+    },
+  );
+});
+
+describe("dustcastle run (laimk-hse.7: poetry front-end — honest provisionGate, NOT a wrong build)", () => {
+  // The poetry analogue of the slice-2 Python gate, in its HONEST form. A poetry
+  // project (poetry.lock present, beating a co-present requirements.txt and losing
+  // to uv.lock → detection routes the `poetry` Package Manager) is DETECTED and
+  // wired to the SAME pip-FOD via the `poetry export` front-end — but `poetry
+  // export`'s hermeticity was NOT validated by the spike (only `uv export` was), so
+  // rather than ship a build that might resolve from the network or hand the pip-FOD
+  // a wheel+sdist requirements file, provisioning GATES with an actionable reason
+  // (ADR 0001, the bun-gate honesty pattern). This case asserts exactly that: poetry
+  // routes, and `prepareRun` surfaces the gate reason rather than building. When
+  // `poetry export` is proven hermetic the gate is a one-field drop and this becomes
+  // the offline-pytest build above. Gated by DUSTCASTLE_E2E=1; do NOT run a real nix
+  // build in the implementing workflow.
+  e2e(
+    "detects python/poetry and surfaces the honest provisionGate reason (no nix build)",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "dustcastle-python-poetry-run-"));
+      tmps.push(root);
+      const projectDir = stagePythonPoetryProject(root);
+
+      // Detection routes poetry (poetry.lock beats requirements.txt, loses to uv.lock,
+      // ADR 0006d); the Importer is STILL the pip-FOD (the poetry export front-end).
+      const { detect } = await import("../../src/detect/index.js");
+      const detection = detect(projectDir)[0];
+      expect(detection?.ecosystem).toBe("python");
+      expect(detection?.packageManager).toBe("poetry");
+      expect(detection?.importer).toBe("pip-FOD");
+
+      // prepareRun reaches the store dispatch, which throws the descriptor's honest
+      // provisionGate reason (ADR 0001) — never a silent or wrong build. Lifting the
+      // gate (once `poetry export` is proven hermetic) turns this into the offline
+      // pytest build above.
+      expect(() => prepareRun({ cwd: projectDir })).toThrow(/poetry export/i);
     },
   );
 });
