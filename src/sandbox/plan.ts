@@ -87,6 +87,17 @@ function envFor(ecosystem: Detection["ecosystem"], toolchainStorePath: string): 
       npm_config_update_notifier: "false",
     };
   }
+  if (ecosystem === "python") {
+    // Python (pip-FOD): the python Toolchain (with pip) on PATH; the offline-
+    // assembled site-packages are staged into ./site (see setupFor) and reached
+    // via PYTHONPATH. The Store is read-only, so pip's cache points to /tmp.
+    return {
+      PATH: `${bin}:/usr/bin:/bin`,
+      PYTHONPATH: "site",
+      PIP_CACHE_DIR: "/tmp/pip-cache",
+      XDG_CACHE_HOME: "/tmp/.cache",
+    };
+  }
   // Go (spike-proven): vendored deps, proxy off, writable build cache.
   return {
     PATH: `${bin}:/usr/bin:/bin`,
@@ -125,6 +136,12 @@ function setupFor(detection: Detection, provisioned: Provisioned, egress: Egress
     // Pure: copy the offline-assembled node_modules out of the read-only Store.
     // Manager-agnostic — every JS importer publishes the same node_modules layout.
     return [`cp -RL ${provisioned.depsStorePath}/node_modules node_modules`, "chmod -R u+w node_modules"];
+  }
+  if (detection.ecosystem === "python") {
+    // Python (pip-FOD): copy the offline-assembled site-packages out of the
+    // read-only Store into ./site (PYTHONPATH points there). The pip-FOD's deps
+    // derivation publishes them under `$out/site`.
+    return [`cp -RL ${provisioned.depsStorePath}/site site`, "chmod -R u+w site"];
   }
   // Go: stage the vendored modules from the Store into the worktree as vendor/.
   return [`cp -rL ${provisioned.depsStorePath} vendor`, "chmod -R u+w vendor"];

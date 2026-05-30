@@ -228,3 +228,53 @@ describe("detect — JS/Node ecosystem (ADR 0006 slice 2)", () => {
     expect(ecos).toContain("node");
   });
 });
+
+describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => {
+  // A hash-pinned, wheels-only requirements.txt (the tracer case): already
+  // lock-grade, so it routes the pip-FOD Importer and is NOT a loose manifest.
+  const PINNED_REQUIREMENTS =
+    "idna==3.10 \\\n" +
+    "    --hash=sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3\n" +
+    "urllib3==2.2.3 \\\n" +
+    "    --hash=sha256:ca899ca043dcb1bafa3e262d73aa25c465bfb49e0bd9dd5d59f1d0acba2f8fac\n";
+
+  it("routes a hash-pinned requirements.txt to the pip-FOD importer", () => {
+    const dir = repo({ "requirements.txt": PINNED_REQUIREMENTS });
+
+    expect(detect(dir)).toHaveLength(1);
+    expect(detect(dir)[0]).toMatchObject({
+      ecosystem: "python",
+      packageManager: "pip",
+      importer: "pip-FOD",
+    });
+  });
+
+  it("does NOT flag a pinned requirements.txt as loose (it is pip's lockfile)", () => {
+    // requirements.txt is BOTH the Python manifest marker AND pip's lockfile, so a
+    // present requirements.txt implies a present lockfile — never loose here.
+    const dir = repo({ "requirements.txt": PINNED_REQUIREMENTS });
+
+    expect(detect(dir)[0]?.loose).toBeUndefined();
+  });
+
+  it("detects Python from a pyproject.toml manifest marker", () => {
+    const dir = repo({
+      "pyproject.toml": "[project]\nname = \"app\"\n",
+      "requirements.txt": PINNED_REQUIREMENTS,
+    });
+
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "pip" });
+  });
+
+  it("surfaces Python alongside Node in a polyglot repo (per-directory, ADR 0006d)", () => {
+    const dir = repo({
+      "package.json": JSON.stringify({ name: "app" }),
+      "package-lock.json": "{}",
+      "requirements.txt": PINNED_REQUIREMENTS,
+    });
+
+    const ecos = detect(dir).map((d) => d.ecosystem);
+    expect(ecos).toContain("node");
+    expect(ecos).toContain("python");
+  });
+});

@@ -25,6 +25,7 @@ const REGISTRY_HOSTS: Readonly<Record<string, string>> = {
   pnpm: "registry.npmjs.org",
   bun: "registry.npmjs.org",
   yarn: "registry.yarnpkg.com",
+  pip: "pypi.org",
 };
 
 /**

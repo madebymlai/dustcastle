@@ -227,7 +227,9 @@ export interface RunOptions extends ProvisionOptions {
  */
 function gcProjectKey(prepared: PreparedRun): string {
   const depsHash =
-    prepared.provisioned.npmDepsHash ?? (prepared.provisioned.vendorHash || "toolchain");
+    prepared.provisioned.npmDepsHash ??
+    prepared.provisioned.pythonDepsHash ??
+    (prepared.provisioned.vendorHash || "toolchain");
   return `${prepared.detection.packageManager}-${depsHash}`;
 }
 

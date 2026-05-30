@@ -24,15 +24,16 @@ const EXPECTED_IMPORTER: Record<PackageManager, string> = {
   yarn: "fetchYarnDeps",
   bun: "fetchBunDeps",
   go: "buildGoModule",
+  pip: "pip-FOD",
 };
 
 describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
-  it("exposes the closed Ecosystem list, ordered go then node", () => {
-    expect(ECOSYSTEMS.map((e) => e.ecosystem)).toEqual(["go", "node"]);
+  it("exposes the closed Ecosystem list, ordered go then node then python", () => {
+    expect(ECOSYSTEMS.map((e) => e.ecosystem)).toEqual(["go", "node", "python"]);
   });
 
-  it("curates exactly the five known Package Managers", () => {
-    expect([...PACKAGE_MANAGERS].sort()).toEqual(["bun", "go", "npm", "pnpm", "yarn"]);
+  it("curates exactly the six known Package Managers", () => {
+    expect([...PACKAGE_MANAGERS].sort()).toEqual(["bun", "go", "npm", "pip", "pnpm", "yarn"]);
   });
 
   describe.each(PACKAGE_MANAGERS)("Package Manager descriptor: %s", (pm) => {
@@ -59,7 +60,7 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
 
     it("marks which Provisioned field carries the discovered hash", () => {
-      const expected = pm === "go" ? "vendorHash" : "npmDepsHash";
+      const expected = pm === "go" ? "vendorHash" : pm === "pip" ? "pythonDepsHash" : "npmDepsHash";
       expect(d.outputHashField).toBe(expected);
     });
   });
@@ -115,8 +116,10 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(sig?.needsImpurity("anything")).toBe(false);
     });
 
-    it("go has no impuritySignal (only Node has impure install scripts)", () => {
-      expect(packageManagerDescriptor("go").impuritySignal).toBeUndefined();
+    it.each(["go", "pip"] as const)("%s has no impuritySignal in this slice", (pm) => {
+      // Only Node has impure install scripts in v1; Python's sdist-only routing is
+      // a later slice (laimk-hse.4), so pip carries no impuritySignal yet.
+      expect(packageManagerDescriptor(pm).impuritySignal).toBeUndefined();
     });
   });
 
@@ -147,8 +150,51 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       if (r?.kind === "gated") expect(r.reason).toMatch(/yarn/i);
     });
 
-    it.each(["bun", "go"] as const)("%s has no lockOnlyResolve", (pm) => {
+    it.each(["bun", "go", "pip"] as const)("%s has no lockOnlyResolve", (pm) => {
+      // pip's loose-manifest pin-then-pure (`uv pip compile --generate-hashes`) is
+      // a later slice (laimk-hse.5); a hash-pinned requirements.txt is already
+      // lock-grade, so this tracer slice carries no lockOnlyResolve for pip.
       expect(packageManagerDescriptor(pm).lockOnlyResolve).toBeUndefined();
+    });
+  });
+
+  describe("the Python Ecosystem descriptor (ADR 0006 amendment — pip-FOD)", () => {
+    it("registers pip as a python Package Manager with the pip-FOD importer", () => {
+      const pip = packageManagerDescriptor("pip");
+      expect(pip.ecosystem).toBe("python");
+      expect(pip.importer).toBe("pip-FOD");
+    });
+
+    it("consumes requirements.txt directly (hash-pinned is lock-grade)", () => {
+      expect(packageManagerDescriptor("pip").lockfiles).toEqual(["requirements.txt"]);
+    });
+
+    it("lands the discovered hash in pythonDepsHash (not npmDepsHash)", () => {
+      expect(packageManagerDescriptor("pip").outputHashField).toBe("pythonDepsHash");
+    });
+
+    it("pip has no provisionGate (the pip-FOD is supported, unlike bun)", () => {
+      expect(packageManagerDescriptor("pip").provisionGate).toBeUndefined();
+    });
+
+    it("python's manifest markers are pyproject.toml/requirements.txt/setup.py", () => {
+      const python = ecosystemFor("python");
+      expect(python.manifests).toEqual(["pyproject.toml", "requirements.txt", "setup.py"]);
+      expect(python.managers).toEqual(["pip"]);
+      expect(python.defaultManager).toBe("pip");
+    });
+
+    it("generates a pip-FOD NixBuild whose attrs the store realizes", () => {
+      const build = packageManagerDescriptor("pip").generateBuild({
+        pname: "sample",
+        depsHash: "sha256-AAA=",
+        src: "./src",
+      });
+      expect(build.attrs).toEqual({ toolchain: "python", deps: "deps", app: "app" });
+      // The pip-FOD download step, hash-pinned (ADR 0006 amendment).
+      expect(build.expression).toContain("pip download");
+      expect(build.expression).toContain("--only-binary=:all:");
+      expect(build.expression).toContain('outputHash = "sha256-AAA="');
     });
   });
 

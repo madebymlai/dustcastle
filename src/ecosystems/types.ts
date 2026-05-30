@@ -17,14 +17,14 @@ import type { NixBuild } from "../nix/go.js";
  */
 
 /** A language world dustcastle can provision (CONTEXT.md glossary: Ecosystem). */
-export type Ecosystem = "node" | "go";
+export type Ecosystem = "node" | "go" | "python";
 
 /**
  * The specific tool within an Ecosystem that owns a repo's dependency resolution
  * (CONTEXT.md: Package Manager). A closed union — the lockfile names one of these,
  * which selects the Importer. Go is still a Package Manager, not a special case.
  */
-export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go";
+export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip";
 
 /**
  * What detection concludes about one directory: which Ecosystem it is, the
@@ -114,7 +114,7 @@ export interface ProvisionGate {
 }
 
 /** Which Provisioned field carries the discovered/supplied deps hash (load-bearing). */
-export type OutputHashField = "vendorHash" | "npmDepsHash";
+export type OutputHashField = "vendorHash" | "npmDepsHash" | "pythonDepsHash";
 
 /**
  * The DISPATCH grain (CONTEXT.md: Package Manager). Everything the store, impurity

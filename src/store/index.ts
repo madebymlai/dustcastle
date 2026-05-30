@@ -60,6 +60,8 @@ export interface Provisioned {
   readonly vendorHash: string;
   /** The npm deps hash used for Node (discovered or supplied). Undefined for non-Node. */
   readonly npmDepsHash?: string;
+  /** The pip-FOD aggregate hash used for Python (discovered or supplied). Undefined for non-Python. */
+  readonly pythonDepsHash?: string;
 }
 
 /**
@@ -184,7 +186,9 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
   }
 
   // The hash lands in the field the descriptor declares (Go→vendorHash,
-  // Node→npmDepsHash) — load-bearing at the run layer.
+  // Node→npmDepsHash, Python→pythonDepsHash) — load-bearing at the run layer.
+  // The Pass-1 discover / Pass-2 build loop above is REUSED unchanged: the pip-FOD
+  // has one discoverable aggregate hash, so only the output field differs.
   return {
     mode: ctx.mode,
     physStoreRoot: ctx.physStoreRoot,
@@ -193,6 +197,7 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
     appStorePath: parseStorePath(app.stdout),
     vendorHash: descriptor.outputHashField === "vendorHash" ? depsHash : "",
     ...(descriptor.outputHashField === "npmDepsHash" ? { npmDepsHash: depsHash } : {}),
+    ...(descriptor.outputHashField === "pythonDepsHash" ? { pythonDepsHash: depsHash } : {}),
   };
 }
 

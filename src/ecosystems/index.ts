@@ -1,5 +1,6 @@
 import { GO_ECOSYSTEM, GO_MANAGERS } from "./go.js";
 import { NODE_ECOSYSTEM, NODE_MANAGERS } from "./node.js";
+import { PYTHON_ECOSYSTEM, PYTHON_MANAGERS } from "./python.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 export type {
@@ -24,12 +25,18 @@ export type {
  * first-class state in the Registry, not an ad-hoc throw.
  *
  * The ordering of {@link ECOSYSTEMS} is detection precedence (ADR 0006d): Go
- * first, then Node — matching today's hardcoded `detect()` accumulation order.
+ * first, then Node, then Python — matching today's hardcoded `detect()`
+ * accumulation order. Python is per-directory orthogonal (a polyglot repo can
+ * surface it alongside Node/Go), so its slot in the order is non-conflicting.
  */
-export const ECOSYSTEMS: readonly EcosystemDescriptor[] = [GO_ECOSYSTEM, NODE_ECOSYSTEM];
+export const ECOSYSTEMS: readonly EcosystemDescriptor[] = [GO_ECOSYSTEM, NODE_ECOSYSTEM, PYTHON_ECOSYSTEM];
 
 /** Every Package Manager descriptor, flattened across Ecosystems (dispatch grain). */
-const PACKAGE_MANAGER_DESCRIPTORS: readonly PackageManagerDescriptor[] = [...GO_MANAGERS, ...NODE_MANAGERS];
+const PACKAGE_MANAGER_DESCRIPTORS: readonly PackageManagerDescriptor[] = [
+  ...GO_MANAGERS,
+  ...NODE_MANAGERS,
+  ...PYTHON_MANAGERS,
+];
 
 const BY_PACKAGE_MANAGER: ReadonlyMap<PackageManager, PackageManagerDescriptor> = new Map(
   PACKAGE_MANAGER_DESCRIPTORS.map((d) => [d.packageManager, d]),

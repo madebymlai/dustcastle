@@ -94,6 +94,21 @@ export function stageWorkspaceProject(root: string): { root: string; members: st
   return { root: wsRoot, members };
 }
 
+// The committed Python sample (slice laimk-hse.2): a hash-pinned, wheels-only
+// requirements.txt (idna + urllib3, both pure-Python wheels → pip-FOD pure path)
+// + a `python -m pytest` gate. Signalled by requirements.txt so detection routes
+// the pip-FOD Importer. Its live build is proven by the gated Python e2e
+// (test/e2e/python-run.test.ts), the analogue of the Node gate.
+export const PYTHON_SAMPLE = resolve(process.cwd(), "test/fixtures/python-sample");
+
+/** Stage the Python sample under a "sample"-named dir (pname matches the warm Store). */
+export function stagePythonProject(root: string): string {
+  const projectDir = join(root, "sample");
+  mkdirSync(projectDir);
+  cpSync(PYTHON_SAMPLE, projectDir, { recursive: true });
+  return projectDir;
+}
+
 // The impure-allow Node fixture (ADR 0004/0005): a real registry dep (is-number)
 // + a local dep with a postinstall, so the lockfile reports hasInstallScript and
 // the build resolves impure. Drives the live egress-enforcement e2e: a real
