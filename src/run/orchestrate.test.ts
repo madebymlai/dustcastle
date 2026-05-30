@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   branchForIssue,
   completedFrom,
@@ -6,6 +9,7 @@ import {
   mergeArgs,
   phaseConfig,
   reviewArgs,
+  worktreeCopies,
 } from "./orchestrate.js";
 import type { IssueOutcome } from "./orchestrate.js";
 import type { PlannedIssue } from "./plan-schema.js";
@@ -18,6 +22,38 @@ import { loadOrchestrationPrompt } from "../agent/prompts.js";
 describe("branchForIssue", () => {
   it("is the deterministic sandcastle/issue-{id} branch name", () => {
     expect(branchForIssue("42")).toBe("sandcastle/issue-42");
+  });
+});
+
+describe("worktreeCopies (what the per-issue worktree carries past the git checkout)", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+  const proj = (...files: string[]): string => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-wt-"));
+    tmps.push(dir);
+    for (const f of files) writeFileSync(join(dir, f), "x");
+    return dir;
+  };
+
+  it("always carries .beads (its Dolt DB is git-excluded)", () => {
+    expect(worktreeCopies(proj())).toEqual([".beads"]);
+  });
+
+  it("adds the agent-context docs that exist at the project root", () => {
+    expect(worktreeCopies(proj("CONTEXT.md", "AGENTS.md"))).toEqual([
+      ".beads",
+      "CONTEXT.md",
+      "AGENTS.md",
+    ]);
+  });
+
+  it("never lists a context doc the project doesn't have (no missing-path copy)", () => {
+    const copies = worktreeCopies(proj("AGENTS.md"));
+    expect(copies).toContain("AGENTS.md");
+    expect(copies).not.toContain("CONTEXT.md");
+    expect(copies).not.toContain("CODING_STANDARDS.md");
   });
 });
 

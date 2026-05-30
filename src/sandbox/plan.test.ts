@@ -127,6 +127,12 @@ describe("planSandbox — Node pure path (ADR 0002/0004/0005)", () => {
     expect(setup).toContain("node_modules");
     // Pure path never runs `npm ci` in the container — deps came from the Store.
     expect(setup).not.toContain("npm ci");
+    // Clear the target before copying, and chmod it writable BEFORE the rm — a
+    // read-only node_modules left by an interrupted prior staging (cp -RL copies the
+    // Store's 555 mode) is otherwise un-removable, poisoning every later run.
+    expect(setup).toContain("rm -rf node_modules");
+    expect(setup.indexOf("rm -rf node_modules")).toBeLessThan(setup.indexOf("cp -RL"));
+    expect(setup).toMatch(/chmod -R u\+w node_modules 2>\/dev\/null; rm -rf node_modules/);
   });
 });
 
@@ -200,6 +206,70 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
     const env =
       planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).podmanOptions.env ?? {};
     expect(env.HTTPS_PROXY).toBeUndefined();
+  });
+});
+
+describe("planSandbox — Python impure path stages into ./site (dustcastle-bbg.3 bugfix)", () => {
+  // The latent bug this slice closes: python builds CAN go impure (a uv/poetry
+  // project with an sdist dependency, ADR 0004) but setupFor's impure branch used
+  // to live inside `if (ecosystem === "node")`, so a python impure build fell
+  // through to the PURE python branch and `cp`-ed from an empty depsStorePath.
+  // After the relocation onto PackageManagerDescriptor.impureInstall, a python
+  // impure build installs into ./site — the same dir the pure path stages into and
+  // PYTHONPATH points at, so the run env is identical pure or impure.
+  //
+  // The real assembly is DUSTCASTLE_E2E-gated (podman + nix), so the "end-to-end"
+  // AC is satisfied here at the unit level: planSandbox emits the install commands.
+  const pythonImpureProvisioned: Provisioned = {
+    mode: "bwrap",
+    physStoreRoot: nodeProvisioned.physStoreRoot,
+    toolchainStorePath: "/nix/store/pppp-python3-3.12",
+    depsStorePath: "", // impure: only the Toolchain is in the Store; deps install in-container
+    appStorePath: "/nix/store/pppp-python3-3.12",
+    vendorHash: "",
+  };
+  const pythonImpureEgress = {
+    kind: "allowlist",
+    buildHosts: ["pypi.org", "files.pythonhosted.org"],
+    agentHosts: [],
+  } as const;
+
+  const setup = (packageManager: PackageManager) =>
+    planSandbox({
+      provisioned: pythonImpureProvisioned,
+      detection: { ecosystem: "python", packageManager },
+      egress: pythonImpureEgress,
+    }).setupCommands;
+
+  it("pip installs its committed requirements straight into ./site (no empty cp)", () => {
+    const cmds = setup("pip");
+    expect(cmds).toEqual(["pip install --require-hashes -r requirements.txt --target site"]);
+    // It must NOT fall through to the pure branch, which would cp from the empty path.
+    expect(cmds.join("\n")).not.toContain("cp -RL");
+  });
+
+  it("uv exports its hash-pinned requirements first, then installs them into ./site", () => {
+    expect(setup("uv")).toEqual([
+      "uv export --format requirements-txt -o requirements.txt",
+      "pip install --require-hashes -r requirements.txt --target site",
+    ]);
+  });
+
+  it("poetry exports its hash-pinned requirements first, then installs them into ./site", () => {
+    expect(setup("poetry")).toEqual([
+      "poetry export --format requirements.txt -o requirements.txt",
+      "pip install --require-hashes -r requirements.txt --target site",
+    ]);
+  });
+
+  it("opens scoped egress and points PYTHONPATH at the staged site (run env identical to pure)", () => {
+    const plan = planSandbox({
+      provisioned: pythonImpureProvisioned,
+      detection: { ecosystem: "python", packageManager: "uv" },
+      egress: pythonImpureEgress,
+    });
+    expect(plan.podmanOptions.network).not.toBe("none");
+    expect((plan.podmanOptions.env ?? {}).PYTHONPATH).toBe("site");
   });
 });
 

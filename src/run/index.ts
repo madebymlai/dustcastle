@@ -3,10 +3,11 @@ import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
 import { parseImpurityMode, type ImpurityDecision, type ImpurityMode } from "../impurity/index.js";
-import { ensureEgress } from "../sandbox/egress-runtime.js";
+import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtime.js";
 import { deriveEgress, type EgressDecision } from "../sandbox/egress.js";
 import { planSandbox, type SandboxPlan } from "../sandbox/plan.js";
 import { ensureAgentImage } from "../sandbox/agent-image.js";
+import { ensureProxyImage } from "../sandbox/proxy-image.js";
 import { provisionStore, type Provisioned } from "../store/index.js";
 import {
   defaultGcRootsDir,
@@ -65,6 +66,14 @@ export interface PrepareOptions {
    * override it; defaults to a real spawn.
    */
   readonly export?: ResolveRunner;
+  /**
+   * Stand up the egress backend the moment the egress decision is known — BEFORE
+   * the expensive Store provision (ADR 0005/0010). The bracket caller
+   * ({@link withProvisionedSandbox}) injects this to fail fast: a host that can't
+   * enforce scoped egress aborts here, not after minutes of build work. dustcastle
+   * has no unconfined fallback by design, so if this throws, the run throws.
+   */
+  readonly beforeProvision?: (egress: EgressDecision) => void;
 }
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
@@ -150,16 +159,9 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
     ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
   });
 
-  const provisioned = provisionStore({
-    projectDir: opts.cwd,
-    detection,
-    impure,
-    ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
-    ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
-    ...(opts.vendorHash !== undefined ? { vendorHash: opts.vendorHash } : {}),
-    ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
-  });
-
+  // Derive the egress decision (ADR 0005/0010) BEFORE provisioning — it needs only
+  // detection/impurity, not the realized Store — so the enforcing proxy can be stood
+  // up (and fail fast) ahead of the expensive build via `beforeProvision`.
   const remoteHost = impure ? gitRemoteHost(opts.cwd) : undefined;
   const egress: EgressDecision = deriveEgress({
     packageManager: detection.packageManager,
@@ -168,6 +170,20 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
     // Agent Egress (ADR 0010): the model host(s) carve a route for the agent's own
     // LLM calls out of the build's network posture — even when the build is pure.
     ...(opts.agentModelHosts !== undefined ? { agentModelHosts: opts.agentModelHosts } : {}),
+  });
+
+  // Fail fast: stand up the egress proxy now. If this host can't enforce scoped
+  // egress, abort BEFORE provisioning (no unconfined fallback — ADR 0005/0010).
+  opts.beforeProvision?.(egress);
+
+  const provisioned = provisionStore({
+    projectDir: opts.cwd,
+    detection,
+    impure,
+    ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
+    ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
+    ...(opts.vendorHash !== undefined ? { vendorHash: opts.vendorHash } : {}),
+    ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
   });
 
   return {
@@ -227,6 +243,14 @@ const DEFAULT_PROXY_ENTRYPOINT = "/opt/dustcastle/proxy-main.js";
  * egress backend, and pin the GC roots — i.e. a run minus the agent handoff.
  */
 export interface ProvisionOptions extends PrepareOptions {
+  /**
+   * Called once after the Store is provisioned and the egress backend is up — the
+   * single point where the CLI prints its "provisioned …" posture banner. Routing
+   * the banner through here (rather than a standalone pre-run `prepareRun`) keeps
+   * the run to ONE provision and preserves fail-fast: if egress can't be enforced,
+   * the run aborts before provisioning and this never fires.
+   */
+  readonly onPrepared?: (prepared: PreparedRun) => void;
   /** In-container path to the proxy entrypoint for the production egress backend. */
   readonly proxyEntrypoint?: string;
   /** Image carrying a Node runtime for the egress proxy container. */
@@ -315,38 +339,65 @@ export async function withProvisionedSandbox<T>(
   // opt wins (tests); otherwise read it from the global config (throws actionably
   // on an unknown provider, before any sandbox is stood up).
   const agentModelHosts = opts.agentModelHosts ?? configuredAgentModelHosts();
-  const prepared = prepareRun({
-    ...opts,
-    ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
-  });
 
-  // Stand up the production egress backend the plan routes through (no-op when
-  // the build is pure/closed). Torn down whatever the outcome.
-  const egress = ensureEgress({
-    egress: prepared.plan.egress,
-    proxyEntrypoint: opts.proxyEntrypoint ?? DEFAULT_PROXY_ENTRYPOINT,
-    ...(opts.proxyImage !== undefined ? { image: opts.proxyImage } : {}),
-    ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
-  });
-
-  // Pin this run's toolchain + deps closure with scoped GC roots (ADR 0007), so a
-  // concurrent collect-garbage never deletes paths the live run still needs. Roots
-  // are released on completion (below), scoping them to the active run.
-  const roots = registerScopedRoots({
-    provisioned: prepared.provisioned,
-    gcrootsDir: opts.gcRoots?.gcrootsDir ?? defaultGcRootsDir(),
-    projectKey: gcProjectKey(prepared),
-    ...(opts.gcRoots?.run !== undefined ? { run: opts.gcRoots.run } : {}),
-    ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
-  });
-
-  // Persist this project as recently-used + pin a PERSISTENT recency root (ADR
-  // 0007), so its Toolchain stays warm across runs — distinct from the scoped root
-  // above, which is released on completion. Best-effort: a failure only risks a
-  // later cold rebuild, never the run.
-  updateRecency(opts, prepared);
+  // The egress backend and the scoped GC roots, captured as the run sets them up so
+  // the single finally tears down whatever was established — even if provisioning or
+  // the body throws after egress came up.
+  let egress: ReturnType<typeof ensureEgress> = { teardown: () => {} };
+  let roots: ReturnType<typeof registerScopedRoots> | undefined;
 
   try {
+    const prepared = prepareRun({
+      ...opts,
+      ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
+      // Stand up the production egress backend the moment the decision is known —
+      // BEFORE the Store provision (ADR 0005/0010). A host that can't enforce scoped
+      // egress fails fast here, before any build work; dustcastle has no unconfined
+      // fallback. Torn down in the finally whatever the outcome.
+      beforeProvision: (decision) => {
+        // Only the allowlist (impure) path runs a proxy, so build its image lazily
+        // there — the dustcastle-owned image that actually carries the proxy code
+        // (stock node:20-alpine has none, which left the proxy dead-on-arrival).
+        const image =
+          opts.proxyImage ??
+          (decision.kind === "allowlist"
+            ? ensureProxyImage(opts.onLine !== undefined ? { onLine: opts.onLine } : {})
+            : undefined);
+        // The proxy resolves allowlisted hosts through external resolvers, not the
+        // --internal net's aardvark (which would NXDOMAIN-poison resolution).
+        const resolvConfPath = decision.kind === "allowlist" ? provisionProxyResolvConf() : undefined;
+        egress = ensureEgress({
+          egress: decision,
+          proxyEntrypoint: opts.proxyEntrypoint ?? DEFAULT_PROXY_ENTRYPOINT,
+          ...(image !== undefined ? { image } : {}),
+          ...(resolvConfPath !== undefined ? { resolvConfPath } : {}),
+          ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+        });
+      },
+    });
+
+    // Surface the provisioned posture now — after egress is up and the Store is
+    // realized, the single banner point (the CLI prints here instead of a separate
+    // pre-run prepareRun, so the run provisions exactly once and stays fail-fast).
+    opts.onPrepared?.(prepared);
+
+    // Pin this run's toolchain + deps closure with scoped GC roots (ADR 0007), so a
+    // concurrent collect-garbage never deletes paths the live run still needs. Roots
+    // are released on completion (below), scoping them to the active run.
+    roots = registerScopedRoots({
+      provisioned: prepared.provisioned,
+      gcrootsDir: opts.gcRoots?.gcrootsDir ?? defaultGcRootsDir(),
+      projectKey: gcProjectKey(prepared),
+      ...(opts.gcRoots?.run !== undefined ? { run: opts.gcRoots.run } : {}),
+      ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+    });
+
+    // Persist this project as recently-used + pin a PERSISTENT recency root (ADR
+    // 0007), so its Toolchain stays warm across runs — distinct from the scoped root
+    // above, which is released on completion. Best-effort: a failure only risks a
+    // later cold rebuild, never the run.
+    updateRecency(opts, prepared);
+
     // Ensure the dustcastle-owned agent image exists (built once from the shipped
     // Containerfile; idempotent thereafter), the way the Store provision ensures
     // nix-portable. The image carries the agent harness (git/bd/pi) + a writable,
@@ -369,7 +420,7 @@ export async function withProvisionedSandbox<T>(
         withSetupHooks(callerHooks, prepared.plan.setupCommands),
     });
   } finally {
-    roots.release(); // drop this run's scoped GC roots — closure becomes collectable
+    roots?.release(); // drop this run's scoped GC roots — closure becomes collectable
     egress.teardown();
     // Fire the detached auto-GC one-shot (ADR 0007), off the hot path. It runs
     // AFTER the scoped roots are released, so the just-finished closure is

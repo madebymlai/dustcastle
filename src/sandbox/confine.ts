@@ -25,6 +25,23 @@ export const EGRESS_PROXY_CONTAINER = "dustcastle-egress-proxy";
 /** The port the proxy listens on (both backends). */
 export const EGRESS_PROXY_PORT = 8118;
 
+/**
+ * The resolvers the production proxy container resolves allowlisted hosts through.
+ * It must NOT use the --internal network's aardvark DNS: that resolver returns
+ * NXDOMAIN for any off-host name, and under the proxy image's musl libc (which
+ * queries all nameservers in parallel and takes the first answer) it *wins the
+ * race* and poisons resolution — so the proxy can't resolve the registries it is
+ * meant to reach. Public resolvers it reaches over its external leg sidestep that.
+ * The hostname allowlist is enforced before any DNS lookup, so the resolver choice
+ * never widens what the proxy will connect to.
+ */
+export const EGRESS_PROXY_DNS: readonly string[] = ["1.1.1.1", "8.8.8.8"];
+
+/** The /etc/resolv.conf body the proxy container mounts (external resolvers only). */
+export function proxyResolvConf(servers: readonly string[] = EGRESS_PROXY_DNS): string {
+  return servers.map((s) => `nameserver ${s}`).join("\n") + "\n";
+}
+
 /** Point a build's HTTP tooling (and npm) at the egress proxy. */
 export function proxyEnv(proxyUrl: string): Record<string, string> {
   return {
@@ -61,6 +78,12 @@ export interface ProxyContainerSpec {
   readonly allowlist: readonly string[];
   /** In-container path to the proxy entrypoint (`proxy-main.js`). */
   readonly proxyEntrypoint: string;
+  /**
+   * Host path to a resolv.conf bind-mounted at /etc/resolv.conf (external resolvers
+   * only — see EGRESS_PROXY_DNS). Omitted in the unit specs; supplied live so the
+   * dual-homed proxy can resolve allowlisted hosts despite the --internal aardvark.
+   */
+  readonly resolvConfPath?: string;
   /** Override the proxy container name / internal network / port (tests). */
   readonly container?: string;
   readonly network?: string;
@@ -72,6 +95,13 @@ export interface ProxyContainerSpec {
  * internal egress net (so the sandbox can reach it) and an external net (so it,
  * alone, can reach the allowlisted registries). The allowlist + port are passed
  * as env to the entrypoint.
+ *
+ * Binds the proxy to `0.0.0.0`, not proxy-main's loopback default: here the proxy
+ * is its OWN container and the sandbox is a separate one reaching it by name over
+ * the internal net, so a loopback-only bind would refuse those cross-container
+ * connections. (The privilege-stripped-host fallback runs the proxy as a host
+ * process on loopback, where pasta maps it in — a different path that keeps the
+ * default.)
  */
 export function proxyContainerRunArgs(spec: ProxyContainerSpec): string[] {
   const network = spec.network ?? EGRESS_NETWORK;
@@ -86,10 +116,14 @@ export function proxyContainerRunArgs(spec: ProxyContainerSpec): string[] {
     network,
     "--network",
     spec.externalNetwork,
+    // Mount external-resolver resolv.conf over the --internal aardvark's (see above).
+    ...(spec.resolvConfPath ? ["-v", `${spec.resolvConfPath}:/etc/resolv.conf:ro`] : []),
     "-e",
     `DUSTCASTLE_EGRESS_ALLOWLIST=${spec.allowlist.join(",")}`,
     "-e",
     `DUSTCASTLE_EGRESS_PORT=${port}`,
+    "-e",
+    "DUSTCASTLE_EGRESS_HOST=0.0.0.0",
     spec.image,
     "node",
     spec.proxyEntrypoint,

@@ -16,6 +16,7 @@ export type {
   PackageManager,
   PackageManagerDescriptor,
   ProvisionGate,
+  SandboxStaging,
   ToolchainVersionInput,
 } from "./types.js";
 

@@ -37,6 +37,24 @@ export const GO_ECOSYSTEM: EcosystemDescriptor = {
   // No declared-manager resolver: Go has a single Package Manager.
   // The Toolchain version comes from go.mod's `go` line (ADR 0006b).
   readToolchainVersion: ({ manifest }) => readGoVersion(manifest),
+  // Pure staging (ADR 0002): go's deps Store path IS the vendor dir, so there is
+  // no subpath — `stageCommands` copies the whole `depsStorePath` into the
+  // worktree's `vendor` (GOFLAGS=-mod=vendor reads it). The run env (spike-proven)
+  // reads vendored deps, turns the module proxy off, and points the build cache at
+  // /tmp since the Store is read-only.
+  sandbox: {
+    stageDir: "vendor",
+    storeSubpath: "",
+    env: (bin) => ({
+      PATH: `${bin}:/usr/bin:/bin`,
+      GOFLAGS: "-mod=vendor",
+      GOPROXY: "off",
+      GOTOOLCHAIN: "local",
+      CGO_ENABLED: "0",
+      GOCACHE: "/tmp/gocache",
+      GOENV: "off",
+    }),
+  },
 };
 
 /** Parse the `go 1.x[.y]` directive from a go.mod, if present. */

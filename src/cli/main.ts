@@ -3,7 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { configuredAgentModelHosts, loadModelSelection } from "../config/global.js";
 import { detect } from "../detect/index.js";
 import { parseImpurityMode } from "../impurity/index.js";
-import { prepareRun } from "../run/index.js";
+import { prepareRun, type PreparedRun } from "../run/index.js";
 import { orchestrate } from "../run/orchestrate.js";
 import { parseYesNo, pendingImpurityAsk, writeImpurityMarker } from "../run/impurity.js";
 import { DUSTCASTLE_HOME } from "../config/global.js";
@@ -77,16 +77,48 @@ async function main(argv: string[]): Promise<number> {
   // Resolve Agent Egress (ADR 0010) so the printed posture matches the run's: the
   // agent's model host carves a route out of even a pure build. Throws actionably
   // on an unknown provider (caught at the top), before anything is provisioned.
+  // Resolve Agent Egress (ADR 0010) up front: the configured model's API host(s),
+  // so an unknown provider throws here — before anything is provisioned. Undefined
+  // ⇒ no model ⇒ no agent egress.
   const agentModelHosts = configuredAgentModelHosts();
-  const prepared = prepareRun({
+  const selection = loadModelSelection();
+  const onLine = (l: string) => process.stderr.write(`${l}\n`);
+
+  // No agent model: nothing runs in the Sandbox, so there's no egress to confine.
+  // Provision the Store, print the posture, and stop — the user picks a model and
+  // re-runs. (ADR 0010: agent egress only matters when an agent will actually run.)
+  if (selection === undefined) {
+    const prepared = prepareRun({ cwd, onLine, ...(agentModelHosts !== undefined ? { agentModelHosts } : {}) });
+    printPosture(prepared);
+    console.error("    (sandbox provisioned and ready; run `dustcastle model` to choose an agent model)");
+    return 0;
+  }
+
+  // A model is set: drive the parallel-planner-with-review loop (plan → execute+
+  // review → merge) over the repo's beads issues. orchestrate provisions exactly
+  // ONCE and stands the egress backend up BEFORE provisioning — so a host that
+  // can't enforce scoped egress fails fast, before any build work. The posture
+  // banner prints from inside that flow (onPrepared), never a pre-run provision.
+  await orchestrate({
     cwd,
-    onLine: (l) => process.stderr.write(`${l}\n`),
+    onLine,
     ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
+    onPrepared: (prepared) => {
+      printPosture(prepared);
+      console.error(`    agent      : pi @ ${selection.model}  (~/.pi/agent mounted)`);
+    },
   });
+  return 0;
+}
+
+/**
+ * Print the provisioned posture — runtime mode, Store paths, purity, and egress
+ * (distinguishing Build vs Agent Egress, ADR 0010, so a pure build that opens only
+ * the model host never reads as "the build went online"), plus any pin step. Never
+ * silent (ADR 0004/0005/0008).
+ */
+function printPosture(prepared: PreparedRun): void {
   const { detection, provisioned, plan, impurity, pinned } = prepared;
-  // Surface the network posture + reproducibility, never silently (ADR 0004/0005).
-  // Distinguish Build Egress from Agent Egress (ADR 0010) so a pure build that opens
-  // only the model host never reads as "the build went online."
   const egressLine =
     plan.egress.kind === "none"
       ? "closed (pure, no network)"
@@ -109,21 +141,6 @@ async function main(argv: string[]): Promise<number> {
       `    /nix/store mounted read-only into the sandbox`,
     ].join("\n"),
   );
-
-  // The agent model is required to launch the orchestration loop; without it the
-  // Sandbox is still provisioned and ready (run `dustcastle model` to choose one).
-  const selection = loadModelSelection();
-  if (selection === undefined) {
-    console.error("    (sandbox provisioned and ready; run `dustcastle model` to choose an agent model)");
-    return 0;
-  }
-  console.error(`    agent      : pi @ ${selection.model}  (~/.pi/agent mounted)`);
-
-  // Drive the built-in parallel-planner-with-review loop (plan → execute+review →
-  // merge) over the repo's beads issues, on the Store-provisioned sandbox. The
-  // orchestrator re-provisions internally against the now-warm Store (ADR 0002).
-  await orchestrate({ cwd, onLine: (l) => process.stderr.write(`${l}\n`) });
-  return 0;
 }
 
 /**

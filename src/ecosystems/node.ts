@@ -35,6 +35,9 @@ const npm: PackageManagerDescriptor = {
     args: ["install", "--package-lock-only"],
     lockfile: "package-lock.json",
   },
+  // The impure in-container install (ADR 0004/0005): `npm ci` installs strictly
+  // from the committed package-lock.json (frozen), running postinstall under scoped egress.
+  impureInstall: ["npm ci"],
 };
 
 const pnpm: PackageManagerDescriptor = {
@@ -60,6 +63,8 @@ const pnpm: PackageManagerDescriptor = {
     args: ["install", "--lockfile-only"],
     lockfile: "pnpm-lock.yaml",
   },
+  // The impure in-container install (ADR 0004/0005): frozen to pnpm-lock.yaml.
+  impureInstall: ["pnpm install --frozen-lockfile"],
 };
 
 const yarn: PackageManagerDescriptor = {
@@ -89,6 +94,9 @@ const yarn: PackageManagerDescriptor = {
       "pin-then-pure: yarn has no clean lockfile-only resolve — commit a yarn.lock, or use " +
       "npm/pnpm, to build pure (ADR 0006c). dustcastle won't run a full yarn install just to pin.",
   },
+  // The impure in-container install (ADR 0004/0005): frozen to yarn.lock. (yarn's
+  // signal is present-but-always-false, but the install is carried for uniformity.)
+  impureInstall: ["yarn install --frozen-lockfile"],
 };
 
 const bun: PackageManagerDescriptor = {
@@ -120,6 +128,10 @@ const bun: PackageManagerDescriptor = {
       "bun deps importer (slice 2b: pnpm and yarn are supported). Use npm, pnpm, " +
       "or yarn, or track the bun-importer follow-up.",
   },
+  // The impure in-container install (ADR 0004/0005): frozen to bun.lock. Carried
+  // for uniformity though bun's provisionGate fires first (exactly like its
+  // never-realized generateBuild) — a half-added manager stays honest.
+  impureInstall: ["bun install --frozen-lockfile"],
 };
 
 // Keyed by Package Manager name for the Registry's compile-time exhaustiveness
@@ -140,6 +152,24 @@ export const NODE_ECOSYSTEM: EcosystemDescriptor = {
   // contract wins, then the version files (.nvmrc, .node-version).
   readToolchainVersion: ({ manifest, readVersionFile }) =>
     readDevEnginesNodeVersion(manifest) ?? readNodeVersion(readVersionFile),
+  // Pure staging (ADR 0002): the deps FOD publishes `node_modules`, copied into
+  // the worktree's `node_modules` (manager-agnostic — every JS importer publishes
+  // the same layout). The run env puts the node Toolchain on PATH ahead of the
+  // agent harness (/usr/local/bin: bd/pi) and points npm's cache + home at /tmp,
+  // since the Store is read-only.
+  sandbox: {
+    stageDir: "node_modules",
+    storeSubpath: "node_modules",
+    env: (bin) => ({
+      // Nix Toolchain first (the PROJECT's node wins), then /usr/local/bin where
+      // the image's agent harness lives (bd/pi — the implement phase shells `bd`).
+      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+      // The Store is read-only; npm's cache + home must point somewhere writable.
+      NPM_CONFIG_CACHE: "/tmp/npm-cache",
+      XDG_CACHE_HOME: "/tmp/.cache",
+      npm_config_update_notifier: "false",
+    }),
+  },
 };
 
 /** Parse the package-manager name from package.json's `packageManager` field. */

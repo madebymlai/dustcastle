@@ -12,28 +12,42 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { DUSTCASTLE_HOME } from "../config/global.js";
 import {
   EGRESS_NETWORK,
   EGRESS_PROXY_CONTAINER,
   egressNetworkCreateArgs,
   productionProxyUrl,
   proxyContainerRunArgs,
+  proxyResolvConf,
 } from "./confine.js";
 import { egressHosts, type EgressDecision } from "./egress.js";
+import { PROXY_IMAGE } from "./proxy-image.js";
 
 /** The minimal result of a podman invocation the orchestration reasons about. */
 export interface PodmanResult {
   readonly status: number | null;
   readonly stderr: string;
+  /** Captured stdout (e.g. `podman inspect -f` template output); "" when unused. */
+  readonly stdout?: string;
 }
 
 /** Runs a `podman <args>` command. Injected in tests; defaults to a real spawn. */
 export type PodmanRunner = (args: readonly string[]) => PodmanResult;
 
-/** A stock Node image is enough to run the proxy entrypoint (deployment may override). */
-const DEFAULT_PROXY_IMAGE = "docker.io/library/node:20-alpine";
+/**
+ * The dustcastle-owned proxy image (ensureProxyImage builds it). NOT stock
+ * node:20-alpine: that image has no `/opt/dustcastle/proxy-main.js`, so the proxy
+ * container crashed on start and the allowlist was enforced over a dead proxy.
+ */
+const DEFAULT_PROXY_IMAGE = PROXY_IMAGE;
 /** The external (internet-facing) network the proxy is also homed on. */
 const DEFAULT_EXTERNAL_NETWORK = "podman";
+
+/** The stderr line proxy-main.ts prints once the proxy is actually bound + serving. */
+const PROXY_LISTENING = /dustcastle-egress: listening on/;
 
 export interface EnsureEgressOptions {
   /** The plan's egress decision; only the allowlist path provisions anything. */
@@ -42,12 +56,27 @@ export interface EnsureEgressOptions {
   readonly proxyEntrypoint: string;
   /** Image carrying a Node runtime for the proxy container. */
   readonly image?: string;
+  /** Host path to the proxy's resolv.conf (external resolvers), bind-mounted in. */
+  readonly resolvConfPath?: string;
   /** The external network the proxy reaches the allowlisted registries through. */
   readonly externalNetwork?: string;
   /** Inject a podman runner (tests); defaults to a real `podman` spawn. */
   readonly run?: PodmanRunner;
+  /**
+   * Confirm the just-started proxy is actually alive (defaults to a real probe via
+   * `run`). `podman run -d` exits 0 once the container is *created*, even if its
+   * process crashes a moment later — so without this a dead proxy is a silent
+   * success (ADR 0005 "never silent"). Injected in tests.
+   */
+  readonly verifyAlive?: (run: PodmanRunner, container: string) => ProxyLiveness;
   /** Surface progress lines (never silent — ADR 0005). */
   readonly onLine?: (line: string) => void;
+}
+
+/** Whether the proxy came up, with the container output that proves/explains it. */
+export interface ProxyLiveness {
+  readonly alive: boolean;
+  readonly detail: string;
 }
 
 /** A handle to the live egress infra: how to address the proxy, and how to remove it. */
@@ -94,11 +123,29 @@ export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
       externalNetwork: opts.externalNetwork ?? DEFAULT_EXTERNAL_NETWORK,
       allowlist: hosts,
       proxyEntrypoint: opts.proxyEntrypoint,
+      ...(opts.resolvConfPath !== undefined ? { resolvConfPath: opts.resolvConfPath } : {}),
     }),
   );
-  if (!isOk(started)) {
+  // Fail fast, no fallback (ADR 0005/0010): scoped egress is a hard requirement —
+  // the build/agent only reach the derived allowlist or nothing. dustcastle will
+  // not fall back to unconfined network, so a host that can't stand up the proxy
+  // must abort. Commonly the host's rootless podman can't create the proxy's
+  // bridge network (needs a working netavark bridge / non-nested netns).
+  const fail = (reason: string): never => {
+    run(["rm", "-f", EGRESS_PROXY_CONTAINER]); // remove the dead/half-started container
     if (weCreatedNetwork) run(["network", "rm", EGRESS_NETWORK]); // roll back our own network
-    throw new Error(`dustcastle: could not start egress proxy: ${started.stderr.trim()}`);
+    throw new Error(
+      `dustcastle: could not establish the scoped egress proxy enforcing [${hosts.join(", ")}]. ${reason}`,
+    );
+  };
+  if (!isOk(started)) fail(`Underlying podman error: ${started.stderr.trim()}`);
+
+  // `podman run -d` exits 0 once the container is CREATED — its process may crash a
+  // moment later (e.g. the image lacks the proxy code). Confirm the proxy is truly
+  // serving before declaring egress enforced; a dead proxy is never a silent success.
+  const liveness = (opts.verifyAlive ?? defaultVerifyProxyAlive)(run, EGRESS_PROXY_CONTAINER);
+  if (!liveness.alive) {
+    fail(`The proxy container started but is not serving:\n${liveness.detail.trim()}`);
   }
   log(`egress: proxy ${EGRESS_PROXY_CONTAINER} enforcing allowlist [${hosts.join(", ")}]`);
 
@@ -115,13 +162,60 @@ function isOk(r: PodmanResult): boolean {
   return r.status === 0;
 }
 
+/** How long to wait for the proxy to bind before declaring it dead (Node start is fast). */
+const LIVENESS_ATTEMPTS = 20;
+const LIVENESS_DELAY_MS = 150;
+
+/**
+ * Real liveness probe: poll the container's logs for the `listening on …` line
+ * proxy-main.ts prints once it is serving. If the container has already exited
+ * (crashed), stop early and surface its output as the failure detail. Drives off
+ * the same injected `run` so it is unit-tested without real podman.
+ */
+function defaultVerifyProxyAlive(run: PodmanRunner, container: string): ProxyLiveness {
+  let detail = "";
+  for (let attempt = 0; attempt < LIVENESS_ATTEMPTS; attempt++) {
+    const logs = run(["logs", container]);
+    detail = `${logs.stdout ?? ""}${logs.stderr}`;
+    if (PROXY_LISTENING.test(detail)) return { alive: true, detail };
+    // Already exited? Then it will never start listening — fail now with its output.
+    const inspect = run(["inspect", "-f", "{{.State.Running}}", container]);
+    if ((inspect.stdout ?? "").trim() !== "true") {
+      return { alive: false, detail: detail || inspect.stderr };
+    }
+    if (attempt < LIVENESS_ATTEMPTS - 1) sleepSync(LIVENESS_DELAY_MS);
+  }
+  return {
+    alive: false,
+    detail: `proxy did not report listening within ${LIVENESS_ATTEMPTS * LIVENESS_DELAY_MS}ms:\n${detail}`,
+  };
+}
+
+/** Block the current thread for `ms` without spawning a child (Atomics-based). */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /** podman reports an existing network/container as "already exists" / "already in use". */
 function isAlreadyExists(r: PodmanResult): boolean {
   return /already exists|already in use/i.test(r.stderr);
 }
 
+/**
+ * Materialize the proxy's resolv.conf (external resolvers — see EGRESS_PROXY_DNS)
+ * under the dustcastle home and return its path to bind-mount. Idempotent. Called
+ * on the allowlist path before `ensureEgress`, the way `ensureProxyImage` is — both
+ * are proxy prerequisites the run prepares, then `ensureEgress` runs the container.
+ */
+export function provisionProxyResolvConf(home: string = DUSTCASTLE_HOME): string {
+  mkdirSync(home, { recursive: true });
+  const path = join(home, "egress-resolv.conf");
+  writeFileSync(path, proxyResolvConf());
+  return path;
+}
+
 function defaultPodman(args: readonly string[]): PodmanResult {
   const r = spawnSync("podman", [...args], { encoding: "utf8" });
   const stderr = r.stderr ?? (r.error instanceof Error ? r.error.message : "");
-  return { status: r.status, stderr };
+  return { status: r.status, stderr, stdout: r.stdout ?? "" };
 }

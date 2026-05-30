@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ai-hero/sandcastle": "0.6.6",
+    "@ai-hero/sandcastle": "0.7.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -1,7 +1,10 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { EGRESS_NETWORK, EGRESS_PROXY_CONTAINER, productionProxyUrl } from "./confine.js";
 import type { EgressDecision } from "./egress.js";
-import { ensureEgress, type PodmanResult } from "./egress-runtime.js";
+import { ensureEgress, provisionProxyResolvConf, type PodmanResult } from "./egress-runtime.js";
 
 /** A structured allowlist decision (ADR 0010): Build hosts + optional Agent hosts. */
 const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision => ({
@@ -19,7 +22,19 @@ const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision 
 
 const OK: PodmanResult = { status: 0, stderr: "" };
 
-function recorder(reply: (args: string[]) => PodmanResult = () => OK) {
+/** A proxy whose logs report it is serving — the liveness probe's success signal. */
+const LIVE_LOGS: PodmanResult = {
+  status: 0,
+  stderr: "dustcastle-egress: listening on http://0.0.0.0:8118; allowlist=[x]\n",
+};
+
+/** Default replies: ordinary commands succeed, and the liveness probe sees a live proxy. */
+function defaultReply(args: string[]): PodmanResult {
+  if (args[0] === "logs") return LIVE_LOGS;
+  return OK;
+}
+
+function recorder(reply: (args: string[]) => PodmanResult = defaultReply) {
   const calls: string[][] = [];
   const run = (args: readonly string[]): PodmanResult => {
     const a = [...args];
@@ -80,7 +95,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     const { run } = recorder((a) =>
       a[0] === "network" && a[1] === "create"
         ? { status: 125, stderr: "Error: network dustcastle-egress already exists" }
-        : OK,
+        : defaultReply(a),
     );
     const handle = ensureEgress({
       egress: allow(["registry.npmjs.org"]),
@@ -108,6 +123,59 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     ).toThrow(/proxy/i);
     // A failed setup leaves nothing behind: the network we created is removed.
     expect(calls.some((c) => c[0] === "network" && c[1] === "rm" && c.includes(EGRESS_NETWORK))).toBe(true);
+  });
+
+  it("throws (and rolls back) when the proxy is created but crashes — never a silent success", () => {
+    // `podman run -d` exits 0 (container CREATED) but the process dies a moment later
+    // because the image lacks the proxy code — the exact ADR-0005 "never silent" trap.
+    const { run, calls } = recorder((a) => {
+      if (a[0] === "logs")
+        return { status: 0, stderr: "Error: Cannot find module '/opt/dustcastle/proxy-main.js'\n" };
+      if (a[0] === "inspect") return { status: 0, stdout: "false\n", stderr: "" };
+      return OK; // network create + `run -d` both "succeed"
+    });
+    expect(() =>
+      ensureEgress({ egress: allow(["api.deepseek.com"]), proxyEntrypoint: "/opt/dustcastle/proxy-main.js", run }),
+    ).toThrow(/proxy container started but is not serving[\s\S]*Cannot find module/i);
+    // A dead proxy leaves nothing behind: container removed, our network rolled back.
+    expect(calls.some((c) => c[0] === "rm" && c.includes(EGRESS_PROXY_CONTAINER))).toBe(true);
+    expect(calls.some((c) => c[0] === "network" && c[1] === "rm" && c.includes(EGRESS_NETWORK))).toBe(true);
+  });
+
+  it("bind-mounts the resolv.conf path onto the proxy run when supplied", () => {
+    const { run, calls } = recorder();
+    ensureEgress({
+      egress: allow(["registry.npmjs.org"]),
+      proxyEntrypoint: "/p.js",
+      resolvConfPath: "/h/.dustcastle/egress-resolv.conf",
+      run,
+    });
+    const runCall = calls.find((c) => c[0] === "run")!;
+    expect(runCall.join(" ")).toContain("/h/.dustcastle/egress-resolv.conf:/etc/resolv.conf:ro");
+  });
+
+  it("accepts the proxy once its logs report it is listening (liveness confirmed)", () => {
+    const { run } = recorder(); // default reply: logs report the proxy is serving
+    const handle = ensureEgress({
+      egress: allow(["registry.npmjs.org"]),
+      proxyEntrypoint: "/p.js",
+      run,
+    });
+    expect(handle.proxyUrl).toBe(productionProxyUrl());
+  });
+
+  it("provisionProxyResolvConf writes external resolvers (not the --internal aardvark)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dc-resolv-"));
+    try {
+      const path = provisionProxyResolvConf(dir);
+      expect(path).toBe(join(dir, "egress-resolv.conf"));
+      const body = readFileSync(path, "utf8");
+      expect(body).toContain("nameserver 1.1.1.1");
+      // Idempotent: a second call rewrites the same file cleanly.
+      expect(provisionProxyResolvConf(dir)).toBe(path);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("teardown removes the proxy container and the network", () => {

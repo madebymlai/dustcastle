@@ -43,7 +43,7 @@ The Nix expression generator that builds one Package Manager's Project Deps into
 _Avoid_: builder, generator, lang2nix (reserve "Importer")
 
 **Ecosystem Registry**:
-The single, closed, internally-curated set of Ecosystem + Package Manager descriptors that the detect/store/impurity/pin/nix sites all *derive* from, so per-Ecosystem knowledge is owned in one place rather than smeared across dispatch sites. **Internal curation, not a user-facing plugin system** (ADR 0001): closed and vetted, so adding an Ecosystem is dustcastle's deep, local change — the user never configures one. A gated Package Manager (the bun gate) is a first-class, honest state in the Registry, not an ad-hoc throw.
+The single, closed, internally-curated set of Ecosystem + Package Manager descriptors that the detect/store/impurity/pin/nix/sandbox sites all *derive* from, so per-Ecosystem knowledge is owned in one place rather than smeared across dispatch sites. **Internal curation, not a user-facing plugin system** (ADR 0001): closed and vetted, so adding an Ecosystem is dustcastle's deep, local change — the user never configures one. A gated Package Manager (the bun gate) is a first-class, honest state in the Registry, not an ad-hoc throw.
 _Avoid_: catalog, plugin system, provider registry
 
 ### Network access (ADR 0005 / 0010)

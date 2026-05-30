@@ -129,10 +129,17 @@ build's only way out — with two backends, one proxy:
   podman network has no route off-host; a dual-homed proxy container sits on both
   it and an external net, so the sandbox reaches *only* the proxy. Expressed
   entirely in `podman` terms, so it runs the same on Linux/macOS/Windows podman.
-  **This host can't run it** (rootless, **no bridge kernel module, no root, no
-  nft/iptables**; custom podman networks fail at bridge creation), so the
-  production backend's spec generators are **unit-tested** and its live run is for
-  a capable host.
+  **Now proven live** (see [ADR 0011](adr/0011-production-egress-proxy-container.md)):
+  once rootless bridging was restored (a kernel reboot), the first live run of this
+  backend exposed three gaps — the proxy image never carried the proxy code, the
+  container bound loopback (unreachable cross-container) and resolved through the
+  internal net's aardvark (NXDOMAIN-poisoned under musl), and `ensureEgress` logged
+  success over a *crashed* proxy. With those fixed (`ensureProxyImage` ships the
+  code, `DUSTCASTLE_EGRESS_HOST=0.0.0.0`, an external-resolver resolv.conf bind-mount,
+  and a liveness check), the podman-native backend enforces the allowlist live:
+  allowlisted hosts `CONNECT 200`, off-allowlist `403`, and an internal-net client
+  has no route off-host. (On hosts where rootless bridging is unavailable, the
+  fallback below remains the path.)
 - **The live proof uses the privilege-stripped fallback.** Where a bridge can't be
   made, the sandbox is confined by `confineRouteScript`: `--cap-add NET_ADMIN` +
   pasta `--map-host-loopback` + add a single host route to the proxy, then **drop

@@ -1,6 +1,7 @@
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { AGENT_IMAGE } from "./agent-image.js";
 import type { Detection } from "../detect/index.js";
+import { ecosystemFor, packageManagerDescriptor, type SandboxStaging } from "../ecosystems/index.js";
 import type { Provisioned } from "../store/index.js";
 import { EGRESS_NETWORK, productionProxyUrl, proxyEnv } from "./confine.js";
 import { deriveEgress, type EgressDecision } from "./egress.js";
@@ -100,80 +101,69 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   return { podmanOptions, setupCommands: setupFor(detection, provisioned, impure), egress };
 }
 
-/** The run environment per ecosystem: Toolchain on PATH + writable caches off the RO Store. */
-function envFor(ecosystem: Detection["ecosystem"], toolchainStorePath: string): Record<string, string> {
-  const bin = `${toolchainStorePath}/bin`;
-  if (ecosystem === "node") {
-    return {
-      // Nix Toolchain first (the PROJECT's node/go/python wins), then /usr/local/bin
-      // where the image's agent harness lives (bd/pi — the implement phase shells `bd`).
-      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
-      // The Store is read-only; npm's cache + home must point somewhere writable.
-      NPM_CONFIG_CACHE: "/tmp/npm-cache",
-      XDG_CACHE_HOME: "/tmp/.cache",
-      npm_config_update_notifier: "false",
-    };
-  }
-  if (ecosystem === "python") {
-    // Python (pip-FOD): the python Toolchain (with pip) on PATH; the offline-
-    // assembled site-packages are staged into ./site (see setupFor) and reached
-    // via PYTHONPATH. The Store is read-only, so pip's cache points to /tmp.
-    return {
-      // Nix Toolchain first (the PROJECT's node/go/python wins), then /usr/local/bin
-      // where the image's agent harness lives (bd/pi — the implement phase shells `bd`).
-      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
-      PYTHONPATH: "site",
-      PIP_CACHE_DIR: "/tmp/pip-cache",
-      XDG_CACHE_HOME: "/tmp/.cache",
-    };
-  }
-  // Go (spike-proven): vendored deps, proxy off, writable build cache.
-  return {
-    PATH: `${bin}:/usr/bin:/bin`,
-    GOFLAGS: "-mod=vendor",
-    GOPROXY: "off",
-    GOTOOLCHAIN: "local",
-    CGO_ENABLED: "0",
-    GOCACHE: "/tmp/gocache",
-    GOENV: "off",
-  };
-}
-
 /**
- * The container-side install for an impure `allow` JS build, per package manager
- * (ADR 0004/0005). The deps weren't pre-built in the Store, so the real install —
- * lifecycle scripts included — runs in the container under scoped egress. Each
- * manager installs strictly from its committed lockfile (frozen/immutable) so the
- * impure build still can't silently drift from the pinned deps.
+ * The run environment for a provisioned project (ADR 0002): the Toolchain on PATH
+ * plus the writable cache vars that must point off the read-only Store. Driven by
+ * the Ecosystem's `sandbox` facet — the per-Ecosystem knowledge of WHICH env to
+ * run under lives on the descriptor, not in a per-Ecosystem `if` ladder here.
  */
-const IMPURE_INSTALL: Readonly<Record<string, string>> = {
-  npm: "npm ci",
-  pnpm: "pnpm install --frozen-lockfile",
-  yarn: "yarn install --frozen-lockfile",
-  bun: "bun install --frozen-lockfile",
-};
+function envFor(ecosystem: Detection["ecosystem"], toolchainStorePath: string): Record<string, string> {
+  return ecosystemFor(ecosystem).sandbox.env(`${toolchainStorePath}/bin`);
+}
 
 /** The per-project sandbox-ready setup: stage deps from the Store, or install impurely. */
 function setupFor(detection: Detection, provisioned: Provisioned, impure: boolean): string[] {
-  if (detection.ecosystem === "node") {
-    if (impure) {
-      // Impure `allow`: install in the container (lifecycle scripts included)
-      // under the scoped egress network, with the manager that signalled. This is
-      // where untrusted postinstall actually runs. Keyed on impurity, NOT on the
-      // egress shape (ADR 0010) — a pure build may also carry an allowlist for the
-      // agent's model host, but still stages its deps from the Store.
-      return [IMPURE_INSTALL[detection.packageManager] ?? "npm ci"];
+  if (impure) {
+    // Impure `allow`: install in the container (lifecycle scripts included) under
+    // the scoped egress network, with the manager that signalled — this is where
+    // untrusted postinstall actually runs. The frozen/immutable install command(s)
+    // live on the dispatch grain (PackageManagerDescriptor.impureInstall), so this
+    // is ecosystem-AGNOSTIC: node installs node_modules, python installs into ./site
+    // (the same dir the pure path stages into), no per-Ecosystem `if` here. Keyed on
+    // impurity, NOT the egress shape (ADR 0010) — a pure build may carry an allowlist
+    // for the agent's model host yet still stage its deps from the Store.
+    const { impureInstall } = packageManagerDescriptor(detection.packageManager);
+    if (impureInstall === undefined) {
+      // Unreachable given the descriptor invariant (impureInstall iff impuritySignal,
+      // and only a manager with an impuritySignal can be decided impure). Throw
+      // rather than mis-stage — never silently cp from an empty deps Store path.
+      throw new Error(
+        `sandbox: ${detection.packageManager} reached the impure path with no impureInstall ` +
+          `command (it has no impuritySignal and can never go impure) — refusing to mis-stage.`,
+      );
     }
-    // Pure: copy the offline-assembled node_modules out of the read-only Store.
-    // Manager-agnostic — every JS importer publishes the same node_modules layout.
-    return [`cp -RL ${provisioned.depsStorePath}/node_modules node_modules`, "chmod -R u+w node_modules"];
+    return [...impureInstall];
   }
-  if (detection.ecosystem === "python") {
-    // Python (pip-FOD): copy the offline-assembled site-packages out of the
-    // read-only Store into ./site (PYTHONPATH points there). The pip-FOD's deps
-    // derivation publishes them under `$out/site`.
-    return [`cp -RL ${provisioned.depsStorePath}/site site`, "chmod -R u+w site"];
-  }
-  // Go: stage the vendored modules from the Store into the worktree as vendor/.
-  return [`cp -rL ${provisioned.depsStorePath} vendor`, "chmod -R u+w vendor"];
+  // Pure: stage the offline-assembled deps out of the read-only Store, driven by
+  // the Ecosystem's `sandbox` facet (ADR 0002) — node_modules for node, site for
+  // python (PYTHONPATH points there), vendor for go. The knowledge of WHAT to copy
+  // lives on the descriptor, not in a per-Ecosystem `if` ladder here.
+  return stageCommands(ecosystemFor(detection.ecosystem).sandbox, provisioned.depsStorePath);
+}
+
+/**
+ * Emit the self-healing PURE staging command list for one Ecosystem (ADR 0002):
+ * clear the target, `cp -RL` the deps out of the read-only Store, then chmod the
+ * copy writable.
+ *
+ * The clear chmods the target writable BEFORE the `rm`: a `cp -RL` from the
+ * read-only Store reproduces the Store's 555 dir mode, so a staging interrupted
+ * before the trailing chmod leaves a read-only target — which `rm -rf` then CANNOT
+ * remove (no write bit ⇒ can't unlink its contents), poisoning every later run.
+ * The leading chmod makes the staging self-healing; `2>/dev/null` + `;` keep it a
+ * no-op when nothing is there.
+ *
+ * The source is `depsStorePath/storeSubpath` (node→/node_modules, python→/site),
+ * or `depsStorePath` itself when there is no subpath (go's deps Store path IS the
+ * vendor dir). `cp -RL` is uniform across all three — in coreutils `-r` and `-R`
+ * are identical, so go's historical `-rL` is normalized to `-RL` (a no-op).
+ */
+export function stageCommands(facet: SandboxStaging, depsStorePath: string): string[] {
+  const { stageDir, storeSubpath } = facet;
+  const source = storeSubpath === "" ? depsStorePath : `${depsStorePath}/${storeSubpath}`;
+  return [
+    `chmod -R u+w ${stageDir} 2>/dev/null; rm -rf ${stageDir}`,
+    `cp -RL ${source} ${stageDir}`,
+    `chmod -R u+w ${stageDir}`,
+  ];
 }

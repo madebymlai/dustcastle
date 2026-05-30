@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { orchestrationPromptPath, type PromptPhase } from "../agent/prompts.js";
 import { buildPiAgent, loadModelSelection } from "../config/global.js";
@@ -36,6 +38,22 @@ export function phaseConfig(phase: PromptPhase): PhaseConfig {
 // yields the same branch, so accumulated progress on it is preserved.
 export function branchForIssue(id: string): string {
   return `sandcastle/issue-${id}`;
+}
+
+// Agent-context docs the implement/review WORKTREE needs even when a project
+// gitignores them. The worktree is a clean checkout (tracked files only), so
+// gitignored/uncommitted context never lands there — `copyToWorktree` is
+// sandcastle's seam to opt those in, the same one that already carries `.beads`.
+const WORKTREE_CONTEXT_DOCS: readonly string[] = ["CONTEXT.md", "AGENTS.md", "CODING_STANDARDS.md"];
+
+/**
+ * What the per-issue worktree must carry beyond the git checkout: the host's live
+ * `.beads` (its Dolt DB is git-excluded) plus whichever agent-context docs exist at
+ * the project root (gitignored or not). Only existing paths are listed, so a project
+ * without them is unaffected — we never ask sandcastle to copy a missing path.
+ */
+export function worktreeCopies(cwd: string): string[] {
+  return [".beads", ...WORKTREE_CONTEXT_DOCS.filter((doc) => existsSync(join(cwd, doc)))];
 }
 
 // {{...}} substitutions for the implement prompt.
@@ -118,7 +136,9 @@ export interface OrchestrateOptions extends ProvisionOptions {
  *
  * Plan and merge run on the host checkout (`sandcastle.run`) so `bd close`
  * persists to the real `.beads`; execute runs in isolated worktrees that carry a
- * copy of `.beads` via `copyToWorktree` (the Dolt DB is git-excluded).
+ * copy of `.beads` and the agent-context docs (CONTEXT.md/AGENTS.md/…) via
+ * `copyToWorktree` — sandcastle's seam for files a clean git checkout omits
+ * (the Dolt DB is git-excluded; context docs may be gitignored).
  */
 export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   ensureBeads(opts.beads ?? realBeadsPreflightDeps(opts.cwd));
@@ -131,6 +151,10 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   const targetBranch = opts.targetBranch ?? currentGitBranch(opts.cwd);
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
   const log = opts.onLine ?? (() => {});
+
+  // `.beads` + any agent-context docs the isolated worktrees must carry past the
+  // git checkout (computed once from the host project root).
+  const copyToWorktree = worktreeCopies(opts.cwd);
 
   await withProvisionedSandbox(opts, async ({ provider, withSetupHooks }) => {
     const hooks = withSetupHooks();
@@ -158,7 +182,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
       log(`orchestrate: ${issues.length} unblocked issue(s) → implement + review`);
       const outcomes = await Promise.allSettled(
         issues.map((issue) =>
-          executeIssue({ issue, provider, agent, hooks, targetBranch }),
+          executeIssue({ issue, provider, agent, hooks, targetBranch, copyToWorktree }),
         ),
       );
 
@@ -187,6 +211,8 @@ interface ExecuteIssueArgs {
   readonly agent: sandcastle.AgentProvider;
   readonly hooks: NonNullable<SandcastleHandoff["hooks"]>;
   readonly targetBranch: string;
+  /** `.beads` + existing agent-context docs to copy into the per-issue worktree. */
+  readonly copyToWorktree: string[];
 }
 
 /**
@@ -195,12 +221,12 @@ interface ExecuteIssueArgs {
  * if the implementer committed; both share the one sandbox/branch.
  */
 async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
-  const { issue, provider, agent, hooks, targetBranch } = args;
+  const { issue, provider, agent, hooks, targetBranch, copyToWorktree } = args;
   const sandbox = await sandcastle.createSandbox({
     sandbox: provider,
     branch: issue.branch,
     baseBranch: targetBranch,
-    copyToWorktree: [".beads"],
+    copyToWorktree,
     hooks,
   });
   try {

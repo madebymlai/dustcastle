@@ -8,6 +8,7 @@ import {
   productionProxyUrl,
   proxyContainerRunArgs,
   proxyEnv,
+  proxyResolvConf,
 } from "./confine.js";
 
 // Egress confinement (ADR 0005) — the layer that makes the filtering proxy the
@@ -57,6 +58,47 @@ describe("proxyContainerRunArgs (dual-homed proxy: internal + external)", () => 
     expect(args.join(" ")).toContain("registry.npmjs.org,github.com");
     expect(args.join(" ")).toContain(String(EGRESS_PROXY_PORT));
     expect(args).toContain("/opt/dustcastle/proxy-main.js");
+  });
+
+  it("binds the proxy to 0.0.0.0 so the sandbox can reach it across the internal net", () => {
+    // Its own container, reached by name from a SEPARATE sandbox container — a
+    // loopback-only bind (proxy-main's default) would refuse those connections.
+    const args = proxyContainerRunArgs({
+      image: "img",
+      externalNetwork: "podman",
+      allowlist: ["registry.npmjs.org"],
+      proxyEntrypoint: "/opt/dustcastle/proxy-main.js",
+    });
+    expect(args.join(" ")).toContain("DUSTCASTLE_EGRESS_HOST=0.0.0.0");
+  });
+
+  it("bind-mounts the external-resolver resolv.conf when given a path (no aardvark DNS)", () => {
+    const args = proxyContainerRunArgs({
+      image: "img",
+      externalNetwork: "podman",
+      allowlist: ["registry.npmjs.org"],
+      proxyEntrypoint: "/opt/dustcastle/proxy-main.js",
+      resolvConfPath: "/home/u/.dustcastle/egress-resolv.conf",
+    });
+    expect(args).toContain("-v");
+    expect(args.join(" ")).toContain("/home/u/.dustcastle/egress-resolv.conf:/etc/resolv.conf:ro");
+  });
+
+  it("omits the resolv.conf mount when no path is given (the unit spec shape)", () => {
+    const args = proxyContainerRunArgs({
+      image: "img",
+      externalNetwork: "podman",
+      allowlist: ["x"],
+      proxyEntrypoint: "/p.js",
+    });
+    expect(args).not.toContain("-v");
+  });
+});
+
+describe("proxyResolvConf (external resolvers the proxy resolves allowlisted hosts through)", () => {
+  it("renders one nameserver line per server (defaulting to public resolvers)", () => {
+    expect(proxyResolvConf()).toBe("nameserver 1.1.1.1\nnameserver 8.8.8.8\n");
+    expect(proxyResolvConf(["9.9.9.9"])).toBe("nameserver 9.9.9.9\n");
   });
 });
 

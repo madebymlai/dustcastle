@@ -173,8 +173,56 @@ export interface PackageManagerDescriptor {
    * absent for pip, which consumes `requirements.txt` directly.
    */
   readonly exportFrontEnd?: ExportFrontEnd;
+  /**
+   * The frozen/immutable in-container install command(s) for the impure path
+   * (ADR 0004/0005). When deps were NOT pre-assembled in the Store, the real
+   * install — lifecycle/postinstall scripts included — runs in the container under
+   * scoped egress, with the manager that signalled. Each command installs strictly
+   * from the committed/exported requirements (frozen lockfile, `--require-hashes`),
+   * so an impure build still can't silently drift from the pinned deps.
+   *
+   * PRESENT for every manager that can reach the impure path — i.e. exactly those
+   * with an {@link impuritySignal} (npm/pnpm/yarn/bun + pip/uv/poetry). ABSENT for
+   * go, which has no `impuritySignal` and builds pure unconditionally. That biconditional
+   * (`impureInstall` iff `impuritySignal`) is the invariant `ecosystems.test.ts` pins —
+   * the field is legitimately optional, so the guarantee is a test, not the type system.
+   */
+  readonly impureInstall?: readonly string[];
   /** The honest provision gate (ADR 0001). Present only for bun in v1. */
   readonly provisionGate?: ProvisionGate;
+}
+
+/**
+ * The PURE-path sandbox staging facet (ADR 0002): the things that vary per
+ * Ecosystem when running a provisioned project in the Sandbox — copying Project
+ * Deps out of the read-only Store into the writable worktree, AND the run
+ * environment the container runs under. `stageCommands` and `envFor`
+ * (src/sandbox/plan.ts) consume these — the knowledge of WHAT to stage and WHICH
+ * env to run under lives here on the descriptor, not in per-Ecosystem `if` ladders.
+ */
+export interface SandboxStaging {
+  /**
+   * The worktree directory deps are staged into (`node_modules` for node, `site`
+   * for python, `vendor` for go). The run env points the toolchain here
+   * (PYTHONPATH=site, GOFLAGS=-mod=vendor, node_modules by convention).
+   */
+  readonly stageDir: string;
+  /**
+   * The path WITHIN `depsStorePath` to copy from. node's deps FOD publishes
+   * `node_modules`, python's pip-FOD publishes `site`; go's deps store path IS
+   * the vendor dir, so it has no subpath — `stageCommands` copies the whole
+   * `depsStorePath`. Empty string means "copy the store path itself".
+   */
+  readonly storeSubpath: string;
+  /**
+   * The run environment for this Ecosystem given the Toolchain `bin` directory:
+   * the Toolchain on PATH (the project's node/go/python wins, ahead of the
+   * agent harness in /usr/local/bin) plus the writable cache vars that must point
+   * off the read-only Store (node's NPM_CONFIG_CACHE/XDG_CACHE_HOME, python's
+   * PYTHONPATH/PIP_CACHE_DIR, go's GOFLAGS/GOPROXY/GOCACHE/etc.). `envFor`
+   * (src/sandbox/plan.ts) resolves this per Ecosystem.
+   */
+  readonly env: (bin: string) => Record<string, string>;
 }
 
 /** The inputs an Ecosystem's toolchain-version reader threads (ADR 0006b). */
@@ -227,4 +275,10 @@ export interface EcosystemDescriptor {
    * abstract pyproject with no lock), not a file-presence one.
    */
   readonly isLooseManifest?: (input: LooseManifestInput) => boolean;
+  /**
+   * The PURE-path Project-Deps staging (ADR 0002): which worktree dir deps are
+   * staged into and which subpath of the deps Store to copy from. Consumed by
+   * `stageCommands` (src/sandbox/plan.ts) to emit the self-healing copy.
+   */
+  readonly sandbox: SandboxStaging;
 }

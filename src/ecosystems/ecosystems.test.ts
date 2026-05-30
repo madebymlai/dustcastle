@@ -119,6 +119,66 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
   });
 
+  describe("the frozen impureInstall is present iff impurity is reachable (dustcastle-bbg.3)", () => {
+    // Impurity is reachable for any manager whose descriptor carries an
+    // `impuritySignal` (decideImpurity is ecosystem-agnostic), so the guarantee
+    // that every such manager has an in-container install command is the invariant:
+    // a manager carries `impureInstall` IFF it carries `impuritySignal`. go has
+    // neither (it never goes impure); the other seven have both. This keeps a
+    // half-added manager honest — anything that can reach the impure path is proven
+    // to have an install command, without leaning on the type system (the field is
+    // legitimately optional, since go has none).
+    it.each([...PACKAGE_MANAGERS])("%s has impureInstall iff it has impuritySignal", (pm) => {
+      const d = packageManagerDescriptor(pm);
+      expect(d.impureInstall !== undefined).toBe(d.impuritySignal !== undefined);
+    });
+
+    it("go alone has neither (it builds pure unconditionally)", () => {
+      expect(packageManagerDescriptor("go").impureInstall).toBeUndefined();
+    });
+
+    describe("node managers install strictly from the committed lockfile (frozen/immutable)", () => {
+      it("npm runs npm ci", () => {
+        expect(packageManagerDescriptor("npm").impureInstall).toEqual(["npm ci"]);
+      });
+      it("pnpm runs a frozen-lockfile install", () => {
+        expect(packageManagerDescriptor("pnpm").impureInstall).toEqual(["pnpm install --frozen-lockfile"]);
+      });
+      it("yarn runs a frozen-lockfile install", () => {
+        expect(packageManagerDescriptor("yarn").impureInstall).toEqual(["yarn install --frozen-lockfile"]);
+      });
+      it("bun runs a frozen-lockfile install (uniform, though its provisionGate fires first)", () => {
+        expect(packageManagerDescriptor("bun").impureInstall).toEqual(["bun install --frozen-lockfile"]);
+      });
+    });
+
+    describe("python managers install into ./site (where the pure path stages and PYTHONPATH points)", () => {
+      // The lists are CONSTRUCTED from each manager's existing `exportFrontEnd` plus
+      // one shared pip-into-site command, so the export string is single-sourced
+      // (not duplicated as a literal). pip consumes requirements.txt directly, so it
+      // has no export step — just the shared install.
+      const sharedPipInstall = "pip install --require-hashes -r requirements.txt --target site";
+
+      it("pip is just the shared pip-into-site install (no export front-end)", () => {
+        expect(packageManagerDescriptor("pip").impureInstall).toEqual([sharedPipInstall]);
+      });
+
+      it("uv exports its hash-pinned requirements, then installs them into site", () => {
+        expect(packageManagerDescriptor("uv").impureInstall).toEqual([
+          "uv export --format requirements-txt -o requirements.txt",
+          sharedPipInstall,
+        ]);
+      });
+
+      it("poetry exports its hash-pinned requirements, then installs them into site", () => {
+        expect(packageManagerDescriptor("poetry").impureInstall).toEqual([
+          "poetry export --format requirements.txt -o requirements.txt",
+          sharedPipInstall,
+        ]);
+      });
+    });
+  });
+
   describe("pin-then-pure lockOnlyResolve state (ADR 0006c)", () => {
     it("npm resolves to a package-lock-only command", () => {
       const r = packageManagerDescriptor("npm").lockOnlyResolve;
@@ -362,6 +422,65 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(go.managers).toEqual(["go"]);
       expect(go.defaultManager).toBe("go");
       expect(go.manifests).toEqual(["go.mod", "go.sum"]);
+    });
+
+    describe("each Ecosystem carries its pure-staging sandbox facet (ADR 0002)", () => {
+      // The PURE-path staging knowledge — which worktree dir deps land in and which
+      // subpath of the deps Store to copy from — lives on the descriptor, not in a
+      // per-Ecosystem `if` ladder in setupFor. `stageCommands` consumes these.
+      it("node stages node_modules from the deps Store's node_modules subpath", () => {
+        const { stageDir, storeSubpath } = ecosystemFor("node").sandbox;
+        expect({ stageDir, storeSubpath }).toEqual({ stageDir: "node_modules", storeSubpath: "node_modules" });
+      });
+
+      it("python stages site from the pip-FOD's site subpath (PYTHONPATH points there)", () => {
+        const { stageDir, storeSubpath } = ecosystemFor("python").sandbox;
+        expect({ stageDir, storeSubpath }).toEqual({ stageDir: "site", storeSubpath: "site" });
+      });
+
+      it("go stages vendor from the WHOLE deps Store path (no subpath — the store path IS vendor)", () => {
+        const { stageDir, storeSubpath } = ecosystemFor("go").sandbox;
+        expect({ stageDir, storeSubpath }).toEqual({ stageDir: "vendor", storeSubpath: "" });
+      });
+    });
+
+    describe("each Ecosystem's sandbox facet builds its run environment (ADR 0002)", () => {
+      // The run env — the Toolchain on PATH plus the writable cache vars off the
+      // read-only Store — lives on the descriptor, not in a per-Ecosystem `if`
+      // ladder in envFor. `planSandbox` resolves these for the container.
+      const bin = "/nix/store/abc-toolchain/bin";
+
+      it("node puts the toolchain first, then the agent harness, with a writable npm cache", () => {
+        // Nix Toolchain first (the PROJECT's node wins), then /usr/local/bin (bd/pi);
+        // the Store is read-only, so npm's cache + home point to /tmp.
+        expect(ecosystemFor("node").sandbox.env(bin)).toEqual({
+          PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+          NPM_CONFIG_CACHE: "/tmp/npm-cache",
+          XDG_CACHE_HOME: "/tmp/.cache",
+          npm_config_update_notifier: "false",
+        });
+      });
+
+      it("python puts the toolchain first, points PYTHONPATH at the staged site, writable pip cache", () => {
+        expect(ecosystemFor("python").sandbox.env(bin)).toEqual({
+          PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+          PYTHONPATH: "site",
+          PIP_CACHE_DIR: "/tmp/pip-cache",
+          XDG_CACHE_HOME: "/tmp/.cache",
+        });
+      });
+
+      it("go vendors deps, turns the proxy off, points the build cache at /tmp", () => {
+        expect(ecosystemFor("go").sandbox.env(bin)).toEqual({
+          PATH: `${bin}:/usr/bin:/bin`,
+          GOFLAGS: "-mod=vendor",
+          GOPROXY: "off",
+          GOTOOLCHAIN: "local",
+          CGO_ENABLED: "0",
+          GOCACHE: "/tmp/gocache",
+          GOENV: "off",
+        });
+      });
     });
 
     it("node reads its declared manager from the packageManager field (ADR 0006d explicit > inferred)", () => {

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Detection } from "../detect/index.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
 import { parseStorePath, parseVendorHashMismatch } from "./parse.js";
@@ -192,10 +192,13 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
   };
 }
 
-// Names excluded from the staged build source: VCS metadata, nix build outputs,
-// and per-ecosystem dependency/cache dirs that are rebuilt purely from the lockfile
-// and never belong in the build (node's `node_modules`/Go's `vendor`, and Python's
-// `.venv` + dev caches — the Python analogues, often hundreds of MB).
+// Rebuild artifacts that never belong in the deps build even if a project tracks
+// them: VCS metadata, nix build outputs, and per-ecosystem dependency/cache dirs
+// rebuilt purely from the lockfile (node's `node_modules`/Go's `vendor`, Python's
+// `.venv` + dev caches — often hundreds of MB). Distinct from .gitignore: this is
+// the "rebuilt, so excluded from the hermetic build" set, applied on TOP of git's
+// ignore rules so a project that mistakenly tracks node_modules can't bloat / churn
+// the deps hash.
 const STAGE_SKIP: ReadonlySet<string> = new Set([
   ".git",
   "vendor",
@@ -208,16 +211,53 @@ const STAGE_SKIP: ReadonlySet<string> = new Set([
   ".pytest_cache",
 ]);
 
-/** Whether a source entry is staged into the build (false ⇒ excluded). */
+/** Whether a single path segment is a rebuild artifact (false ⇒ excluded). */
 export function isStageableSource(path: string): boolean {
   const name = basename(path);
   return !STAGE_SKIP.has(name) && !name.startsWith("result-");
 }
 
-function stageSource(projectDir: string, dest: string): void {
+/**
+ * Stage the project source into the build dir. Honors git's ignore rules so the
+ * deps derivation's `src` is exactly the project's source — never the gitignored
+ * junk (.beads DBs, `*.db`, build logs, scratch files) that would otherwise churn
+ * the FOD hash and rebuild deps on every change. `git ls-files --cached --others
+ * --exclude-standard` lists tracked + untracked files minus everything .gitignore
+ * (at every level), `.git/info/exclude`, and the global excludes file mark ignored
+ * — the same view a `git worktree` checkout gives. Falls back to a static skip-set
+ * copy when the project is not a git work tree.
+ */
+export function stageSource(projectDir: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
-  // Stage the project source, excluding build artifacts and VCS metadata.
-  cpSync(projectDir, dest, { recursive: true, filter: isStageableSource });
+  const files = gitWorkTreeFiles(projectDir);
+  if (files === undefined) {
+    cpSync(projectDir, dest, { recursive: true, filter: isStageableSource });
+    return;
+  }
+  for (const rel of files) {
+    // git already dropped ignored paths; additionally drop tracked rebuild artifacts.
+    if (rel.split("/").some((seg) => !isStageableSource(seg))) continue;
+    const to = join(dest, rel);
+    mkdirSync(dirname(to), { recursive: true });
+    cpSync(join(projectDir, rel), to);
+  }
+}
+
+/**
+ * The project's work-tree files honoring ALL standard git ignore sources
+ * (`--exclude-standard`: every `.gitignore`, `$GIT_DIR/info/exclude`, and the
+ * user's global excludes file). Tracked + untracked, minus ignored. `undefined`
+ * when `projectDir` is not a git work tree (or git is unavailable) so the caller
+ * falls back to the static skip-set copy.
+ */
+function gitWorkTreeFiles(projectDir: string): string[] | undefined {
+  const r = spawnSync(
+    "git",
+    ["-C", projectDir, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
+  );
+  if (r.status !== 0) return undefined;
+  return r.stdout.split("\0").filter((p) => p.length > 0);
 }
 
 function runNixBuild(

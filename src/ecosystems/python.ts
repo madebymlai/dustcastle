@@ -7,7 +7,26 @@ import {
   readRequiresPython,
   resolvePythonInterpreter,
 } from "./python-version.js";
-import type { EcosystemDescriptor, LooseManifestInput, PackageManager, PackageManagerDescriptor } from "./types.js";
+import type {
+  EcosystemDescriptor,
+  ExportFrontEnd,
+  LooseManifestInput,
+  PackageManager,
+  PackageManagerDescriptor,
+} from "./types.js";
+
+/**
+ * The shared impure in-container install for Python (ADR 0004/0005): install the
+ * committed/exported, hash-pinned requirements into `./site` — the SAME dir the
+ * pure path stages into and `PYTHONPATH` points at, so the run env is identical
+ * pure or impure. `--require-hashes` enforces the no-drift invariant (the install
+ * can't resolve versions beyond the hash-pinned export). Every python manager's
+ * `impureInstall` ends with this; uv/poetry prepend their export step.
+ */
+const PIP_INSTALL_INTO_SITE = "pip install --require-hashes -r requirements.txt --target site";
+
+/** Render an {@link ExportFrontEnd} as the single shell command string the impure path runs. */
+const exportCommand = (front: ExportFrontEnd): string => [front.command, ...front.args].join(" ");
 
 /**
  * The Python Ecosystem descriptors (ADR 0006 + its 2026-05-30 amendment). The
@@ -69,6 +88,9 @@ const pip: PackageManagerDescriptor = {
     args: ["pip", "compile", "--generate-hashes", "requirements.in", "-o", "requirements.txt"],
     lockfile: "requirements.txt",
   },
+  // The impure in-container install (ADR 0004/0005). pip consumes requirements.txt
+  // directly (no export front-end), so it is JUST the shared pip-into-site install.
+  impureInstall: [PIP_INSTALL_INTO_SITE],
 };
 
 /**
@@ -80,6 +102,14 @@ const pip: PackageManagerDescriptor = {
  * no external flake input. `uv.lock` is a real, richer lockfile that beats a
  * co-present `requirements.txt` in detection precedence (ADR 0006d).
  */
+// uv's export front-end, named so both `exportFrontEnd` and the impure
+// `impureInstall` derive from ONE source (no duplicated export string).
+const uvExport: ExportFrontEnd = {
+  command: "uv",
+  args: ["export", "--format", "requirements-txt", "-o", "requirements.txt"],
+  requirementsFile: "requirements.txt",
+};
+
 const uv: PackageManagerDescriptor = {
   packageManager: "uv",
   ecosystem: "python",
@@ -102,11 +132,7 @@ const uv: PackageManagerDescriptor = {
   // emits the Importer's hash-pinned requirements.txt from uv.lock, after which the
   // build is the identical pip-FOD pure/offline path. Carried as descriptor data so
   // dustcastle never reaches for uv2nix — uv is a front-end to one Importer.
-  exportFrontEnd: {
-    command: "uv",
-    args: ["export", "--format", "requirements-txt", "-o", "requirements.txt"],
-    requirementsFile: "requirements.txt",
-  },
+  exportFrontEnd: uvExport,
   // The impurity signal reuses the slice-4 uv.lock reader (ADR 0004): a package
   // that ships an sdist but no wheels is sdist-only — impure — and routes to the
   // container path; wheel-bearing packages stay pure. uv.lock carries this
@@ -116,6 +142,10 @@ const uv: PackageManagerDescriptor = {
     lockfile: "uv.lock",
     needsImpurity: (lockText) => uvLockNeedsImpurity(lockText),
   },
+  // The impure in-container install (ADR 0004/0005): run uv's OWN export to produce
+  // the hash-pinned requirements (derived from `uvExport`, so the command is
+  // single-sourced — never a duplicated literal), then install them into ./site.
+  impureInstall: [exportCommand(uvExport), PIP_INSTALL_INTO_SITE],
 };
 
 /**
@@ -135,6 +165,17 @@ const uv: PackageManagerDescriptor = {
  * it provisions through the pure path. (The spike also corrected the export command
  * and the poetry.lock impurity reader for real poetry's 2.1 lock format.)
  */
+// poetry's export front-end, named so both `exportFrontEnd` and `impureInstall`
+// derive from ONE source (no duplicated export string).
+const poetryExport: ExportFrontEnd = {
+  command: "poetry",
+  // Hashes are ON by default; no `--without-hashes` flag (it is a boolean opt-out,
+  // and poetry-plugin-export 1.10 rejects the `=false` value form the laimk-hse.7
+  // spike caught).
+  args: ["export", "--format", "requirements.txt", "-o", "requirements.txt"],
+  requirementsFile: "requirements.txt",
+};
+
 const poetry: PackageManagerDescriptor = {
   packageManager: "poetry",
   ecosystem: "python",
@@ -161,11 +202,7 @@ const poetry: PackageManagerDescriptor = {
   // rejects the `--without-hashes=false` value form the laimk-hse.7 spike caught).
   // Carried as descriptor data so dustcastle never reaches for poetry2nix — poetry
   // is a front-end to the one pip-FOD Importer.
-  exportFrontEnd: {
-    command: "poetry",
-    args: ["export", "--format", "requirements.txt", "-o", "requirements.txt"],
-    requirementsFile: "requirements.txt",
-  },
+  exportFrontEnd: poetryExport,
   // The impurity signal reuses the slice-4 poetry.lock reader (ADR 0004): a package
   // whose `[package.files]` lists only an sdist (no `.whl`) is sdist-only — impure —
   // and routes to the container path; wheel-bearing packages stay pure. poetry.lock
@@ -174,6 +211,10 @@ const poetry: PackageManagerDescriptor = {
     lockfile: "poetry.lock",
     needsImpurity: (lockText) => poetryLockNeedsImpurity(lockText),
   },
+  // The impure in-container install (ADR 0004/0005): run poetry's OWN export
+  // (derived from `poetryExport`, single-sourced) to produce the hash-pinned
+  // requirements, then install them into ./site.
+  impureInstall: [exportCommand(poetryExport), PIP_INSTALL_INTO_SITE],
   // No provisionGate: the laimk-hse.7 spike proved `poetry export` hermetic, so
   // poetry provisions through the same pure pip-FOD path as uv (the gate the
   // bun-gate honesty pattern reserved for an unproven front-end is no longer
@@ -212,6 +253,23 @@ export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
   // reader (not the generic manifest-without-lockfile test) because requirements.txt
   // is BOTH the manifest marker AND pip's lockfile.
   isLooseManifest: detectPythonLoose,
+  // Pure staging (ADR 0002): the pip-FOD publishes its offline-assembled
+  // site-packages under `$out/site`, copied into the worktree's `site` (PYTHONPATH
+  // points there). The run env puts the python Toolchain (with pip) on PATH ahead
+  // of the agent harness, reaches the staged site via PYTHONPATH, and points pip's
+  // cache + home at /tmp since the Store is read-only.
+  sandbox: {
+    stageDir: "site",
+    storeSubpath: "site",
+    env: (bin) => ({
+      // Nix Toolchain first (the PROJECT's python wins), then /usr/local/bin where
+      // the image's agent harness lives (bd/pi — the implement phase shells `bd`).
+      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+      PYTHONPATH: "site",
+      PIP_CACHE_DIR: "/tmp/pip-cache",
+      XDG_CACHE_HOME: "/tmp/.cache",
+    }),
+  },
 };
 
 /**
