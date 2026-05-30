@@ -24,7 +24,7 @@ describe("provisionStore (rootless Store, ADR 0004/0008)", () => {
     const projectDir = stageSampleProject(root);
 
     const detection = detect(projectDir)[0];
-    expect(detection?.importer).toBe("buildGoModule");
+    expect(detection?.packageManager).toBe("go");
 
     const provisioned = provisionStore({
       projectDir,

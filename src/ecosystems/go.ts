@@ -1,5 +1,5 @@
 import { generateGoBuild } from "../nix/go.js";
-import type { EcosystemDescriptor, PackageManagerDescriptor } from "./types.js";
+import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
  * The Go Ecosystem descriptors (ADR 0006). A single Package Manager (`go`) — still
@@ -13,7 +13,6 @@ import type { EcosystemDescriptor, PackageManagerDescriptor } from "./types.js";
 const go: PackageManagerDescriptor = {
   packageManager: "go",
   ecosystem: "go",
-  importer: "buildGoModule",
   lockfiles: ["go.sum", "go.mod"],
   generateBuild: (ctx) =>
     generateGoBuild({
@@ -25,7 +24,10 @@ const go: PackageManagerDescriptor = {
   // No impuritySignal, no lockOnlyResolve, no provisionGate — Go builds pure.
 };
 
-export const GO_MANAGERS: readonly PackageManagerDescriptor[] = [go];
+// Keyed by Package Manager name so the Registry can prove — at tsc — that every
+// PackageManager has a descriptor (architecture review candidate 2). `satisfies`
+// keeps the precise key literals while constraining them to the closed union.
+export const GO_MANAGERS = { go } satisfies Partial<Record<PackageManager, PackageManagerDescriptor>>;
 
 export const GO_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "go",

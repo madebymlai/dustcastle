@@ -57,7 +57,6 @@ function detectEcosystem(
   // else the descriptor's default manager (ADR 0006d explicit > inferred).
   const declared = ecosystem.readDeclaredManager?.(manifest);
   const packageManager = declared ?? lockfileManager ?? ecosystem.defaultManager;
-  const importer = packageManagerDescriptor(packageManager).importer;
 
   // Toolchain-version precedence is owned by the descriptor's reader (ADR 0006b):
   // node's explicit `devEngines.runtime` beats version files; go reads go.mod's
@@ -85,7 +84,6 @@ function detectEcosystem(
   return {
     ecosystem: ecosystem.ecosystem,
     packageManager,
-    importer,
     ...(toolchainVersion !== undefined ? { toolchainVersion } : {}),
     ...(loose ? { loose: true } : {}),
   };

@@ -14,7 +14,6 @@ import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } fr
 const npm: PackageManagerDescriptor = {
   packageManager: "npm",
   ecosystem: "node",
-  importer: "fetchNpmDeps",
   lockfiles: ["package-lock.json"],
   generateBuild: (ctx) =>
     generateNodeBuild({
@@ -41,7 +40,6 @@ const npm: PackageManagerDescriptor = {
 const pnpm: PackageManagerDescriptor = {
   packageManager: "pnpm",
   ecosystem: "node",
-  importer: "fetchPnpmDeps",
   lockfiles: ["pnpm-lock.yaml"],
   generateBuild: (ctx) =>
     generatePnpmBuild({
@@ -67,7 +65,6 @@ const pnpm: PackageManagerDescriptor = {
 const yarn: PackageManagerDescriptor = {
   packageManager: "yarn",
   ecosystem: "node",
-  importer: "fetchYarnDeps",
   lockfiles: ["yarn.lock"],
   generateBuild: (ctx) =>
     generateYarnBuild({
@@ -97,7 +94,6 @@ const yarn: PackageManagerDescriptor = {
 const bun: PackageManagerDescriptor = {
   packageManager: "bun",
   ecosystem: "node",
-  importer: "fetchBunDeps",
   lockfiles: ["bun.lockb", "bun.lock"],
   // bun has no canonical nixpkgs importer (provisionGate fires before this runs);
   // we still wire a generator so the dispatch surface stays uniform. It reuses the
@@ -126,7 +122,11 @@ const bun: PackageManagerDescriptor = {
   },
 };
 
-export const NODE_MANAGERS: readonly PackageManagerDescriptor[] = [bun, pnpm, yarn, npm];
+// Keyed by Package Manager name for the Registry's compile-time exhaustiveness
+// check (architecture review candidate 2). Insertion order = lockfile precedence.
+export const NODE_MANAGERS = { bun, pnpm, yarn, npm } satisfies Partial<
+  Record<PackageManager, PackageManagerDescriptor>
+>;
 
 export const NODE_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "node",

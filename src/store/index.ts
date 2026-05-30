@@ -3,12 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Detection } from "../detect/index.js";
-import {
-  PACKAGE_MANAGERS,
-  packageManagerDescriptor,
-  type PackageManager,
-  type PackageManagerDescriptor,
-} from "../ecosystems/index.js";
+import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
 import { parseStorePath, parseVendorHashMismatch } from "./parse.js";
 import { physPath } from "./paths.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
@@ -84,10 +79,13 @@ export function provisionStore(spec: ProvisionSpec): Provisioned {
 
   // Route by the Package Manager descriptor in the Ecosystem Registry (ADR 0001:
   // internal curation, NOT a plugin system; ADR 0006: the lockfile names the
-  // manager, the manager selects the importer). The closed-union lookup replaces
-  // the old `switch(detection.importer)`; the defensive guard below preserves the
-  // "unsupported importer" error so a Registry miss can never silently drop a gate.
-  const descriptor = lookupDescriptor(spec.detection);
+  // manager, the manager selects the importer). `detection.packageManager` is the
+  // closed `PackageManager` union narrowed once at detection, and the Registry is
+  // exhaustive over it by construction (architecture review candidate 2), so the
+  // store's old defensive `default:`/Registry-miss guard has retired — the lookup's
+  // own honest throw is the single never-drop-a-gate net (ADR 0004) if a caller
+  // ever widens the type.
+  const descriptor = packageManagerDescriptor(spec.detection.packageManager);
 
   // The honest provision gate (ADR 0001): bun carries one because nixpkgs has no
   // canonical bun deps importer yet. Throw its EXISTING actionable reason rather
@@ -97,23 +95,6 @@ export function provisionStore(spec: ProvisionSpec): Provisioned {
   }
 
   return provision(spec, ctx, descriptor);
-}
-
-/**
- * Resolve the Package Manager descriptor for a detection, keeping the DEFENSIVE
- * runtime guard that preserved the old `default:` branch's "unsupported importer"
- * error (ADR 0004 — never drop a gate). `detection.packageManager` is a string at
- * this boundary; a name outside the closed Registry union surfaces the same
- * listing error the switch threw, rather than the Registry's generic miss.
- */
-function lookupDescriptor(detection: Detection): PackageManagerDescriptor {
-  if (!(PACKAGE_MANAGERS as readonly string[]).includes(detection.packageManager)) {
-    throw new Error(
-      `store: unsupported importer ${detection.importer} ` +
-        `(v1 builds Go via buildGoModule and JS via fetchNpmDeps/fetchPnpmDeps/fetchYarnDeps)`,
-    );
-  }
-  return packageManagerDescriptor(detection.packageManager as PackageManager);
 }
 
 /** Shared per-provision state passed to the generic provisioner. */

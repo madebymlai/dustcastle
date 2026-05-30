@@ -103,8 +103,8 @@ describe("detectWorkspace (the fan-out shape prepareRun provisions over)", () =>
     expect(ws.projects.map((p) => p.dir).sort()).toEqual([join(root, "packages/a"), join(root, "packages/b")]);
     const a = ws.projects.find((p) => p.dir === join(root, "packages/a"));
     const b = ws.projects.find((p) => p.dir === join(root, "packages/b"));
-    expect(a?.detections[0]?.importer).toBe("fetchNpmDeps");
-    expect(b?.detections[0]?.importer).toBe("fetchPnpmDeps");
+    expect(a?.detections[0]?.packageManager).toBe("npm");
+    expect(b?.detections[0]?.packageManager).toBe("pnpm");
   });
 
   it("falls back to the single root project when it is not a workspace", () => {

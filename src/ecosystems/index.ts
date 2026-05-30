@@ -33,25 +33,29 @@ export type {
  */
 export const ECOSYSTEMS: readonly EcosystemDescriptor[] = [GO_ECOSYSTEM, NODE_ECOSYSTEM, PYTHON_ECOSYSTEM];
 
-/** Every Package Manager descriptor, flattened across Ecosystems (dispatch grain). */
-const PACKAGE_MANAGER_DESCRIPTORS: readonly PackageManagerDescriptor[] = [
+/**
+ * The Package Manager descriptors, keyed by manager and EXHAUSTIVE BY CONSTRUCTION
+ * (architecture review candidate 2). The `Record<PackageManager, …>` annotation is
+ * the compile-time proof: every member of the closed {@link PackageManager} union
+ * must have a descriptor here, or this assignment fails at `tsc`. A half-added
+ * Ecosystem — a manager in the union with no descriptor — can no longer compile and
+ * fail at provision time; the dispatch sites (store/impurity/pin) derive from this
+ * and are exhaustive without a runtime `default:` guard.
+ */
+const BY_PACKAGE_MANAGER: Record<PackageManager, PackageManagerDescriptor> = {
   ...GO_MANAGERS,
   ...NODE_MANAGERS,
   ...PYTHON_MANAGERS,
-];
-
-const BY_PACKAGE_MANAGER: ReadonlyMap<PackageManager, PackageManagerDescriptor> = new Map(
-  PACKAGE_MANAGER_DESCRIPTORS.map((d) => [d.packageManager, d]),
-);
+};
 
 const BY_ECOSYSTEM: ReadonlyMap<string, EcosystemDescriptor> = new Map(ECOSYSTEMS.map((e) => [e.ecosystem, e]));
 
 /** The closed set of curated Package Manager names (the dispatch keys). */
-export const PACKAGE_MANAGERS: readonly PackageManager[] = PACKAGE_MANAGER_DESCRIPTORS.map((d) => d.packageManager);
+export const PACKAGE_MANAGERS: readonly PackageManager[] = Object.keys(BY_PACKAGE_MANAGER) as PackageManager[];
 
 /** Look up a Package Manager's descriptor (the dispatch grain). Throws on an unknown manager. */
 export function packageManagerDescriptor(pm: PackageManager): PackageManagerDescriptor {
-  const descriptor = BY_PACKAGE_MANAGER.get(pm);
+  const descriptor = BY_PACKAGE_MANAGER[pm];
   if (descriptor === undefined) {
     // Unreachable for the closed union, but honest if a caller widens the type.
     throw new Error(`ecosystems: unknown package manager ${pm} (not in the Registry)`);

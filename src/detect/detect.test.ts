@@ -35,7 +35,6 @@ describe("detect (ADR 0006 lockfile→importer router)", () => {
     expect(detected[0]).toMatchObject({
       ecosystem: "go",
       packageManager: "go",
-      importer: "buildGoModule",
     });
   });
 
@@ -62,7 +61,7 @@ describe("detect (ADR 0006 lockfile→importer router)", () => {
 });
 
 describe("detect — JS/Node ecosystem (ADR 0006 slice 2)", () => {
-  it("routes an npm repo (package-lock.json) to the fetchNpmDeps importer", () => {
+  it("routes an npm repo (package-lock.json) to the npm manager", () => {
     const dir = repo({
       "package.json": JSON.stringify({ name: "app", version: "1.0.0" }),
       "package-lock.json": JSON.stringify({ name: "app", lockfileVersion: 3 }),
@@ -71,29 +70,28 @@ describe("detect — JS/Node ecosystem (ADR 0006 slice 2)", () => {
     expect(detect(dir)[0]).toMatchObject({
       ecosystem: "node",
       packageManager: "npm",
-      importer: "fetchNpmDeps",
     });
   });
 
-  it("routes a pnpm repo (pnpm-lock.yaml) to the fetchPnpmDeps importer", () => {
+  it("routes a pnpm repo (pnpm-lock.yaml) to the pnpm manager", () => {
     const dir = repo({
       "package.json": JSON.stringify({ name: "app" }),
       "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
     });
 
-    expect(detect(dir)[0]).toMatchObject({ packageManager: "pnpm", importer: "fetchPnpmDeps" });
+    expect(detect(dir)[0]).toMatchObject({ packageManager: "pnpm" });
   });
 
-  it("routes a yarn repo (yarn.lock) to the yarn importer", () => {
+  it("routes a yarn repo (yarn.lock) to the yarn manager", () => {
     const dir = repo({
       "package.json": JSON.stringify({ name: "app" }),
       "yarn.lock": "# yarn lockfile v1\n",
     });
 
-    expect(detect(dir)[0]).toMatchObject({ packageManager: "yarn", importer: "fetchYarnDeps" });
+    expect(detect(dir)[0]).toMatchObject({ packageManager: "yarn" });
   });
 
-  it("routes a bun repo (bun.lock) to the bun importer", () => {
+  it("routes a bun repo (bun.lock) to the bun manager", () => {
     const dir = repo({
       "package.json": JSON.stringify({ name: "app" }),
       "bun.lock": "{}\n",
@@ -120,7 +118,7 @@ describe("detect — JS/Node ecosystem (ADR 0006 slice 2)", () => {
       "package-lock.json": JSON.stringify({ name: "app" }),
     });
 
-    expect(detect(dir)[0]).toMatchObject({ packageManager: "yarn", importer: "fetchYarnDeps" });
+    expect(detect(dir)[0]).toMatchObject({ packageManager: "yarn" });
   });
 
   it("reads the Node toolchain version from .nvmrc (ADR 0006b), stripping a leading v", () => {
@@ -238,14 +236,13 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     "urllib3==2.2.3 \\\n" +
     "    --hash=sha256:ca899ca043dcb1bafa3e262d73aa25c465bfb49e0bd9dd5d59f1d0acba2f8fac\n";
 
-  it("routes a hash-pinned requirements.txt to the pip-FOD importer", () => {
+  it("routes a hash-pinned requirements.txt to the pip manager", () => {
     const dir = repo({ "requirements.txt": PINNED_REQUIREMENTS });
 
     expect(detect(dir)).toHaveLength(1);
     expect(detect(dir)[0]).toMatchObject({
       ecosystem: "python",
       packageManager: "pip",
-      importer: "pip-FOD",
     });
   });
 
@@ -348,7 +345,6 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     expect(detect(dir)[0]).toMatchObject({
       ecosystem: "python",
       packageManager: "uv",
-      importer: "pip-FOD",
     });
   });
 
@@ -378,7 +374,6 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     expect(detect(dir)[0]).toMatchObject({
       ecosystem: "python",
       packageManager: "poetry",
-      importer: "pip-FOD",
     });
   });
 

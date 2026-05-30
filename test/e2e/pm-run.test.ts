@@ -48,12 +48,12 @@ afterAll(() => {
 });
 
 const CASES = [
-  { manager: "pnpm", importer: "fetchPnpmDeps", fixture: PNPM_SAMPLE },
-  { manager: "yarn", importer: "fetchYarnDeps", fixture: YARN_SAMPLE },
+  { manager: "pnpm", fixture: PNPM_SAMPLE },
+  { manager: "yarn", fixture: YARN_SAMPLE },
 ] as const;
 
 describe("dustcastle run (slice 2b: pnpm/yarn pure path, ADR 0002/0003/0004/0005/0008)", () => {
-  for (const { manager, importer, fixture } of CASES) {
+  for (const { manager, fixture } of CASES) {
     e2e(
       `runs \`node --test\` green for a ${manager} project, offline, deps from the RO Store`,
       async () => {
@@ -67,7 +67,6 @@ describe("dustcastle run (slice 2b: pnpm/yarn pure path, ADR 0002/0003/0004/0005
         const prepared = prepareRun({ cwd: projectDir });
         expect(prepared.detection.ecosystem).toBe("node");
         expect(prepared.detection.packageManager).toBe(manager);
-        expect(prepared.detection.importer).toBe(importer);
         expect(prepared.impurity.kind).toBe("pure");
         expect(prepared.plan.podmanOptions.network).toBe("none");
 

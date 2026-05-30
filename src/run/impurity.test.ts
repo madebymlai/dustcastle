@@ -28,11 +28,11 @@ afterEach(() => {
   while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
 });
 
-const node: Detection = { ecosystem: "node", packageManager: "npm", importer: "fetchNpmDeps" };
-const pnpm: Detection = { ecosystem: "node", packageManager: "pnpm", importer: "fetchPnpmDeps" };
-const yarn: Detection = { ecosystem: "node", packageManager: "yarn", importer: "fetchYarnDeps" };
-const go: Detection = { ecosystem: "go", packageManager: "go", importer: "buildGoModule" };
-const pip: Detection = { ecosystem: "python", packageManager: "pip", importer: "pip-FOD" };
+const node: Detection = { ecosystem: "node", packageManager: "npm" };
+const pnpm: Detection = { ecosystem: "node", packageManager: "pnpm" };
+const yarn: Detection = { ecosystem: "node", packageManager: "yarn" };
+const go: Detection = { ecosystem: "go", packageManager: "go" };
+const pip: Detection = { ecosystem: "python", packageManager: "pip" };
 
 const cleanLock = JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "app" } } });
 const scriptedLock = JSON.stringify({

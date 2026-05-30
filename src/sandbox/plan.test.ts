@@ -20,7 +20,6 @@ const provisioned: Provisioned = {
 const detection: Detection = {
   ecosystem: "go",
   packageManager: "go",
-  importer: "buildGoModule",
   toolchainVersion: "1.26.3",
 };
 
@@ -83,7 +82,6 @@ const nodeProvisioned: Provisioned = {
 const nodeDetection: Detection = {
   ecosystem: "node",
   packageManager: "npm",
-  importer: "fetchNpmDeps",
   toolchainVersion: "22.11.0",
 };
 
@@ -135,15 +133,15 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
     // The impure install must use the manager that signalled — and from the
     // committed lockfile (frozen/immutable), so an impure build still can't drift.
     const impure = { kind: "allowlist", hosts: ["registry.npmjs.org"] } as const;
-    const cmd = (packageManager: PackageManager, importer: string) =>
+    const cmd = (packageManager: PackageManager) =>
       planSandbox({
         provisioned: nodeProvisioned,
-        detection: { ecosystem: "node", packageManager, importer },
+        detection: { ecosystem: "node", packageManager },
         egress: impure,
       }).setupCommands.join("\n");
 
-    expect(cmd("pnpm", "fetchPnpmDeps")).toBe("pnpm install --frozen-lockfile");
-    expect(cmd("yarn", "fetchYarnDeps")).toBe("yarn install --frozen-lockfile");
+    expect(cmd("pnpm")).toBe("pnpm install --frozen-lockfile");
+    expect(cmd("yarn")).toBe("yarn install --frozen-lockfile");
   });
 
   it("points the container's tooling at the egress proxy (production proxy by default)", () => {

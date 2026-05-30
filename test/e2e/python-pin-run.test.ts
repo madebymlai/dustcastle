@@ -71,7 +71,6 @@ describe("dustcastle run (laimk-hse.5: loose Python pin-then-pure, ADR 0004/0006
       // After pinning, it is an ordinary pure Python project (loose signal gone).
       expect(prepared.detection.ecosystem).toBe("python");
       expect(prepared.detection.packageManager).toBe("pip");
-      expect(prepared.detection.importer).toBe("pip-FOD");
       expect(prepared.detection.loose).toBeUndefined();
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");

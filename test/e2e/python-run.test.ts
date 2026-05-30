@@ -61,7 +61,6 @@ describe("dustcastle run (laimk-hse.2: Python pip-FOD pure path, ADR 0002/0003/0
       const prepared = prepareRun({ cwd: projectDir });
       expect(prepared.detection.ecosystem).toBe("python");
       expect(prepared.detection.packageManager).toBe("pip");
-      expect(prepared.detection.importer).toBe("pip-FOD");
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");
       // The discovered aggregate hash lands in pythonDepsHash (ADR 0006 amendment).
@@ -128,7 +127,6 @@ describe("dustcastle run (laimk-hse.6: uv front-end → the SAME pip-FOD pure pa
       const prepared = prepareRun({ cwd: projectDir });
       expect(prepared.detection.ecosystem).toBe("python");
       expect(prepared.detection.packageManager).toBe("uv");
-      expect(prepared.detection.importer).toBe("pip-FOD");
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");
       // The discovered aggregate hash lands in pythonDepsHash (same pip-FOD).
@@ -198,7 +196,6 @@ describe("dustcastle run (laimk-hse.7: poetry front-end → the SAME pip-FOD pur
       const prepared = prepareRun({ cwd: projectDir });
       expect(prepared.detection.ecosystem).toBe("python");
       expect(prepared.detection.packageManager).toBe("poetry");
-      expect(prepared.detection.importer).toBe("pip-FOD");
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");
       // The discovered aggregate hash lands in pythonDepsHash (same pip-FOD).

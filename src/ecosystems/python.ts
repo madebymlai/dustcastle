@@ -7,7 +7,7 @@ import {
   readRequiresPython,
   resolvePythonInterpreter,
 } from "./python-version.js";
-import type { EcosystemDescriptor, LooseManifestInput, PackageManagerDescriptor } from "./types.js";
+import type { EcosystemDescriptor, LooseManifestInput, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
  * The Python Ecosystem descriptors (ADR 0006 + its 2026-05-30 amendment). The
@@ -26,8 +26,8 @@ const pip: PackageManagerDescriptor = {
   packageManager: "pip",
   ecosystem: "python",
   // The pip-FOD is the Python Importer (ADR 0006 amendment) — one network-ON
-  // wheelhouse download + an offline `pip install --no-index` assembly.
-  importer: "pip-FOD",
+  // wheelhouse download + an offline `pip install --no-index` assembly — emitted
+  // by generateBuild below.
   // `requirements.txt` is consumed directly when hash-pinned (already lock-grade).
   lockfiles: ["requirements.txt"],
   generateBuild: (ctx) =>
@@ -85,7 +85,6 @@ const uv: PackageManagerDescriptor = {
   ecosystem: "python",
   // The Importer is the pip-FOD (same as pip) — uv only changes how the hash-pinned
   // requirements get PRODUCED (the export front-end below), never how they're built.
-  importer: "pip-FOD",
   // uv's real lockfile; it signals uv and outranks requirements.txt (ADR 0006d).
   lockfiles: ["uv.lock"],
   generateBuild: (ctx) =>
@@ -141,7 +140,6 @@ const poetry: PackageManagerDescriptor = {
   ecosystem: "python",
   // The Importer is the pip-FOD (same as pip/uv) — poetry only changes how the
   // hash-pinned requirements get PRODUCED (the export front-end below), not built.
-  importer: "pip-FOD",
   // poetry's real lockfile; it signals poetry, outranks requirements.txt, and is
   // outranked by uv.lock (ADR 0006d: uv.lock > poetry.lock > requirements.txt).
   lockfiles: ["poetry.lock"],
@@ -182,7 +180,11 @@ const poetry: PackageManagerDescriptor = {
   // warranted — see the docstring above).
 };
 
-export const PYTHON_MANAGERS: readonly PackageManagerDescriptor[] = [uv, poetry, pip];
+// Keyed by Package Manager name for the Registry's compile-time exhaustiveness
+// check (architecture review candidate 2). Insertion order = lockfile precedence.
+export const PYTHON_MANAGERS = { uv, poetry, pip } satisfies Partial<
+  Record<PackageManager, PackageManagerDescriptor>
+>;
 
 export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "python",

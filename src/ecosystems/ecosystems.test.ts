@@ -4,8 +4,6 @@ import {
   PACKAGE_MANAGERS,
   ecosystemFor,
   packageManagerDescriptor,
-  type Ecosystem,
-  type PackageManager,
 } from "./index.js";
 
 // The Ecosystem Registry (ADR 0001: internal curation, NOT a plugin system) is
@@ -14,24 +12,6 @@ import {
 // they pin the exact strings, importer derivation, gate reasons, and impurity
 // signals that today's dispatch sites encode, so the rest of the epic can fold
 // onto the Registry without changing behavior.
-
-// The importer each Package Manager derives 1:1 (ADR 0006a; CONTEXT.md: Importer
-// is a *property of* the Package Manager, not a second key). The store dispatches
-// on these exact attr names today, so the Registry must reproduce them exactly.
-const EXPECTED_IMPORTER: Record<PackageManager, string> = {
-  npm: "fetchNpmDeps",
-  pnpm: "fetchPnpmDeps",
-  yarn: "fetchYarnDeps",
-  bun: "fetchBunDeps",
-  go: "buildGoModule",
-  pip: "pip-FOD",
-  // uv is an EXPORT FRONT-END to the same pip-FOD (ADR 0006 amendment), NOT a
-  // separate Importer / uv2nix — so it derives the pip-FOD importer too.
-  uv: "pip-FOD",
-  // poetry is likewise an export FRONT-END (`poetry export`) to the SAME pip-FOD,
-  // NOT poetry2nix (an external flake input) — so it derives the pip-FOD importer.
-  poetry: "pip-FOD",
-};
 
 describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
   it("exposes the closed Ecosystem list, ordered go then node then python", () => {
@@ -47,10 +27,6 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
 
     it("keys on its own closed packageManager name", () => {
       expect(d.packageManager).toBe(pm);
-    });
-
-    it("derives the importer 1:1 (ADR 0006a)", () => {
-      expect(d.importer).toBe(EXPECTED_IMPORTER[pm]);
     });
 
     it("declares at least one lockfile", () => {
@@ -192,10 +168,9 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
   });
 
   describe("the Python Ecosystem descriptor (ADR 0006 amendment — pip-FOD)", () => {
-    it("registers pip as a python Package Manager with the pip-FOD importer", () => {
+    it("registers pip as a python Package Manager (its pip-FOD build is asserted below)", () => {
       const pip = packageManagerDescriptor("pip");
       expect(pip.ecosystem).toBe("python");
-      expect(pip.importer).toBe("pip-FOD");
     });
 
     it("consumes requirements.txt directly (hash-pinned is lock-grade)", () => {
@@ -233,10 +208,11 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
   });
 
   describe("the uv Package Manager is an export front-end to the pip-FOD (laimk-hse.6)", () => {
-    it("registers uv as a python Package Manager whose Importer is the pip-FOD (not uv2nix)", () => {
+    it("registers uv as a python Package Manager that builds via the pip-FOD (not uv2nix)", () => {
       const uv = packageManagerDescriptor("uv");
       expect(uv.ecosystem).toBe("python");
-      expect(uv.importer).toBe("pip-FOD");
+      // That the build IS the pip-FOD (not a separate importer) is asserted by the
+      // "generates the SAME pip-FOD NixBuild as pip" test below.
     });
 
     it("signals on uv.lock (the real lockfile that beats requirements.txt)", () => {
@@ -289,10 +265,11 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
   });
 
   describe("the poetry Package Manager is an export front-end to the pip-FOD (laimk-hse.7)", () => {
-    it("registers poetry as a python Package Manager whose Importer is the pip-FOD (not poetry2nix)", () => {
+    it("registers poetry as a python Package Manager that builds via the pip-FOD (not poetry2nix)", () => {
       const poetry = packageManagerDescriptor("poetry");
       expect(poetry.ecosystem).toBe("python");
-      expect(poetry.importer).toBe("pip-FOD");
+      // The pip-FOD build (not poetry2nix) is asserted by the "generates the SAME
+      // pip-FOD NixBuild as pip" test below.
     });
 
     it("signals on poetry.lock", () => {

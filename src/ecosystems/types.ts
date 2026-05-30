@@ -41,7 +41,6 @@ export interface Detection {
    * a half-added Ecosystem fails at tsc, not at a runtime `default:`/Registry-miss.
    */
   readonly packageManager: PackageManager;
-  readonly importer: string;
   /**
    * The runtime version the repo asks for, read from version files / manifests
    * (ADR 0006b). The lockfile names the importer but not the toolchain version;
@@ -152,14 +151,12 @@ export interface PackageManagerDescriptor {
   /** The Ecosystem this manager belongs to. */
   readonly ecosystem: Ecosystem;
   /**
-   * The Nix Importer, DERIVED 1:1 from the manager (ADR 0006a) — npm→fetchNpmDeps,
-   * pnpm→fetchPnpmDeps, yarn→fetchYarnDeps, bun→fetchBunDeps, go→buildGoModule.
-   * A property of the manager, not a second key (CONTEXT.md: Importer).
-   */
-  readonly importer: string;
-  /**
    * The lockfile name(s) that signal this manager, in precedence order. A manager
    * usually has one; bun has two (`bun.lockb`, `bun.lock`).
+   *
+   * The Nix Importer itself is NOT a field: it's emitted by {@link generateBuild}
+   * (the function that owns the expression), so it never needed a duplicate string
+   * label keyed in parallel (architecture review candidate 2).
    */
   readonly lockfiles: readonly string[];
   /** Emit the Importer's Nix expression for a deps hash (ADR 0004). Uniform across managers. */
