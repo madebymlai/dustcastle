@@ -127,11 +127,6 @@ of the design rather than being a special case:
 | **Install deps** (Nix-built into store) | `pnpm i` | `uv sync` | `cargo fetch` | `go mod download` | `bundle install` |
 | **Run tests** (sandbox capability) | `vitest` | `pytest` | `cargo test` | `go test` | `rspec` |
 
-## Documentation
-
-For the project's vocabulary (Store, Boundary, Toolchain, Ecosystem, and more), see
-**[`CONTEXT.md`](CONTEXT.md)**.
-
 ## License
 
 MIT
