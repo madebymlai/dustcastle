@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import type { SandcastleHandoff } from "../run/index.js";
+import { PROVIDER_API_HOSTS } from "./provider-hosts.js";
 
 // dustcastle's **global** config (ADR 0002). The agent model is a single global
 // choice every project / every instance shares — there is no project-local config.
@@ -80,6 +81,40 @@ export function writeModel(
   };
   mkdirSync(dir, { recursive: true });
   writeFileSync(globalConfigPath(dir), `${JSON.stringify(next, null, 2)}\n`);
+}
+
+/**
+ * The model-provider API host(s) for a pi `provider/model` selector (ADR 0010 —
+ * Agent Egress). The provider is the part before the first `/`; its hosts come
+ * from the curated {@link PROVIDER_API_HOSTS} table. Throws — never silent (ADR
+ * 0005) — when the selector is malformed or the provider has no mapped host: the
+ * agent literally can't reach its LLM, so failing at plan time with an actionable
+ * message beats a cryptic mid-run "Connection error".
+ */
+export function modelProviderHosts(model: string): readonly string[] {
+  const provider = model.split("/")[0];
+  if (provider === undefined || provider.length === 0) {
+    throw new Error(`dustcastle: malformed model selector '${model}' — expected 'provider/model'`);
+  }
+  const hosts = PROVIDER_API_HOSTS[provider];
+  if (hosts === undefined) {
+    throw new Error(
+      `dustcastle: no known API host for provider '${provider}'. Add it to PROVIDER_API_HOSTS (src/config/provider-hosts.ts).`,
+    );
+  }
+  return hosts;
+}
+
+/**
+ * The configured model's API host(s) for Agent Egress (ADR 0010), or `undefined`
+ * when no model is set — no model means no agent runs, so a pure build stays
+ * closed. Throws on an unknown provider (via {@link modelProviderHosts}). `dir`
+ * injectable for tests.
+ */
+export function configuredAgentModelHosts(dir: string = DUSTCASTLE_HOME): readonly string[] | undefined {
+  const selection = loadModelSelection(dir);
+  if (selection === undefined) return undefined;
+  return modelProviderHosts(selection.model);
 }
 
 /** Build the pi agent provider from a model selection. */

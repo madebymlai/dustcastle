@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { EGRESS_NETWORK, EGRESS_PROXY_CONTAINER, productionProxyUrl } from "./confine.js";
+import type { EgressDecision } from "./egress.js";
 import { ensureEgress, type PodmanResult } from "./egress-runtime.js";
+
+/** A structured allowlist decision (ADR 0010): Build hosts + optional Agent hosts. */
+const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision => ({
+  kind: "allowlist",
+  buildHosts,
+  agentHosts,
+});
 
 // The imperative glue that brings up the production egress backend (ADR 0005,
 // handoff item 1-tail): an --internal network with no route off-host + a
@@ -34,7 +42,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
   it("creates the internal network then starts the dual-homed proxy, in order", () => {
     const { run, calls } = recorder();
     const handle = ensureEgress({
-      egress: { kind: "allowlist", hosts: ["registry.npmjs.org", "github.com"] },
+      egress: allow(["registry.npmjs.org", "github.com"]),
       proxyEntrypoint: "/opt/dustcastle/proxy-main.js",
       run,
     });
@@ -53,6 +61,21 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     expect(handle.proxyUrl).toBe(productionProxyUrl());
   });
 
+  it("enforces the deduped Build∪Agent allowlist on the proxy (ADR 0010)", () => {
+    const { run, calls } = recorder();
+    // A host shared by build and agent must reach the proxy exactly once.
+    const handle = ensureEgress({
+      egress: { kind: "allowlist", buildHosts: ["github.com"], agentHosts: ["github.com", "api.deepseek.com"] },
+      proxyEntrypoint: "/p.js",
+      run,
+    });
+    const runCall = calls.find((c) => c[0] === "run");
+    expect(runCall!.join(" ")).toContain("github.com,api.deepseek.com");
+    // github.com appears once, not twice — the union is deduped.
+    expect(runCall!.join(" ")).not.toContain("github.com,github.com");
+    expect(handle.proxyUrl).toBe(productionProxyUrl());
+  });
+
   it("tolerates an already-existing network (idempotent re-run)", () => {
     const { run } = recorder((a) =>
       a[0] === "network" && a[1] === "create"
@@ -60,7 +83,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
         : OK,
     );
     const handle = ensureEgress({
-      egress: { kind: "allowlist", hosts: ["registry.npmjs.org"] },
+      egress: allow(["registry.npmjs.org"]),
       proxyEntrypoint: "/p.js",
       run,
     });
@@ -74,14 +97,14 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
         : OK,
     );
     expect(() =>
-      ensureEgress({ egress: { kind: "allowlist", hosts: ["x"] }, proxyEntrypoint: "/p.js", run }),
+      ensureEgress({ egress: allow(["x"]), proxyEntrypoint: "/p.js", run }),
     ).toThrow(/egress network/i);
   });
 
   it("rolls back the freshly-created network when the proxy fails to start", () => {
     const { run, calls } = recorder((a) => (a[0] === "run" ? { status: 1, stderr: "no such image" } : OK));
     expect(() =>
-      ensureEgress({ egress: { kind: "allowlist", hosts: ["x"] }, proxyEntrypoint: "/p.js", run }),
+      ensureEgress({ egress: allow(["x"]), proxyEntrypoint: "/p.js", run }),
     ).toThrow(/proxy/i);
     // A failed setup leaves nothing behind: the network we created is removed.
     expect(calls.some((c) => c[0] === "network" && c[1] === "rm" && c.includes(EGRESS_NETWORK))).toBe(true);
@@ -90,7 +113,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
   it("teardown removes the proxy container and the network", () => {
     const { run, calls } = recorder();
     const handle = ensureEgress({
-      egress: { kind: "allowlist", hosts: ["x"] },
+      egress: allow(["x"]),
       proxyEntrypoint: "/p.js",
       run,
     });

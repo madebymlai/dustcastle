@@ -6,6 +6,7 @@ import { parseImpurityMode, type ImpurityDecision, type ImpurityMode } from "../
 import { ensureEgress } from "../sandbox/egress-runtime.js";
 import { deriveEgress, type EgressDecision } from "../sandbox/egress.js";
 import { planSandbox, type SandboxPlan } from "../sandbox/plan.js";
+import { ensureAgentImage } from "../sandbox/agent-image.js";
 import { provisionStore, type Provisioned } from "../store/index.js";
 import {
   defaultGcRootsDir,
@@ -20,7 +21,7 @@ import { upsertRecency } from "../store/recency.js";
 import { spawnAutoGc } from "../cli/autogc.js";
 import { gitRemoteHost, resolveImpurity, writeImpurityMarker } from "./impurity.js";
 import { exportRequirements, pinLooseManifest, type Exported, type Pinned, type ResolveRunner } from "./pin.js";
-import { agentAuthMounts, DUSTCASTLE_HOME } from "../config/global.js";
+import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
 
 export interface PrepareOptions {
   /** The project directory to run in (defaults to the process cwd at the CLI). */
@@ -45,6 +46,14 @@ export interface PrepareOptions {
    * to the production proxy container on the internal egress net.
    */
   readonly proxyUrl?: string;
+  /**
+   * The agent's model-provider API host(s) to allowlist for Agent Egress (ADR
+   * 0010), so the in-sandbox agent reaches its LLM even on a pure, offline build.
+   * Resolved from the configured model by the entry points (CLI /
+   * withProvisionedSandbox); left undefined here so prepareRun stays pure and
+   * test-injectable. Undefined ⇒ no agent egress ⇒ a pure build stays closed.
+   */
+  readonly agentModelHosts?: readonly string[];
   /**
    * Inject the lock-only resolve runner for the pin-then-pure step (ADR 0006c).
    * Tests/e2e override it; defaults to a real spawn of the manager's resolve.
@@ -156,6 +165,9 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
     packageManager: detection.packageManager,
     impure,
     ...(remoteHost !== undefined ? { gitRemoteHost: remoteHost } : {}),
+    // Agent Egress (ADR 0010): the model host(s) carve a route for the agent's own
+    // LLM calls out of the build's network posture — even when the build is pure.
+    ...(opts.agentModelHosts !== undefined ? { agentModelHosts: opts.agentModelHosts } : {}),
   });
 
   return {
@@ -298,7 +310,15 @@ export async function withProvisionedSandbox<T>(
   opts: ProvisionOptions,
   body: (sandbox: ProvisionedSandbox) => Promise<T>,
 ): Promise<T> {
-  const prepared = prepareRun(opts);
+  // Resolve Agent Egress (ADR 0010): the configured model's API host, so the plan
+  // opens a route for the in-sandbox agent's LLM even on a pure build. An explicit
+  // opt wins (tests); otherwise read it from the global config (throws actionably
+  // on an unknown provider, before any sandbox is stood up).
+  const agentModelHosts = opts.agentModelHosts ?? configuredAgentModelHosts();
+  const prepared = prepareRun({
+    ...opts,
+    ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
+  });
 
   // Stand up the production egress backend the plan routes through (no-op when
   // the build is pure/closed). Torn down whatever the outcome.
@@ -327,6 +347,12 @@ export async function withProvisionedSandbox<T>(
   updateRecency(opts, prepared);
 
   try {
+    // Ensure the dustcastle-owned agent image exists (built once from the shipped
+    // Containerfile; idempotent thereafter), the way the Store provision ensures
+    // nix-portable. The image carries the agent harness (git/bd/pi) + a writable,
+    // keep-id-aligned `agent` user that sandcastle's provider maps the host user onto.
+    ensureAgentImage(opts.onLine !== undefined ? { onLine: opts.onLine } : {});
+
     // Mount the pi login into the sandbox (~/.pi/agent), so the agent
     // authenticates in-container off the developer's existing `pi login` — no
     // per-provider API key. Mirrors agentstack's mount.

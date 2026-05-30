@@ -85,6 +85,18 @@ const nodeDetection: Detection = {
   toolchainVersion: "22.11.0",
 };
 
+// The impure `allow` path realizes only the Toolchain into the Store, so deps are
+// installed in the container — depsStorePath is empty (store/index.ts). That empty
+// path is the impurity signal planSandbox keys on (ADR 0010), NOT the egress shape.
+const impureProvisioned: Provisioned = {
+  mode: "bwrap",
+  physStoreRoot: nodeProvisioned.physStoreRoot,
+  toolchainStorePath: nodeProvisioned.toolchainStorePath,
+  depsStorePath: "", // impure: only the Toolchain is in the Store; deps install in-container
+  appStorePath: nodeProvisioned.toolchainStorePath,
+  vendorHash: "",
+};
+
 describe("planSandbox — Node pure path (ADR 0002/0004/0005)", () => {
   it("puts the nodejs Toolchain on PATH with a writable npm cache off the RO Store", () => {
     const env = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection })
@@ -93,6 +105,15 @@ describe("planSandbox — Node pure path (ADR 0002/0004/0005)", () => {
     expect(env.PATH).toContain(`${nodeProvisioned.toolchainStorePath}/bin`);
     // The Store is read-only; npm's cache must point somewhere writable.
     expect(env.NPM_CONFIG_CACHE).toMatch(/^\/tmp\//);
+  });
+
+  it("keeps the agent harness (/usr/local/bin: bd, pi) on PATH, after the Toolchain", () => {
+    // The image installs bd/pi to /usr/local/bin; the implement phase shells `bd show`.
+    // The Nix Toolchain must still win for the PROJECT, so /usr/local/bin comes AFTER it.
+    const env = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).podmanOptions.env ?? {};
+    const path = env.PATH ?? "";
+    expect(path).toContain("/usr/local/bin");
+    expect(path.indexOf(`${nodeProvisioned.toolchainStorePath}/bin`)).toBeLessThan(path.indexOf("/usr/local/bin"));
   });
 
   it("stages node_modules from the read-only Store and runs offline (no egress)", () => {
@@ -110,21 +131,27 @@ describe("planSandbox — Node pure path (ADR 0002/0004/0005)", () => {
 });
 
 describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
+  const impureEgress = {
+    kind: "allowlist",
+    buildHosts: ["registry.npmjs.org", "github.com"],
+    agentHosts: [],
+  } as const;
+
   it("opens scoped egress (not none, not unrestricted) and installs in the container", () => {
     // Impurity `allow` runs untrusted postinstall *with* network, so the deps
-    // are NOT pre-built in the Store; the container runs a real `npm ci` under
-    // an egress allowlist derived from detection (registry + git host).
+    // are NOT pre-built in the Store (empty depsStorePath); the container runs a
+    // real `npm ci` under an egress allowlist derived from detection.
     const plan = planSandbox({
-      provisioned: nodeProvisioned,
+      provisioned: impureProvisioned,
       detection: nodeDetection,
-      egress: { kind: "allowlist", hosts: ["registry.npmjs.org", "github.com"] },
+      egress: impureEgress,
     });
 
     // Not closed (it must reach the registry) and not the default open network.
     expect(plan.podmanOptions.network).not.toBe("none");
     expect(plan.podmanOptions.network).toBeDefined();
     // The allowlist is surfaced for the CLI to print (never silent).
-    expect(plan.egress).toEqual({ kind: "allowlist", hosts: ["registry.npmjs.org", "github.com"] });
+    expect(plan.egress).toEqual(impureEgress);
     // The impure path installs in the container (with scripts), not from the Store.
     expect(plan.setupCommands.join("\n")).toContain("npm ci");
   });
@@ -132,12 +159,11 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
   it("installs with the detected manager, frozen to the lockfile (slice 2b)", () => {
     // The impure install must use the manager that signalled — and from the
     // committed lockfile (frozen/immutable), so an impure build still can't drift.
-    const impure = { kind: "allowlist", hosts: ["registry.npmjs.org"] } as const;
     const cmd = (packageManager: PackageManager) =>
       planSandbox({
-        provisioned: nodeProvisioned,
+        provisioned: impureProvisioned,
         detection: { ecosystem: "node", packageManager },
-        egress: impure,
+        egress: impureEgress,
       }).setupCommands.join("\n");
 
     expect(cmd("pnpm")).toBe("pnpm install --frozen-lockfile");
@@ -147,9 +173,9 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
   it("points the container's tooling at the egress proxy (production proxy by default)", () => {
     const env =
       planSandbox({
-        provisioned: nodeProvisioned,
+        provisioned: impureProvisioned,
         detection: nodeDetection,
-        egress: { kind: "allowlist", hosts: ["registry.npmjs.org"] },
+        egress: impureEgress,
       }).podmanOptions.env ?? {};
 
     // npm (and any HTTP tooling) is routed through the proxy, which enforces the
@@ -161,9 +187,9 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
   it("lets the orchestration layer override the proxy url (the e2e's host proxy)", () => {
     const env =
       planSandbox({
-        provisioned: nodeProvisioned,
+        provisioned: impureProvisioned,
         detection: nodeDetection,
-        egress: { kind: "allowlist", hosts: ["registry.npmjs.org"] },
+        egress: impureEgress,
         proxyUrl: "http://169.254.7.7:8118",
       }).podmanOptions.env ?? {};
 
@@ -174,5 +200,43 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
     const env =
       planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).podmanOptions.env ?? {};
     expect(env.HTTPS_PROXY).toBeUndefined();
+  });
+});
+
+describe("planSandbox — pure build with Agent Egress (ADR 0010 carve-out)", () => {
+  // A pure build whose agent needs its LLM: the allowlist carries ONLY the model
+  // host (agentHosts), buildHosts empty. The build stays pure — deps from the Store.
+  const agentEgress = {
+    kind: "allowlist",
+    buildHosts: [],
+    agentHosts: ["api.deepseek.com"],
+  } as const;
+
+  it("attaches the egress network and routes the agent through the proxy", () => {
+    const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection, egress: agentEgress });
+    // Not closed — the agent must reach its model — but not unrestricted either.
+    expect(plan.podmanOptions.network).not.toBe("none");
+    expect(plan.podmanOptions.network).toBeDefined();
+    // The agent's HTTP(S) calls route through the proxy (its only way out).
+    expect((plan.podmanOptions.env ?? {}).HTTPS_PROXY).toBe("http://dustcastle-egress-proxy:8118");
+  });
+
+  it("STILL stages deps from the Store — opening agent egress does not turn it impure", () => {
+    // The key decoupling (ADR 0010): impurity is read from depsStorePath, not the
+    // egress shape. A pure build with an allowlist copies node_modules, never npm ci.
+    const setup = planSandbox({
+      provisioned: nodeProvisioned,
+      detection: nodeDetection,
+      egress: agentEgress,
+    }).setupCommands.join("\n");
+
+    expect(setup).toContain(nodeProvisioned.depsStorePath);
+    expect(setup).toContain("node_modules");
+    expect(setup).not.toContain("npm ci");
+  });
+
+  it("surfaces the agent-only allowlist on the plan (build offline, agent open)", () => {
+    const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection, egress: agentEgress });
+    expect(plan.egress).toEqual(agentEgress);
   });
 });

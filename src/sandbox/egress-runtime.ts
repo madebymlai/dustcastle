@@ -19,7 +19,7 @@ import {
   productionProxyUrl,
   proxyContainerRunArgs,
 } from "./confine.js";
-import type { EgressDecision } from "./egress.js";
+import { egressHosts, type EgressDecision } from "./egress.js";
 
 /** The minimal result of a podman invocation the orchestration reasons about. */
 export interface PodmanResult {
@@ -71,7 +71,8 @@ export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   if (opts.egress.kind !== "allowlist") return NOOP; // closed/pure: no network, no proxy
   const run = opts.run ?? defaultPodman;
   const log = opts.onLine ?? (() => {});
-  const { hosts } = opts.egress;
+  // The proxy enforces the deduped union of Build + Agent Egress (ADR 0010).
+  const hosts = egressHosts(opts.egress);
 
   // 1. The internal network — no route off-host. Idempotent: a prior run may have
   //    left it, which is fine; only a *different* failure is fatal.

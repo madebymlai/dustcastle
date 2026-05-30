@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
-import { loadModelSelection } from "../config/global.js";
+import { configuredAgentModelHosts, loadModelSelection } from "../config/global.js";
 import { detect } from "../detect/index.js";
 import { parseImpurityMode } from "../impurity/index.js";
 import { prepareRun } from "../run/index.js";
@@ -74,13 +74,24 @@ async function main(argv: string[]): Promise<number> {
 
   // dustcastle's half: detect → realize the Store → plan the Sandbox. Surface
   // the active runtime mode (ADR 0008 — never silent) and what was provisioned.
-  const prepared = prepareRun({ cwd, onLine: (l) => process.stderr.write(`${l}\n`) });
+  // Resolve Agent Egress (ADR 0010) so the printed posture matches the run's: the
+  // agent's model host carves a route out of even a pure build. Throws actionably
+  // on an unknown provider (caught at the top), before anything is provisioned.
+  const agentModelHosts = configuredAgentModelHosts();
+  const prepared = prepareRun({
+    cwd,
+    onLine: (l) => process.stderr.write(`${l}\n`),
+    ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
+  });
   const { detection, provisioned, plan, impurity, pinned } = prepared;
   // Surface the network posture + reproducibility, never silently (ADR 0004/0005).
+  // Distinguish Build Egress from Agent Egress (ADR 0010) so a pure build that opens
+  // only the model host never reads as "the build went online."
   const egressLine =
     plan.egress.kind === "none"
       ? "closed (pure, no network)"
-      : `allowlist [${plan.egress.hosts.join(", ")}]`;
+      : `allowlist — build: ${plan.egress.buildHosts.length > 0 ? `[${plan.egress.buildHosts.join(", ")}]` : "(offline)"}` +
+        `  agent: ${plan.egress.agentHosts.length > 0 ? `[${plan.egress.agentHosts.join(", ")}]` : "(none)"}`;
   const purityLine =
     impurity.kind === "impure"
       ? "impure (marker written to .dustcastle/impure.json)"

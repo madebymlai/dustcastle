@@ -1,4 +1,5 @@
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
+import { AGENT_IMAGE } from "./agent-image.js";
 import type { Detection } from "../detect/index.js";
 import type { Provisioned } from "../store/index.js";
 import { EGRESS_NETWORK, productionProxyUrl, proxyEnv } from "./confine.js";
@@ -17,13 +18,25 @@ export interface SandboxPlanSpec {
    */
   readonly egress?: EgressDecision;
   /**
+   * Whether this build is impure (deps install in-container vs staged from the
+   * Store). Decided independently of egress (ADR 0010): a pure build can carry an
+   * allowlist for Agent Egress without being impure. Defaults to inferring it from
+   * an empty `provisioned.depsStorePath` — the Store's own impurity contract (the
+   * impure path realizes only the Toolchain, leaving depsStorePath empty).
+   */
+  readonly impure?: boolean;
+  /**
    * The URL of the running egress proxy to route the container's tooling through
    * (ADR 0005). Only used on the allowlist path. Defaults to the production proxy
    * container's name on the internal egress net; the live e2e overrides it with
    * its host-side proxy address.
    */
   readonly proxyUrl?: string;
-  /** Base image; a stock image suffices — the Nix closure carries its own libc. */
+  /**
+   * Base image; a stock image suffices for libc (the Nix closure carries its own),
+   * but it MUST ship git — the agent branches/commits/merges. Defaults to a
+   * git-preinstalled image; an override must keep that guarantee.
+   */
   readonly imageName?: string;
 }
 
@@ -41,8 +54,15 @@ export interface SandboxPlan {
   readonly egress: EgressDecision;
 }
 
-/** A stock base image works — the Nix closure carries its own glibc/std (ADR 0008). */
-const DEFAULT_IMAGE = "docker.io/library/debian:bookworm";
+/**
+ * The dustcastle-owned agent image (built once via {@link ensureAgentImage}): it
+ * ships the agent harness (git, bd, pi) and a writable, keep-id-aligned `agent`
+ * user, while the language Toolchain still comes from the Nix closure mounted at
+ * /nix/store (ADR 0008). A stock base image has no `agent` user/writable home, so
+ * sandcastle's `git config --global` step can't run in it — hence dustcastle owns
+ * this image the way it owns nix-portable.
+ */
+const DEFAULT_IMAGE = AGENT_IMAGE;
 
 /**
  * Plan the Sandbox for a provisioned project (ADR 0002): bind-mount the Store
@@ -72,7 +92,12 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     network: egress.kind === "none" ? "none" : EGRESS_NETWORK,
   };
 
-  return { podmanOptions, setupCommands: setupFor(detection, provisioned, egress), egress };
+  // Impurity (how deps are staged) is decided independently of egress (ADR 0010):
+  // an empty depsStorePath means the impure path realized only the Toolchain, so
+  // deps install in-container. A caller may force it explicitly (tests).
+  const impure = spec.impure ?? provisioned.depsStorePath === "";
+
+  return { podmanOptions, setupCommands: setupFor(detection, provisioned, impure), egress };
 }
 
 /** The run environment per ecosystem: Toolchain on PATH + writable caches off the RO Store. */
@@ -80,7 +105,9 @@ function envFor(ecosystem: Detection["ecosystem"], toolchainStorePath: string): 
   const bin = `${toolchainStorePath}/bin`;
   if (ecosystem === "node") {
     return {
-      PATH: `${bin}:/usr/bin:/bin`,
+      // Nix Toolchain first (the PROJECT's node/go/python wins), then /usr/local/bin
+      // where the image's agent harness lives (bd/pi — the implement phase shells `bd`).
+      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
       // The Store is read-only; npm's cache + home must point somewhere writable.
       NPM_CONFIG_CACHE: "/tmp/npm-cache",
       XDG_CACHE_HOME: "/tmp/.cache",
@@ -92,7 +119,9 @@ function envFor(ecosystem: Detection["ecosystem"], toolchainStorePath: string): 
     // assembled site-packages are staged into ./site (see setupFor) and reached
     // via PYTHONPATH. The Store is read-only, so pip's cache points to /tmp.
     return {
-      PATH: `${bin}:/usr/bin:/bin`,
+      // Nix Toolchain first (the PROJECT's node/go/python wins), then /usr/local/bin
+      // where the image's agent harness lives (bd/pi — the implement phase shells `bd`).
+      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
       PYTHONPATH: "site",
       PIP_CACHE_DIR: "/tmp/pip-cache",
       XDG_CACHE_HOME: "/tmp/.cache",
@@ -125,12 +154,14 @@ const IMPURE_INSTALL: Readonly<Record<string, string>> = {
 };
 
 /** The per-project sandbox-ready setup: stage deps from the Store, or install impurely. */
-function setupFor(detection: Detection, provisioned: Provisioned, egress: EgressDecision): string[] {
+function setupFor(detection: Detection, provisioned: Provisioned, impure: boolean): string[] {
   if (detection.ecosystem === "node") {
-    if (egress.kind === "allowlist") {
+    if (impure) {
       // Impure `allow`: install in the container (lifecycle scripts included)
       // under the scoped egress network, with the manager that signalled. This is
-      // where untrusted postinstall actually runs.
+      // where untrusted postinstall actually runs. Keyed on impurity, NOT on the
+      // egress shape (ADR 0010) — a pure build may also carry an allowlist for the
+      // agent's model host, but still stages its deps from the Store.
       return [IMPURE_INSTALL[detection.packageManager] ?? "npm ci"];
     }
     // Pure: copy the offline-assembled node_modules out of the read-only Store.

@@ -45,3 +45,17 @@ _Avoid_: builder, generator, lang2nix (reserve "Importer")
 **Ecosystem Registry**:
 The single, closed, internally-curated set of Ecosystem + Package Manager descriptors that the detect/store/impurity/pin/nix sites all *derive* from, so per-Ecosystem knowledge is owned in one place rather than smeared across dispatch sites. **Internal curation, not a user-facing plugin system** (ADR 0001): closed and vetted, so adding an Ecosystem is dustcastle's deep, local change — the user never configures one. A gated Package Manager (the bun gate) is a first-class, honest state in the Registry, not an ad-hoc throw.
 _Avoid_: catalog, plugin system, provider registry
+
+### Network access (ADR 0005 / 0010)
+
+**Egress**:
+What a Sandbox can reach over the network — always an **allowlist** enforced by a filtering proxy, never unrestricted internet (ADR 0005). It is the union of two independently-derived sources, **Build Egress** and **Agent Egress**; a pure build with no agent reaches nothing at all (`none`). The proxy receives only the deduped union — the build/agent split is provenance for humans, not something the proxy sees.
+_Avoid_: network access, internet (reserve "Egress")
+
+**Build Egress**:
+The hosts the *build itself* needs — the package registry the Package Manager names, plus the repo's git host — derived from detection (ADR 0006), present **only on an impure build**. A pure build's Project Deps are pre-assembled offline in the Store, so it needs no Build Egress at all. This is ADR 0005's original derived allowlist.
+_Avoid_: build network, registry allowlist
+
+**Agent Egress**:
+The single host the *coding agent itself* needs — its model provider's API endpoint, mapped from pi's configured `provider/model`. Present whenever an agent will run, **regardless of build purity**. The carve-out (ADR 0010) that lets the in-sandbox agent reach its LLM even on a pure, offline build: the build still reaches no host it would ever use (registries/git stay blocked), but the agent reaches its model. Distinct from Build Egress because the agent's need has nothing to do with how deps were built.
+_Avoid_: LLM access, model network, provider allowlist
