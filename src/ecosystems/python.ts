@@ -1,4 +1,10 @@
 import { generatePythonBuild } from "../nix/python.js";
+import {
+  DEFAULT_PYTHON_INTERPRETERS,
+  parsePythonVersionFile,
+  readRequiresPython,
+  resolvePythonInterpreter,
+} from "./python-version.js";
 import type { EcosystemDescriptor, PackageManagerDescriptor } from "./types.js";
 
 /**
@@ -46,6 +52,16 @@ export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
   // A single Package Manager in this tracer slice (uv/poetry are later children).
   managers: ["pip"],
   defaultManager: "pip",
-  // No declared-manager resolver and no toolchain-version reader yet: those are
-  // later slices (the .python-version + requires-python resolver is laimk-hse.3).
+  // No declared-manager resolver: Python has one Package Manager in v1 (pip).
+  // The Toolchain version comes from `.python-version` (an exact minor pin) and/or
+  // pyproject's `requires-python` range (ADR 0006b), resolved against the pinned
+  // nixpkgs' interpreter set by the standalone pure resolver (laimk-hse.3). The
+  // resolver returns the nixpkgs interpreter attr (`python312`); an EOL/missing
+  // minor surfaces as an ACTIONABLE error rather than a silent fallback.
+  readToolchainVersion: ({ manifest, readVersionFile }) =>
+    resolvePythonInterpreter({
+      pythonVersion: parsePythonVersionFile(readVersionFile(".python-version")),
+      requiresPython: readRequiresPython(manifest),
+      available: DEFAULT_PYTHON_INTERPRETERS,
+    }),
 };

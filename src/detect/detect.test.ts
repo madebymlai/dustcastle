@@ -266,6 +266,26 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "pip" });
   });
 
+  it("provisions against the .python-version interpreter (laimk-hse.3, ADR 0006b)", () => {
+    // A repo declaring 3.11 (patch dropped) provisions against that interpreter —
+    // the resolver maps it to the nixpkgs attr the Importer stages.
+    const dir = repo({
+      "requirements.txt": PINNED_REQUIREMENTS,
+      ".python-version": "3.11.9\n",
+    });
+
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", toolchainVersion: "python311" });
+  });
+
+  it("resolves the highest satisfying minor from pyproject requires-python (laimk-hse.3)", () => {
+    const dir = repo({
+      "pyproject.toml": '[project]\nname = "app"\nrequires-python = ">=3.10,<3.12"\n',
+      "requirements.txt": PINNED_REQUIREMENTS,
+    });
+
+    expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", toolchainVersion: "python311" });
+  });
+
   it("surfaces Python alongside Node in a polyglot repo (per-directory, ADR 0006d)", () => {
     const dir = repo({
       "package.json": JSON.stringify({ name: "app" }),

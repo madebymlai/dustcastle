@@ -244,5 +244,42 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       });
       expect(version).toBe("1.26");
     });
+
+    describe("python resolves its Toolchain interpreter (laimk-hse.3)", () => {
+      const python = ecosystemFor("python");
+
+      it("honours an exact .python-version pin (patch dropped) as a nixpkgs attr", () => {
+        const attr = python.readToolchainVersion?.({
+          manifest: undefined,
+          readVersionFile: (name) => (name === ".python-version" ? "3.11.9\n" : undefined),
+        });
+        expect(attr).toBe("python311");
+      });
+
+      it("resolves the highest satisfying stable minor from pyproject requires-python", () => {
+        const attr = python.readToolchainVersion?.({
+          manifest: '[project]\nrequires-python = ">=3.10,<3.12"\n',
+          readVersionFile: () => undefined,
+        });
+        expect(attr).toBe("python311");
+      });
+
+      it("defaults to python3 when neither a version file nor requires-python constrains it", () => {
+        const attr = python.readToolchainVersion?.({
+          manifest: undefined,
+          readVersionFile: () => undefined,
+        });
+        expect(attr).toBe("python3");
+      });
+
+      it("surfaces an actionable error for an EOL/missing pinned minor (no silent fallback)", () => {
+        expect(() =>
+          python.readToolchainVersion?.({
+            manifest: undefined,
+            readVersionFile: (name) => (name === ".python-version" ? "3.8" : undefined),
+          }),
+        ).toThrow(/3\.8/);
+      });
+    });
   });
 });
