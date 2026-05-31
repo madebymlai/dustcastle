@@ -136,6 +136,63 @@ describe("planSandbox — Node pure path (ADR 0002/0004/0005)", () => {
   });
 });
 
+describe("planSandbox — staging dir excluded from the worktree's git (dustcastle-8dk)", () => {
+  // dustcastle stages deps into a worktree-relative dir (node_modules/site/vendor).
+  // That dir is a re-staged build artifact, never project state — so it must be
+  // excluded from the worktree's git, or the agent's `git add` (and sandcastle's
+  // untracked-sync, which honours --exclude-standard) would capture the staged deps,
+  // bloating the reviewer's `git diff` and leaking them on merge. We register it in
+  // the worktree's `.git/info/exclude` (NOT the project's tracked .gitignore) as the
+  // first setup step, before staging — keyed on the SAME stageDir the staging reads.
+  it("excludes node_modules in the worktree's git before staging it", () => {
+    const setup = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).setupCommands;
+    const joined = setup.join("\n");
+
+    // Targets the worktree's git exclude file, not the project's tracked .gitignore.
+    expect(setup[0]).toContain("git rev-parse --git-path info/exclude");
+    // The active Ecosystem's staging dir is what gets excluded.
+    expect(setup[0]).toContain("node_modules");
+    // Excluded BEFORE the deps are staged in (so a fresh stage is never trackable).
+    expect(joined.indexOf("info/exclude")).toBeLessThan(joined.indexOf("cp -RL"));
+  });
+
+  it("excludes node_modules before installing it on the impure path too", () => {
+    // An impure build installs node_modules in the container — still a build
+    // artifact, so it must be excluded just like the pure-staged copy.
+    const setup = planSandbox({ provisioned: impureProvisioned, detection: nodeDetection }).setupCommands;
+    const joined = setup.join("\n");
+
+    expect(setup[0]).toContain("info/exclude");
+    expect(setup[0]).toContain("node_modules");
+    // Excluded BEFORE the in-container install runs.
+    expect(joined.indexOf("info/exclude")).toBeLessThan(joined.indexOf("npm ci"));
+  });
+
+  it("excludes vendor for a go build (the staging dir is read from the Registry)", () => {
+    // `provisioned`/`detection` are the go fixtures: the exclude tracks go's stageDir.
+    const setup = planSandbox({ provisioned, detection }).setupCommands;
+    expect(setup[0]).toContain("info/exclude");
+    expect(setup[0]).toContain("vendor");
+  });
+
+  it("excludes site for a python build", () => {
+    const pythonPure: Provisioned = { ...provisioned, depsStorePath: "/nix/store/pppp-py-deps" };
+    const setup = planSandbox({
+      provisioned: pythonPure,
+      detection: { ecosystem: "python", packageManager: "pip" },
+    }).setupCommands;
+    expect(setup[0]).toContain("info/exclude");
+    expect(setup[0]).toContain("site");
+  });
+
+  it("appends idempotently — only when the entry is not already present", () => {
+    // Re-staging on every sandbox-ready must not pile duplicate lines into the
+    // exclude: the command greps for the entry and appends only on a miss.
+    const setup = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).setupCommands;
+    expect(setup[0]).toMatch(/grep -qxF '[^']+'[^|]*\|\|[^>]*>>/);
+  });
+});
+
 describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
   const impureEgress = {
     kind: "allowlist",
@@ -165,12 +222,14 @@ describe("planSandbox — Node impure `allow` path (ADR 0004/0005)", () => {
   it("installs with the detected manager, frozen to the lockfile (slice 2b)", () => {
     // The impure install must use the manager that signalled — and from the
     // committed lockfile (frozen/immutable), so an impure build still can't drift.
+    // The install is the last command — the worktree git-exclude (dustcastle-8dk)
+    // is prepended ahead of it (and asserted separately).
     const cmd = (packageManager: PackageManager) =>
       planSandbox({
         provisioned: impureProvisioned,
         detection: { ecosystem: "node", packageManager },
         egress: impureEgress,
-      }).setupCommands.join("\n");
+      }).setupCommands.at(-1);
 
     expect(cmd("pnpm")).toBe("pnpm install --frozen-lockfile");
     expect(cmd("yarn")).toBe("yarn install --frozen-lockfile");
@@ -243,20 +302,21 @@ describe("planSandbox — Python impure path stages into ./site (dustcastle-bbg.
 
   it("pip installs its committed requirements straight into ./site (no empty cp)", () => {
     const cmds = setup("pip");
-    expect(cmds).toEqual(["pip install --require-hashes -r requirements.txt --target site"]);
+    // The install commands follow the prepended worktree git-exclude (dustcastle-8dk).
+    expect(cmds.slice(1)).toEqual(["pip install --require-hashes -r requirements.txt --target site"]);
     // It must NOT fall through to the pure branch, which would cp from the empty path.
     expect(cmds.join("\n")).not.toContain("cp -RL");
   });
 
   it("uv exports its hash-pinned requirements first, then installs them into ./site", () => {
-    expect(setup("uv")).toEqual([
+    expect(setup("uv").slice(1)).toEqual([
       "uv export --format requirements-txt -o requirements.txt",
       "pip install --require-hashes -r requirements.txt --target site",
     ]);
   });
 
   it("poetry exports its hash-pinned requirements first, then installs them into ./site", () => {
-    expect(setup("poetry")).toEqual([
+    expect(setup("poetry").slice(1)).toEqual([
       "poetry export --format requirements.txt -o requirements.txt",
       "pip install --require-hashes -r requirements.txt --target site",
     ]);

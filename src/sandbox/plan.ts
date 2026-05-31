@@ -113,6 +113,12 @@ function envFor(ecosystem: Detection["ecosystem"], toolchainStorePath: string): 
 
 /** The per-project sandbox-ready setup: stage deps from the Store, or install impurely. */
 function setupFor(detection: Detection, provisioned: Provisioned, impure: boolean): string[] {
+  // Whether staged (pure) or installed (impure), deps land in the Ecosystem's
+  // `stageDir` — a re-staged build artifact, never project state. Exclude it from
+  // the worktree's git FIRST so the agent's `git add` and sandcastle's untracked-
+  // sync never capture it (dustcastle-8dk). Same `stageDir` both paths populate.
+  const { sandbox } = ecosystemFor(detection.ecosystem);
+  const exclude = gitExclude(sandbox.stageDir);
   if (impure) {
     // Impure `allow`: install in the container (lifecycle scripts included) under
     // the scoped egress network, with the manager that signalled — this is where
@@ -132,13 +138,29 @@ function setupFor(detection: Detection, provisioned: Provisioned, impure: boolea
           `command (it has no impuritySignal and can never go impure) — refusing to mis-stage.`,
       );
     }
-    return [...impureInstall];
+    return [exclude, ...impureInstall];
   }
   // Pure: stage the offline-assembled deps out of the read-only Store, driven by
   // the Ecosystem's `sandbox` facet (ADR 0002) — node_modules for node, site for
   // python (PYTHONPATH points there), vendor for go. The knowledge of WHAT to copy
   // lives on the descriptor, not in a per-Ecosystem `if` ladder here.
-  return stageCommands(ecosystemFor(detection.ecosystem).sandbox, provisioned.depsStorePath);
+  return [exclude, ...stageCommands(sandbox, provisioned.depsStorePath)];
+}
+
+/**
+ * Register a worktree-relative staging dir in the worktree's git exclude
+ * (`$GIT_DIR/info/exclude`, NOT the project's tracked `.gitignore`), idempotently.
+ * The staged deps are a re-staged build artifact, never project state — excluding
+ * them keeps the agent's `git add` AND sandcastle's untracked-sync (which runs
+ * `git ls-files --others --exclude-standard`) from ever capturing them, so they
+ * can't bloat the reviewer's `git diff` or leak on merge. Derived from the SAME
+ * `stageDir` the staging copies into — one source, no parallel ignore list.
+ */
+function gitExclude(stageDir: string): string {
+  return (
+    `f="$(git rev-parse --git-path info/exclude)"; ` +
+    `grep -qxF '${stageDir}' "$f" 2>/dev/null || printf '%s\\n' '${stageDir}' >> "$f"`
+  );
 }
 
 /**
