@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CARGO_HOME_BASENAME } from "../nix/rust.js";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 import type { Provisioned } from "../store/index.js";
@@ -96,6 +97,31 @@ const impureProvisioned: Provisioned = {
   depsHash: "",
 };
 
+const rustProvisioned: Provisioned = {
+  mode: "bwrap",
+  physStoreRoot: "/home/agent/.nix-portable/nix/store",
+  toolchainStorePath: "/nix/store/rrrr-rust-toolchain",
+  depsStorePath: "/nix/store/dddd-sample-cargo-deps",
+  appStorePath: "/nix/store/aaaa-sample",
+  depsHash: "sha256-tuEfyePwlOy2/mOPdXbqJskO6IowvAP4DWg8xSZwbJw=",
+};
+const rustDetection: Detection = { ecosystem: "rust", packageManager: "cargo" };
+
+describe("planSandbox — Rust pure path (dustcastle-gy5.2)", () => {
+  it("stages CARGO_HOME from the Store and runs Cargo offline with no egress", () => {
+    const plan = planSandbox({ provisioned: rustProvisioned, detection: rustDetection });
+    const setup = plan.setupCommands.join("\n");
+    const env = plan.podmanOptions.env ?? {};
+
+    expect(plan.podmanOptions.network).toBe("none");
+    expect(plan.egress).toEqual({ kind: "none" });
+    expect(setup).toContain(`cp -RL ${rustProvisioned.depsStorePath} ${CARGO_HOME_BASENAME}`);
+    expect(env.PATH).toContain(`${rustProvisioned.toolchainStorePath}/bin`);
+    expect(env.CARGO_HOME).toBe(CARGO_HOME_BASENAME);
+    expect(env.CARGO_NET_OFFLINE).toBe("true");
+  });
+});
+
 describe("planSandbox — Node pure path (ADR 0002/0004/0005)", () => {
   it("puts the nodejs Toolchain on PATH with a writable npm cache off the RO Store", () => {
     const env = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection })
@@ -182,6 +208,16 @@ describe("planSandbox — staging dir excluded from the worktree's git (dustcast
     }).setupCommands;
     expect(setup[0]).toContain("info/exclude");
     expect(setup[0]).toContain("site");
+  });
+
+  it("excludes the staged CARGO_HOME basename for a rust build", () => {
+    const rustPure: Provisioned = { ...provisioned, depsStorePath: "/nix/store/rrrr-cargo-deps" };
+    const setup = planSandbox({
+      provisioned: rustPure,
+      detection: { ecosystem: "rust", packageManager: "cargo" },
+    }).setupCommands;
+    expect(setup[0]).toContain("info/exclude");
+    expect(setup[0]).toContain(CARGO_HOME_BASENAME);
   });
 
   it("appends idempotently — only when the entry is not already present", () => {

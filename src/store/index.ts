@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Detection } from "../detect/index.js";
+import { CARGO_HOME_BASENAME } from "../nix/rust.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
 import { parseStorePath, parseVendorHashMismatch } from "./parse.js";
 import { physPath } from "./paths.js";
@@ -196,6 +197,7 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
 const STAGE_SKIP: ReadonlySet<string> = new Set([
   ".git",
   "vendor",
+  CARGO_HOME_BASENAME,
   "result",
   "node_modules",
   ".venv",

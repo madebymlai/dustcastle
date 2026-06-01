@@ -9,7 +9,7 @@ import { deriveEgress, egressHosts, parseGitRemoteHost } from "./egress.js";
 
 describe("deriveEgress — Build Egress (ADR 0005 derived allowlist)", () => {
   it("closes egress entirely for a pure build with no agent — no network at all", () => {
-    for (const packageManager of ["npm", "pnpm", "yarn", "go"]) {
+    for (const packageManager of ["npm", "pnpm", "yarn", "go", "cargo"]) {
       expect(deriveEgress({ packageManager, impure: false })).toEqual({ kind: "none" });
     }
   });

@@ -94,6 +94,19 @@ export function stageWorkspaceProject(root: string): { root: string; members: st
   return { root: wsRoot, members };
 }
 
+// The committed Rust sample (dustcastle-gy5.2): a tiny Cargo crate with a
+// committed Cargo.lock and an in-crate `cargo test` gate. The pure Cargo importer
+// vendors deps into the Store and the Sandbox stages them as CARGO_HOME.
+export const RUST_SAMPLE = resolve(process.cwd(), "test/fixtures/rust-sample");
+
+/** Stage the Rust sample under a "sample"-named dir (pname matches the fixture crate). */
+export function stageRustProject(root: string): string {
+  const projectDir = join(root, "sample");
+  mkdirSync(projectDir);
+  cpSync(RUST_SAMPLE, projectDir, { recursive: true });
+  return projectDir;
+}
+
 // The committed Python sample (slice laimk-hse.2): a hash-pinned, wheels-only
 // requirements.txt (idna + urllib3, both pure-Python wheels → pip-FOD pure path)
 // + a `python -m pytest` gate. Signalled by requirements.txt so detection routes

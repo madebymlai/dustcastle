@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CARGO_HOME_BASENAME } from "../nix/rust.js";
 import {
   ECOSYSTEMS,
   PACKAGE_MANAGERS,
@@ -14,12 +15,22 @@ import {
 // onto the Registry without changing behavior.
 
 describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
-  it("exposes the closed Ecosystem list, ordered go then node then python", () => {
-    expect(ECOSYSTEMS.map((e) => e.ecosystem)).toEqual(["go", "node", "python"]);
+  it("exposes the closed Ecosystem list, ordered go then node then python then rust", () => {
+    expect(ECOSYSTEMS.map((e) => e.ecosystem)).toEqual(["go", "node", "python", "rust"]);
   });
 
-  it("curates exactly the eight known Package Managers", () => {
-    expect([...PACKAGE_MANAGERS].sort()).toEqual(["bun", "go", "npm", "pip", "pnpm", "poetry", "uv", "yarn"]);
+  it("curates exactly the nine known Package Managers", () => {
+    expect([...PACKAGE_MANAGERS].sort()).toEqual([
+      "bun",
+      "cargo",
+      "go",
+      "npm",
+      "pip",
+      "pnpm",
+      "poetry",
+      "uv",
+      "yarn",
+    ]);
   });
 
   describe.each(PACKAGE_MANAGERS)("Package Manager descriptor: %s", (pm) => {
@@ -55,6 +66,13 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       const build = packageManagerDescriptor("go").generateBuild({ pname: "p", depsHash: "sha256-AAA=" });
       expect(build.attrs.toolchain).toBe("go");
     });
+
+    it("cargo realizes the Rust toolchain attr", () => {
+      const build = packageManagerDescriptor("cargo").generateBuild({ pname: "p", depsHash: "sha256-AAA=" });
+      expect(build.attrs.toolchain).toBe("toolchain");
+      expect(build.expression).toContain("fetchCargoVendor");
+      expect(build.expression).toContain('cargoHash = "sha256-AAA="');
+    });
   });
 
   describe("the bun gate is a first-class honest state (ADR 0001), not an ad-hoc throw", () => {
@@ -65,7 +83,7 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(gate?.reason).toMatch(/no canonical|not yet supported/i);
     });
 
-    it.each(["npm", "pnpm", "yarn", "go"] as const)("%s has no provisionGate", (pm) => {
+    it.each(["npm", "pnpm", "yarn", "go", "cargo"] as const)("%s has no provisionGate", (pm) => {
       expect(packageManagerDescriptor(pm).provisionGate).toBeUndefined();
     });
   });
@@ -109,6 +127,10 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       // Go has no impure install scripts; a manager with no signal is always pure.
       expect(packageManagerDescriptor("go").impuritySignal).toBeUndefined();
     });
+
+    it("cargo has no impuritySignal — it builds pure unconditionally", () => {
+      expect(packageManagerDescriptor("cargo").impuritySignal).toBeUndefined();
+    });
   });
 
   describe("the frozen impureInstall is present iff impurity is reachable (dustcastle-bbg.3)", () => {
@@ -125,8 +147,9 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(d.impureInstall !== undefined).toBe(d.impuritySignal !== undefined);
     });
 
-    it("go alone has neither (it builds pure unconditionally)", () => {
+    it("go and cargo have neither (they build pure unconditionally)", () => {
       expect(packageManagerDescriptor("go").impureInstall).toBeUndefined();
+      expect(packageManagerDescriptor("cargo").impureInstall).toBeUndefined();
     });
 
     describe("node managers install strictly from the committed lockfile (frozen/immutable)", () => {
@@ -198,9 +221,9 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       if (r?.kind === "gated") expect(r.reason).toMatch(/yarn/i);
     });
 
-    it.each(["bun", "go"] as const)("%s has no lockOnlyResolve", (pm) => {
-      // bun is gated at provision; go's manifests ARE its lockfile (always pinned),
-      // so neither needs a loose-manifest resolve.
+    it.each(["bun", "go", "cargo"] as const)("%s has no lockOnlyResolve", (pm) => {
+      // bun is gated at provision; go/cargo lockfile-only resolve live outside
+      // this pure happy-path slice.
       expect(packageManagerDescriptor(pm).lockOnlyResolve).toBeUndefined();
     });
 
@@ -410,6 +433,14 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(go.manifests).toEqual(["go.mod", "go.sum"]);
     });
 
+    it("rust's manifest markers are Cargo.toml/Cargo.lock and its sole manager is cargo", () => {
+      const rust = ecosystemFor("rust");
+      expect(rust.managers).toEqual(["cargo"]);
+      expect(rust.defaultManager).toBe("cargo");
+      expect(rust.manifests).toEqual(["Cargo.toml", "Cargo.lock"]);
+      expect(packageManagerDescriptor("cargo").lockfiles).toEqual(["Cargo.lock"]);
+    });
+
     describe("each Ecosystem carries its pure-staging sandbox facet (ADR 0002)", () => {
       // The PURE-path staging knowledge — which worktree dir deps land in and which
       // subpath of the deps Store to copy from — lives on the descriptor, not in a
@@ -427,6 +458,11 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       it("go stages vendor from the WHOLE deps Store path (no subpath — the store path IS vendor)", () => {
         const { stageDir, storeSubpath } = ecosystemFor("go").sandbox;
         expect({ stageDir, storeSubpath }).toEqual({ stageDir: "vendor", storeSubpath: "" });
+      });
+
+      it("rust stages the CARGO_HOME basename from the WHOLE deps Store path", () => {
+        const { stageDir, storeSubpath } = ecosystemFor("rust").sandbox;
+        expect({ stageDir, storeSubpath }).toEqual({ stageDir: CARGO_HOME_BASENAME, storeSubpath: "" });
       });
     });
 
@@ -465,6 +501,15 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
           CGO_ENABLED: "0",
           GOCACHE: "/tmp/gocache",
           GOENV: "off",
+        });
+      });
+
+      it("rust points Cargo at the staged CARGO_HOME and forces offline mode", () => {
+        expect(ecosystemFor("rust").sandbox.env(bin)).toEqual({
+          PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+          CARGO_HOME: CARGO_HOME_BASENAME,
+          CARGO_NET_OFFLINE: "true",
+          CARGO_TARGET_DIR: "/tmp/cargo-target",
         });
       });
     });

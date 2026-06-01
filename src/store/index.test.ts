@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { CARGO_HOME_BASENAME } from "../nix/rust.js";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 import { isStageableSource, provisionStore, stageSource } from "./index.js";
@@ -68,9 +69,10 @@ describe("isStageableSource (the staged-build-source filter)", () => {
     }
   });
 
-  it("excludes per-ecosystem dependency dirs (node_modules, vendor)", () => {
+  it("excludes per-ecosystem dependency dirs (node_modules, vendor, staged CARGO_HOME)", () => {
     expect(isStageableSource("/proj/node_modules")).toBe(false);
     expect(isStageableSource("/proj/vendor")).toBe(false);
+    expect(isStageableSource(`/proj/${CARGO_HOME_BASENAME}`)).toBe(false);
   });
 
   it("excludes Python envs and dev caches (.venv and the rest — the node_modules analogues)", () => {

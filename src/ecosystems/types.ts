@@ -17,14 +17,14 @@ import type { NixBuild } from "../nix/go.js";
  */
 
 /** A language world dustcastle can provision (CONTEXT.md glossary: Ecosystem). */
-export type Ecosystem = "node" | "go" | "python";
+export type Ecosystem = "node" | "go" | "python" | "rust";
 
 /**
  * The specific tool within an Ecosystem that owns a repo's dependency resolution
  * (CONTEXT.md: Package Manager). A closed union — the lockfile names one of these,
  * which selects the Importer. Go is still a Package Manager, not a special case.
  */
-export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip" | "uv" | "poetry";
+export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip" | "uv" | "poetry" | "cargo";
 
 /**
  * What detection concludes about one directory: which Ecosystem it is, the
@@ -212,7 +212,7 @@ export interface SandboxStaging {
   readonly storeSubpath: string;
   /**
    * The run environment for this Ecosystem given the Toolchain `bin` directory:
-   * the Toolchain on PATH (the project's node/go/python wins, ahead of the
+   * the Toolchain on PATH (the project's node/go/python/rust wins, ahead of the
    * agent harness in /usr/local/bin) plus the writable cache vars that must point
    * off the read-only Store (node's NPM_CONFIG_CACHE/XDG_CACHE_HOME, python's
    * PYTHONPATH/PIP_CACHE_DIR, go's GOFLAGS/GOPROXY/GOCACHE/etc.). `envFor`
