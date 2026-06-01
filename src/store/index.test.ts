@@ -31,6 +31,14 @@ function stagedProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "dustcastle-store-dispatch-"));
   tmps.push(dir);
   writeFileSync(join(dir, "package.json"), "{}");
+  // provisionStore stages the COMMITTED tree, so the fixture must be a committed git
+  // repo to get past staging and reach the dispatch/gate logic these tests pin.
+  const git = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  git("init", "-q");
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "t");
+  git("add", "-A");
+  git("commit", "-q", "-m", "init");
   return dir;
 }
 
@@ -191,28 +199,21 @@ describe("stageSource (stages the committed tree so the deps hash is reproducibl
     expect(lstatSync(join(src, "link.txt")).isSymbolicLink()).toBe(true);
   });
 
-  it("falls back to a filtered copy outside a git work tree", () => {
+  it("errors with an actionable 'commit first' message outside a git work tree", () => {
+    // No working-dir fallback: a non-git project has no committed source to build.
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-stage-nogit-"));
     tmps.push(dir);
     writeFileSync(join(dir, "package.json"), "{}");
-    mkdirSync(join(dir, "node_modules"));
-    writeFileSync(join(dir, "node_modules", "x.js"), "x");
-    const src = destDir();
-    stageSource(dir, src); // no .git → fallback path
-    expect(existsSync(join(src, "package.json"))).toBe(true);
-    expect(existsSync(join(src, "node_modules"))).toBe(false);
+    expect(() => stageSource(dir, destDir())).toThrowError(/nothing committed to stage.*commit/s);
   });
 
-  it("falls back to a filtered copy in a git repo with no commit yet (no HEAD)", () => {
+  it("errors with an actionable 'commit first' message in a git repo with no commit yet", () => {
+    // A work tree exists, but `git archive HEAD` has nothing to read — surface it as
+    // a user error to fix (commit), never silently build the uncommitted working tree.
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-stage-nohead-"));
     tmps.push(dir);
-    git(dir, "init", "-q"); // a work tree, but `git archive HEAD` has nothing to read
+    git(dir, "init", "-q");
     writeFileSync(join(dir, "package.json"), "{}");
-    mkdirSync(join(dir, "node_modules"));
-    writeFileSync(join(dir, "node_modules", "x.js"), "x");
-    const src = destDir();
-    stageSource(dir, src);
-    expect(existsSync(join(src, "package.json"))).toBe(true);
-    expect(existsSync(join(src, "node_modules"))).toBe(false);
+    expect(() => stageSource(dir, destDir())).toThrowError(/nothing committed to stage.*commit/s);
   });
 });

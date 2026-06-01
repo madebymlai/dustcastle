@@ -1,12 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Detection } from "../detect/index.js";
 import { CARGO_HOME_BASENAME } from "../nix/rust.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
 import { parseStorePath, parseVendorHashMismatch } from "./parse.js";
-import { physPath } from "./paths.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
 
 export { physPath } from "./paths.js";
@@ -230,17 +229,14 @@ export function isStageableSource(path: string): boolean {
  * `.beads/.beads/.gitignore` crash). The tradeoff is sandcastle's exact contract:
  * uncommitted edits to tracked files are not built until committed.
  *
- * Falls back to a filtered working-dir copy when there is no committed tree to read
- * (not a git work tree, or a repo with no commit yet).
+ * There is no working-dir fallback: when nothing is committed (not a git work tree,
+ * or a repo with no commit yet) staging fails with an actionable "commit first"
+ * error rather than silently building the dirty working tree — that would smuggle
+ * untracked files back in, the exact thing the committed-tree model removes.
  */
 export function stageSource(projectDir: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
-  if (!archiveCommittedTree(projectDir, dest)) {
-    // No committed tree to read: best-effort copy of the working dir, still dropping
-    // rebuild artifacts. Tracked-only is unenforceable with nothing committed.
-    cpSync(projectDir, dest, { recursive: true, filter: isStageableSource });
-    return;
-  }
+  archiveCommittedTree(projectDir, dest);
   // Drop tracked rebuild artifacts (node_modules / vendor / __pycache__ / …) that the
   // committed tree may carry — applied on TOP of the checkout, same intent as before.
   pruneRebuildArtifacts(dest);
@@ -249,11 +245,12 @@ export function stageSource(projectDir: string, dest: string): void {
 /**
  * Materialize the committed tree at HEAD into `dest` via `git archive` piped through
  * `tar` (a temp tarball keeps huge trees off the heap; symlinks — even dangling ones
- * — survive as the link entries git stored). Returns false when there is no committed
- * tree to read (not a git work tree, git unavailable, or no commit yet) so the caller
- * falls back; throws only if extraction of a real archive fails.
+ * — survive as the link entries git stored). Throws an actionable "commit first"
+ * error when there is no committed tree to read (not a git work tree, git
+ * unavailable, or no commit yet) — dustcastle builds the committed source, so an
+ * empty/uncommitted project is a user error to surface, not to paper over.
  */
-function archiveCommittedTree(projectDir: string, dest: string): boolean {
+function archiveCommittedTree(projectDir: string, dest: string): void {
   const tarDir = mkdtempSync(join(tmpdir(), "dustcastle-archive-"));
   const tarPath = join(tarDir, "src.tar");
   try {
@@ -262,12 +259,17 @@ function archiveCommittedTree(projectDir: string, dest: string): boolean {
       ["-C", projectDir, "archive", "--format=tar", "-o", tarPath, "HEAD"],
       { encoding: "utf8" },
     );
-    if (archive.status !== 0) return false;
+    if (archive.status !== 0) {
+      throw new Error(
+        "store: nothing committed to stage — dustcastle builds the project's committed source. " +
+          "Run `git init` if needed, then `git add -A && git commit` before provisioning." +
+          (archive.stderr.trim() ? `\n(git archive HEAD: ${archive.stderr.trim()})` : ""),
+      );
+    }
     const extract = spawnSync("tar", ["-xf", tarPath, "-C", dest], { encoding: "utf8" });
     if (extract.status !== 0) {
       throw new Error(`store: failed to extract committed tree:\n${extract.stderr}`);
     }
-    return true;
   } finally {
     rmSync(tarDir, { recursive: true, force: true });
   }
