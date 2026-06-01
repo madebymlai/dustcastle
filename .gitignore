@@ -29,4 +29,9 @@ spike-go-store/
 .dolt/
 *.db
 .beads-credential-key
-.beads/proxieddb/
+# beads runs purely local here: its dir (issue JSONL, Dolt DB, hooks, config) is
+# git-excluded rather than git-synced. core.hooksPath is unset to match, so the
+# beads commit hooks don't try to stage these now-ignored files.
+/.beads/
+# Local beads downgrade backup (clutter, never tracked).
+/.beads.bak-pre-downgrade/

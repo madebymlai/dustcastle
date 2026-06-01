@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "dustcastle",
-  "project_id": "5f4fac54-f53f-4e9f-9e8e-1110cc7ea062"
-}
