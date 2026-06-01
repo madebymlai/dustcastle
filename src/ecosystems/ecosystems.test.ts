@@ -555,14 +555,14 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       const rust = ecosystemFor("rust");
 
       it("honours rust-toolchain.toml [toolchain] channel before legacy rust-toolchain", () => {
+        const versionFiles: Record<string, string | undefined> = {
+          "rust-toolchain.toml": '[toolchain]\nchannel = "1.76.0"\n',
+          "rust-toolchain": "stable\n",
+        };
+
         const version = rust.readToolchainVersion?.({
           manifest: '[package]\nrust-version = "1.70"\n',
-          readVersionFile: (name) =>
-            name === "rust-toolchain.toml"
-              ? '[toolchain]\nchannel = "1.76.0"\n'
-              : name === "rust-toolchain"
-                ? "stable\n"
-                : undefined,
+          readVersionFile: (name) => versionFiles[name],
         });
         expect(version).toBe("1.76.0");
       });

@@ -7,10 +7,19 @@ import { readRustToolchainToml, readRustToolchainVersion } from "./rust-version.
 
 describe("readRustToolchainToml ([toolchain] channel parser)", () => {
   it.each([
-    ['[toolchain]\nchannel = "stable"\n', "stable"],
-    ["[toolchain]\nchannel = 'nightly-2026-01-01' # comment\n", "nightly-2026-01-01"],
-    ['[toolchain]\ncomponents = ["rustfmt"]\nchannel = "1.76.0"\n', "1.76.0"],
-  ])("%s -> %s", (raw, expected) => {
+    {
+      raw: '[toolchain]\nchannel = "stable"\n',
+      expected: "stable",
+    },
+    {
+      raw: "[toolchain]\nchannel = 'nightly-2026-01-01' # comment\n",
+      expected: "nightly-2026-01-01",
+    },
+    {
+      raw: '[toolchain]\ncomponents = ["rustfmt"]\nchannel = "1.76.0"\n',
+      expected: "1.76.0",
+    },
+  ])("reads $expected", ({ raw, expected }) => {
     expect(readRustToolchainToml(raw)).toBe(expected);
   });
 
@@ -23,13 +32,13 @@ describe("readRustToolchainToml ([toolchain] channel parser)", () => {
 });
 
 describe("readRustToolchainVersion (rust-toolchain.toml / legacy rust-toolchain)", () => {
-  const read = (files: Record<string, string | undefined>) => (name: string) => files[name];
+  const readVersionFiles = (files: Record<string, string | undefined>) => (name: string) => files[name];
 
   it("reads rust-toolchain.toml [toolchain] channel first", () => {
     expect(
       readRustToolchainVersion({
         manifest: undefined,
-        readVersionFile: read({
+        readVersionFile: readVersionFiles({
           "rust-toolchain.toml": '[toolchain]\nchannel = "1.76.0"\ncomponents = ["rustfmt"]\n',
           "rust-toolchain": "stable\n",
         }),
@@ -41,7 +50,7 @@ describe("readRustToolchainVersion (rust-toolchain.toml / legacy rust-toolchain)
     expect(
       readRustToolchainVersion({
         manifest: undefined,
-        readVersionFile: read({ "rust-toolchain": "nightly-2026-01-01\n" }),
+        readVersionFile: readVersionFiles({ "rust-toolchain": "nightly-2026-01-01\n" }),
       }),
     ).toBe("nightly-2026-01-01");
   });
@@ -50,7 +59,7 @@ describe("readRustToolchainVersion (rust-toolchain.toml / legacy rust-toolchain)
     expect(
       readRustToolchainVersion({
         manifest: '[package]\nname = "sample"\nrust-version = "1.70"\n',
-        readVersionFile: read({}),
+        readVersionFile: readVersionFiles({}),
       }),
     ).toBeUndefined();
   });
@@ -59,7 +68,7 @@ describe("readRustToolchainVersion (rust-toolchain.toml / legacy rust-toolchain)
     expect(
       readRustToolchainVersion({
         manifest: undefined,
-        readVersionFile: read({}),
+        readVersionFile: readVersionFiles({}),
       }),
     ).toBeUndefined();
   });

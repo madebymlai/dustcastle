@@ -1,41 +1,53 @@
 import type { ToolchainVersionInput } from "./types.js";
 
+const RUST_TOOLCHAIN_TOML = "rust-toolchain.toml";
+const LEGACY_RUST_TOOLCHAIN = "rust-toolchain";
+const TOOLCHAIN_TABLE = "[toolchain]";
+const CHANNEL_KEY = "channel";
+
 /**
- * Read Rust's requested Toolchain channel from rustup's idiomatic version files
- * (dustcastle-gy5.3). `rust-toolchain.toml` wins, then legacy bare
- * `rust-toolchain`. Cargo.toml's `rust-version` is deliberately ignored: it is
- * the MSRV floor, not a concrete Toolchain pin.
+ * Read Rust's requested Toolchain channel from rustup's idiomatic version files.
+ * `rust-toolchain.toml` wins, then legacy bare `rust-toolchain`. Cargo.toml's
+ * `rust-version` is deliberately ignored: it is the MSRV floor, not a pin.
  */
 export function readRustToolchainVersion({ readVersionFile }: ToolchainVersionInput): string | undefined {
-  const tomlChannel = readRustToolchainToml(readVersionFile("rust-toolchain.toml"));
+  const tomlChannel = readRustToolchainToml(readVersionFile(RUST_TOOLCHAIN_TOML));
   if (tomlChannel !== undefined) return tomlChannel;
 
-  const legacy = readVersionFile("rust-toolchain")?.trim();
-  return legacy !== undefined && legacy.length > 0 ? legacy : undefined;
+  return nonEmpty(readVersionFile(LEGACY_RUST_TOOLCHAIN)?.trim());
 }
 
 /** Read `[toolchain] channel = "..."` from rust-toolchain.toml. */
 export function readRustToolchainToml(text: string | undefined): string | undefined {
   if (text === undefined) return undefined;
 
-  const lines = text.split(/\r?\n/);
-  let inToolchain = false;
-  for (const line of lines) {
-    const stripped = stripComment(line).trim();
-    if (stripped.length === 0) continue;
-    if (stripped.startsWith("[")) {
-      inToolchain = stripped === "[toolchain]";
+  let inToolchainTable = false;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmedLine = stripComment(line).trim();
+    if (trimmedLine.length === 0) continue;
+
+    if (trimmedLine.startsWith("[")) {
+      inToolchainTable = trimmedLine === TOOLCHAIN_TABLE;
       continue;
     }
-    if (!inToolchain) continue;
+    if (!inToolchainTable) continue;
 
-    const eq = stripped.indexOf("=");
-    if (eq === -1) continue;
-    if (stripped.slice(0, eq).trim() !== "channel") continue;
-    return unquote(stripped.slice(eq + 1).trim());
+    const assignment = readAssignment(trimmedLine);
+    if (assignment?.key !== CHANNEL_KEY) continue;
+    return readTomlScalar(assignment.value);
   }
 
   return undefined;
+}
+
+function readAssignment(line: string): { key: string; value: string } | undefined {
+  const separator = line.indexOf("=");
+  if (separator === -1) return undefined;
+
+  return {
+    key: line.slice(0, separator).trim(),
+    value: line.slice(separator + 1).trim(),
+  };
 }
 
 /** Drop a trailing `# comment` not inside a quoted string. */
@@ -55,7 +67,7 @@ function stripComment(line: string): string {
 }
 
 /** Strip matching single or double quotes from a TOML scalar; pass through otherwise. */
-function unquote(value: string): string | undefined {
+function readTomlScalar(value: string): string | undefined {
   if (value.length >= 2) {
     const first = value[0];
     const last = value[value.length - 1];
@@ -63,6 +75,9 @@ function unquote(value: string): string | undefined {
       return value.slice(1, -1).trim();
     }
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return nonEmpty(value.trim());
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  return value !== undefined && value.length > 0 ? value : undefined;
 }
