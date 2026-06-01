@@ -58,9 +58,6 @@ const pip: PackageManagerDescriptor = {
       // defaults to python312 only when detection found no version.
       ...(ctx.toolchainVersion !== undefined ? { interpreter: ctx.toolchainVersion } : {}),
     }),
-  // The pip-FOD has one discoverable aggregate hash; it lands in `pythonDepsHash`
-  // (rather than overloading npmDepsHash) — ADR 0006 amendment, hash-field note.
-  outputHashField: "pythonDepsHash",
   // The lockfile-read impurity signal (ADR 0004, laimk-hse.4). pip consumes
   // `requirements.txt` directly, which carries NO in-file wheel-vs-sdist signal,
   // so the static reader is conservative-pure. The pure FOD's `--only-binary=:all:`
@@ -126,8 +123,6 @@ const uv: PackageManagerDescriptor = {
       // defaults to python312 only when detection found no version.
       ...(ctx.toolchainVersion !== undefined ? { interpreter: ctx.toolchainVersion } : {}),
     }),
-  // The same single aggregate pip-FOD hash, landing in pythonDepsHash (not npmDepsHash).
-  outputHashField: "pythonDepsHash",
   // The export front-end (ADR 0006 amendment): `uv export --format requirements-txt`
   // emits the Importer's hash-pinned requirements.txt from uv.lock, after which the
   // build is the identical pip-FOD pure/offline path. Carried as descriptor data so
@@ -193,8 +188,6 @@ const poetry: PackageManagerDescriptor = {
       // defaults to python312 only when detection found no version.
       ...(ctx.toolchainVersion !== undefined ? { interpreter: ctx.toolchainVersion } : {}),
     }),
-  // The same single aggregate pip-FOD hash, landing in pythonDepsHash (not npmDepsHash).
-  outputHashField: "pythonDepsHash",
   // The export front-end (ADR 0006 amendment): `poetry export` emits the Importer's
   // hash-pinned requirements.txt from poetry.lock. Hashes are ON by default — the
   // per-artifact hashes the pip-FOD's `--require-hashes` download needs — so no flag

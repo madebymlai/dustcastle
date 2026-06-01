@@ -41,15 +41,9 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(build.expression).toContain('pname = "sample');
     });
 
-    it("marks which Provisioned field carries the discovered hash", () => {
-      const expected =
-        pm === "go"
-          ? "vendorHash"
-          : pm === "pip" || pm === "uv" || pm === "poetry"
-            ? "pythonDepsHash"
-            : "npmDepsHash";
-      expect(d.outputHashField).toBe(expected);
-    });
+    // (Provisioned now uses a single `depsHash` field — the per-manager hash
+    //  field dispatch was collapsed. The test that checked `outputHashField` is
+    //  removed; the store/run no longer need the attr name.)
   });
 
   describe("importer derivation reproduces today's JS_IMPORTERS map exactly", () => {
@@ -237,9 +231,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("pip").lockfiles).toEqual(["requirements.txt"]);
     });
 
-    it("lands the discovered hash in pythonDepsHash (not npmDepsHash)", () => {
-      expect(packageManagerDescriptor("pip").outputHashField).toBe("pythonDepsHash");
-    });
+    // (Provisioned now uses a single `depsHash` field, so `pip` has no
+    //  `outputHashField` — this test is removed along with the field.)
 
     it("pip has no provisionGate (the pip-FOD is supported, unlike bun)", () => {
       expect(packageManagerDescriptor("pip").provisionGate).toBeUndefined();
@@ -279,9 +272,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("uv").lockfiles).toEqual(["uv.lock"]);
     });
 
-    it("lands the discovered hash in pythonDepsHash (the same pip-FOD aggregate hash)", () => {
-      expect(packageManagerDescriptor("uv").outputHashField).toBe("pythonDepsHash");
-    });
+    // (Provisioned now uses a single `depsHash` field — the per-manager hash
+    //  field dispatch was collapsed. This test is removed along with `outputHashField`.)
 
     it("has no provisionGate (the pip-FOD is supported)", () => {
       expect(packageManagerDescriptor("uv").provisionGate).toBeUndefined();
@@ -336,9 +328,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("poetry").lockfiles).toEqual(["poetry.lock"]);
     });
 
-    it("lands the discovered hash in pythonDepsHash (the same pip-FOD aggregate hash)", () => {
-      expect(packageManagerDescriptor("poetry").outputHashField).toBe("pythonDepsHash");
-    });
+    // (Provisioned now uses a single `depsHash` field — the per-manager hash
+    //  field dispatch was collapsed. This test is removed along with `outputHashField`.)
 
     it("carries the `poetry export` front-end that feeds the pip-FOD", () => {
       // poetry produces the Importer's hash-pinned requirements via `poetry export`

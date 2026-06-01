@@ -21,7 +21,6 @@ const npm: PackageManagerDescriptor = {
       npmDepsHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
     }),
-  outputHashField: "npmDepsHash",
   // npm's lockfile (v2/v3) records `hasInstallScript: true` on any package with an
   // install/preinstall/postinstall script (ADR 0004).
   impuritySignal: {
@@ -50,7 +49,6 @@ const pnpm: PackageManagerDescriptor = {
       depsHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
     }),
-  outputHashField: "npmDepsHash",
   // pnpm's equivalent of hasInstallScript is `requiresBuild: true` (ADR 0004).
   impuritySignal: {
     lockfile: "pnpm-lock.yaml",
@@ -77,7 +75,6 @@ const yarn: PackageManagerDescriptor = {
       depsHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
     }),
-  outputHashField: "npmDepsHash",
   // yarn.lock (v1) carries NO install-script metadata — yarn's build policy lives
   // in package.json#dependenciesMeta.built / .yarnrc, not the lockfile — so a yarn
   // project always resolves pure. Present-but-always-false: honest, not a gap
@@ -112,7 +109,6 @@ const bun: PackageManagerDescriptor = {
       npmDepsHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
     }),
-  outputHashField: "npmDepsHash",
   // bun is gated at provision; the lockfile carries no script signal either, so
   // the signal is present-but-always-false (settled by design, ADR 0004).
   impuritySignal: {

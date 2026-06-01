@@ -15,7 +15,7 @@ const provisioned: Provisioned = {
   toolchainStorePath: "/nix/store/33fw-go-1.26.3",
   depsStorePath: "/nix/store/cq9d-sample-0.0.0-go-modules",
   appStorePath: "/nix/store/aaaa-sample-0.0.0",
-  vendorHash: "sha256-3rWfWAVcCVj1RN1gAlwRThZe9M2mBNTViE6z3OVPs90=",
+  depsHash: "sha256-3rWfWAVcCVj1RN1gAlwRThZe9M2mBNTViE6z3OVPs90=",
 };
 const detection: Detection = {
   ecosystem: "go",
@@ -76,8 +76,7 @@ const nodeProvisioned: Provisioned = {
   toolchainStorePath: "/nix/store/nnnn-nodejs-22.11.0",
   depsStorePath: "/nix/store/dddd-app-deps-0.0.0",
   appStorePath: "/nix/store/dddd-app-deps-0.0.0",
-  vendorHash: "",
-  npmDepsHash: "sha256-tuEfyePwlOy2/mOPdXbqJskO6IowvAP4DWg8xSZwbJw=",
+  depsHash: "sha256-tuEfyePwlOy2/mOPdXbqJskO6IowvAP4DWg8xSZwbJw=",
 };
 const nodeDetection: Detection = {
   ecosystem: "node",
@@ -94,7 +93,7 @@ const impureProvisioned: Provisioned = {
   toolchainStorePath: nodeProvisioned.toolchainStorePath,
   depsStorePath: "", // impure: only the Toolchain is in the Store; deps install in-container
   appStorePath: nodeProvisioned.toolchainStorePath,
-  vendorHash: "",
+  depsHash: "",
 };
 
 describe("planSandbox — Node pure path (ADR 0002/0004/0005)", () => {
@@ -285,7 +284,7 @@ describe("planSandbox — Python impure path stages into ./site (dustcastle-bbg.
     toolchainStorePath: "/nix/store/pppp-python3-3.12",
     depsStorePath: "", // impure: only the Toolchain is in the Store; deps install in-container
     appStorePath: "/nix/store/pppp-python3-3.12",
-    vendorHash: "",
+    depsHash: "",
   };
   const pythonImpureEgress = {
     kind: "allowlist",

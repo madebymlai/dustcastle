@@ -12,7 +12,6 @@ export type {
   ImpuritySignal,
   LockOnlyResolve,
   LooseManifestInput,
-  OutputHashField,
   PackageManager,
   PackageManagerDescriptor,
   ProvisionGate,

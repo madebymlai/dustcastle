@@ -4,7 +4,7 @@ import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } fr
 /**
  * The Go Ecosystem descriptors (ADR 0006). A single Package Manager (`go`) — still
  * a Package Manager, not a special case (CONTEXT.md). buildGoModule splits into a
- * vendor FOD + an offline build/test; the discovered hash lands in `vendorHash`.
+ * vendor FOD + an offline build/test; the discovered hash lands in `depsHash`.
  *
  * Go has NO impuritySignal (only Node has impure install scripts in v1) and NO
  * lockOnlyResolve (go.mod/go.sum is already a real lockfile — nothing to pin).
@@ -20,7 +20,6 @@ const go: PackageManagerDescriptor = {
       vendorHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
     }),
-  outputHashField: "vendorHash",
   // No impuritySignal, no lockOnlyResolve, no provisionGate — Go builds pure.
 };
 

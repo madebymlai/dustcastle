@@ -74,7 +74,7 @@ describe("dustcastle run (laimk-hse.5: loose Python pin-then-pure, ADR 0004/0006
       expect(prepared.detection.loose).toBeUndefined();
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");
-      expect(prepared.provisioned.pythonDepsHash).toBeTruthy();
+      expect(prepared.provisioned.depsHash).toBeTruthy();
 
       const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
       const handle = await provider.create({

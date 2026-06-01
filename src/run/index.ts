@@ -31,7 +31,7 @@ export interface PrepareOptions {
   readonly nixPortable?: string;
   /** Override the physical rootless store root. */
   readonly physStoreRoot?: string;
-  /** Supply a known deps hash (Go vendorHash / Node npmDepsHash) to skip discovery. */
+  /** Supply a known deps hash to skip discovery (Go vendor hash / Node npmDepsHash / Python pip-FOD hash). */
   readonly vendorHash?: string;
   /** Stream provisioning output (progress surfacing). */
   readonly onLine?: (line: string) => void;
@@ -288,11 +288,7 @@ export interface RunOptions extends ProvisionOptions {
  * lockfile changes and never collide with another project's.
  */
 function gcProjectKey(prepared: PreparedRun): string {
-  const depsHash =
-    prepared.provisioned.npmDepsHash ??
-    prepared.provisioned.pythonDepsHash ??
-    (prepared.provisioned.vendorHash || "toolchain");
-  return `${prepared.detection.packageManager}-${depsHash}`;
+  return `${prepared.detection.packageManager}-${prepared.provisioned.depsHash || "toolchain"}`;
 }
 
 /**

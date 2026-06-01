@@ -21,8 +21,9 @@ export interface ProvisionSpec {
   /** What detection concluded (ADR 0006) — selects the importer. */
   readonly detection: Detection;
   /**
-   * Known Go vendor hash / Node npmDepsHash. When omitted, the store discovers
-   * it via a placeholder build (ADR 0004 — v1 has no dynamic-derivations).
+   * Known deps hash (Go vendor hash / Node npmDepsHash / Python pip-FOD hash).
+   * When omitted, the store discovers it via a placeholder build (ADR 0004 — v1
+   * has no dynamic-derivations).
    */
   readonly vendorHash?: string;
   /**
@@ -51,12 +52,8 @@ export interface Provisioned {
   readonly depsStorePath: string;
   /** Canonical /nix/store path of the built app (its build ran the offline test). */
   readonly appStorePath: string;
-  /** The Go vendor hash used (discovered or supplied). Empty for non-Go. */
-  readonly vendorHash: string;
-  /** The npm deps hash used for Node (discovered or supplied). Undefined for non-Node. */
-  readonly npmDepsHash?: string;
-  /** The pip-FOD aggregate hash used for Python (discovered or supplied). Undefined for non-Python. */
-  readonly pythonDepsHash?: string;
+  /** The deps hash used (discovered or supplied). `""` for impure / toolchain-only provisions. */
+  readonly depsHash: string;
 }
 
 /**
@@ -114,9 +111,8 @@ interface BuildContext {
  * across ecosystems. "Supports impure" is derived from the PRESENCE of an install-
  * script signal — node has one, go doesn't — reproducing today's Go vs JS branch.
  *
- * The output Provisioned hash shape is load-bearing at the run layer: Go's hash
- * lands in `vendorHash`, Node(pure)'s in `npmDepsHash`, impure-Node carries
- * neither. The descriptor's `outputHashField` names which field to populate.
+ * The output Provisioned hash is a single `depsHash` field — `""` for impure /
+ * toolchain-only provisions.
  */
 function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Provisioned {
   const build = (depsHash: string) =>
@@ -154,7 +150,7 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
       toolchainStorePath,
       depsStorePath: "", // deps install in the container (impure); not in the Store
       appStorePath: toolchainStorePath,
-      vendorHash: "",
+      depsHash: "",
     };
   }
 
@@ -176,19 +172,16 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
     throw new Error(`store: build/offline-test failed (exit ${app.status}):\n${app.stderr.slice(-2000)}`);
   }
 
-  // The hash lands in the field the descriptor declares (Go→vendorHash,
-  // Node→npmDepsHash, Python→pythonDepsHash) — load-bearing at the run layer.
-  // The Pass-1 discover / Pass-2 build loop above is REUSED unchanged: the pip-FOD
-  // has one discoverable aggregate hash, so only the output field differs.
+  // The single depsHash holds the discovered/supplied FOD hash for all ecosystems.
+  // The per-importer Nix attr name (vendorHash / npmDepsHash / pythonDepsHash) is
+  // internal to each generateBuild adapter — the store/run layers never needed it.
   return {
     mode: ctx.mode,
     physStoreRoot: ctx.physStoreRoot,
     toolchainStorePath: realize(attrs.toolchain),
     depsStorePath: realize(attrs.deps),
     appStorePath: parseStorePath(app.stdout),
-    vendorHash: descriptor.outputHashField === "vendorHash" ? depsHash : "",
-    ...(descriptor.outputHashField === "npmDepsHash" ? { npmDepsHash: depsHash } : {}),
-    ...(descriptor.outputHashField === "pythonDepsHash" ? { pythonDepsHash: depsHash } : {}),
+    depsHash,
   };
 }
 

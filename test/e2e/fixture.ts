@@ -31,7 +31,7 @@ export function stageSampleProject(root: string): string {
 // test/fixtures/ — the start of v1 owning its own fixtures (the kickoff side-quest).
 export const NODE_SAMPLE = resolve(process.cwd(), "test/fixtures/node-sample");
 
-// The known npmDepsHash for the Node sample's deps. Supplying it skips the
+// The known depsHash for the Node sample's deps. Supplying it skips the
 // discovery build and hits the warm Store (same role as KNOWN_VENDOR_HASH).
 export const KNOWN_NPM_DEPS_HASH = "sha256-oFyV3fMNa6lKWWuX7MPWxvQJWCbLZ46hSPQSq2BaRTQ=";
 

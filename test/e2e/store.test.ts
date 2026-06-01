@@ -35,7 +35,7 @@ describe("provisionStore (rootless Store, ADR 0004/0008)", () => {
     // The Toolchain and Project Deps land as distinct content-addressed paths.
     expect(provisioned.toolchainStorePath).toMatch(/^\/nix\/store\/.+-go-\d/);
     expect(provisioned.depsStorePath).toMatch(/go-modules$/);
-    expect(provisioned.vendorHash).toBe(KNOWN_VENDOR_HASH);
+    expect(provisioned.depsHash).toBe(KNOWN_VENDOR_HASH);
 
     // The active rootless runtime is surfaced (ADR 0008), and the canonical
     // store paths resolve to real files under the physical store root.

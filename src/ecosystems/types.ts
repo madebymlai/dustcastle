@@ -59,7 +59,7 @@ export interface Detection {
  * The uniform inputs every Importer needs to emit its expression. The store
  * passes the discovered/supplied deps hash and the staged `src` path; each
  * descriptor adapts these onto its generator's spec (Go reads it as `vendorHash`,
- * npm as `npmDepsHash`, pnpm/yarn as `depsHash`) so the dispatch site stays
+ * npm as `npmDepsHash`, pnpm/yarn/pip as `depsHash`) so the dispatch site stays
  * uniform (CONTEXT.md: the Importer is a property of the Package Manager).
  */
 export interface BuildContext {
@@ -137,9 +137,6 @@ export interface ExportFrontEnd {
   readonly requirementsFile: string;
 }
 
-/** Which Provisioned field carries the discovered/supplied deps hash (load-bearing). */
-export type OutputHashField = "vendorHash" | "npmDepsHash" | "pythonDepsHash";
-
 /**
  * The DISPATCH grain (CONTEXT.md: Package Manager). Everything the store, impurity
  * policy, and pin step key on for one Package Manager — owned in one place rather
@@ -161,8 +158,7 @@ export interface PackageManagerDescriptor {
   readonly lockfiles: readonly string[];
   /** Emit the Importer's Nix expression for a deps hash (ADR 0004). Uniform across managers. */
   readonly generateBuild: (ctx: BuildContext) => NixBuild;
-  /** Which Provisioned field carries the discovered hash (vendorHash for Go, npmDepsHash for JS). */
-  readonly outputHashField: OutputHashField;
+  // (deprecated — Provisioned now uses a single `depsHash` field; no per-manager dispatch needed.)
   /** The lockfile-read impurity signal (ADR 0004). Absent for go (no impure install scripts). */
   readonly impuritySignal?: ImpuritySignal;
   /** The pin-then-pure lock-only resolve (ADR 0006c). Absent for gated/already-locked managers. */

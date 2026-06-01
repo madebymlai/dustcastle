@@ -63,8 +63,8 @@ describe("dustcastle run (laimk-hse.2: Python pip-FOD pure path, ADR 0002/0003/0
       expect(prepared.detection.packageManager).toBe("pip");
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");
-      // The discovered aggregate hash lands in pythonDepsHash (ADR 0006 amendment).
-      expect(prepared.provisioned.pythonDepsHash).toBeTruthy();
+      // The discovered aggregate hash lands in depsHash.
+      expect(prepared.provisioned.depsHash).toBeTruthy();
 
       const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
       const handle = await provider.create({
@@ -129,8 +129,8 @@ describe("dustcastle run (laimk-hse.6: uv front-end → the SAME pip-FOD pure pa
       expect(prepared.detection.packageManager).toBe("uv");
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");
-      // The discovered aggregate hash lands in pythonDepsHash (same pip-FOD).
-      expect(prepared.provisioned.pythonDepsHash).toBeTruthy();
+      // The discovered aggregate hash lands in depsHash (same pip-FOD).
+      expect(prepared.provisioned.depsHash).toBeTruthy();
 
       const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
       const handle = await provider.create({
@@ -198,8 +198,8 @@ describe("dustcastle run (laimk-hse.7: poetry front-end → the SAME pip-FOD pur
       expect(prepared.detection.packageManager).toBe("poetry");
       expect(prepared.impurity.kind).toBe("pure");
       expect(prepared.plan.podmanOptions.network).toBe("none");
-      // The discovered aggregate hash lands in pythonDepsHash (same pip-FOD).
-      expect(prepared.provisioned.pythonDepsHash).toBeTruthy();
+      // The discovered aggregate hash lands in depsHash (same pip-FOD).
+      expect(prepared.provisioned.depsHash).toBeTruthy();
 
       const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
       const handle = await provider.create({
