@@ -79,6 +79,23 @@ source = "git+https://gitlab.com/g/sub/repo"
     expect(decision.buildHosts).toContain("gitlab.com:443");
   });
 
+  it("derives the scheme's default port for a non-https git source (git+ssh → :22)", () => {
+    const decision = deriveEgress({
+      packageManager: "cargo",
+      impure: false,
+      buildPhase: "cargo-vendor",
+      cargoLock: `
+[[package]]
+name = "repo"
+version = "0.1.0"
+source = "git+ssh://git@github.com/org/repo?rev=abc"
+`,
+    });
+
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("github.com:22");
+  });
+
   it("derives a git host from a Cargo.lock-only git dependency (transitive, absent from Cargo.toml)", () => {
     // The lockfile is the resolved truth: a transitive git dep need never appear in
     // the root Cargo.toml, yet its host must still be allowlisted for the vendor FOD.

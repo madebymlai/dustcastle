@@ -179,23 +179,24 @@ export function cargoGitDependencyHosts(cargoLock: string): string[] {
   return uniqueHosts(hosts);
 }
 
+// A Cargo.lock `git+` source is always a scheme URL (`git+https://…`, `git+ssh://…`),
+// so the host comes straight from `new URL`, with the scheme's default port when none
+// is explicit. (Scp-style `git@host:path` never appears in a lockfile source, so it is
+// deliberately not handled here — unlike parseGitRemoteHost, which reads repo remotes.)
 function gitDependencyHostWithPort(remoteUrl: string): string | undefined {
   const url = remoteUrl.trim();
   if (url.length === 0) return undefined;
 
-  const scpHost = parseScpStyleGitHost(url);
-  if (scpHost !== undefined && !url.includes("://")) return `${scpHost}:22`;
-
+  let parsed: URL;
   try {
-    const parsed = new URL(url);
-    const host = parsed.hostname;
-    if (host.length === 0) return undefined;
-    const port = parsed.port || defaultGitPort(parsed.protocol);
-    return port === undefined ? host : `${host}:${port}`;
+    parsed = new URL(url);
   } catch {
-    const host = parseGitRemoteHost(url);
-    return host === undefined ? undefined : `${host}:443`;
+    return undefined;
   }
+  const host = parsed.hostname;
+  if (host.length === 0) return undefined;
+  const port = parsed.port || defaultGitPort(parsed.protocol);
+  return port === undefined ? host : `${host}:${port}`;
 }
 
 function parseScpStyleGitHost(remoteUrl: string): string | undefined {
