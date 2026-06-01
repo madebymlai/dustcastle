@@ -41,8 +41,12 @@ export interface EgressInput {
    * cargo-vendor fetches Cargo deps into the Store before the Sandbox stays offline.
    */
   readonly buildPhase?: BuildEgressPhase;
-  /** Cargo.toml contents used to derive git dependency hosts for Cargo Build Egress. */
-  readonly cargoManifest?: string;
+  /**
+   * Cargo.lock contents used to derive git dependency hosts for Cargo Build Egress.
+   * The lockfile is the resolved truth (`source = "git+…"`), so a transitive git dep
+   * that never appears in the root Cargo.toml is still covered (dustcastle-gy5.5).
+   */
+  readonly cargoLock?: string;
   /** The repo's git remote host, when known (for git-sourced deps). */
   readonly gitRemoteHost?: string;
   /**
@@ -75,7 +79,10 @@ const LOCK_ONLY_RESOLVE_HOSTS: Readonly<Record<string, readonly string[]>> = {
 
 const CARGO_VENDOR_HOSTS = ["index.crates.io", "static.crates.io"] as const;
 const SCP_STYLE_GIT_REMOTE = /^(?:[^@/]+@)?([^/:]+):/;
-const TOML_GIT_ATTRIBUTE = /\bgit\s*=\s*(["'])(.*?)\1/g;
+// Cargo.lock records a git dependency's resolved origin as `source = "git+<url>…"`
+// (registry deps use `registry+…`, which must NOT match — gy5.5 keeps the legacy
+// `github.com/rust-lang/crates.io-index` host out of the allowlist).
+const CARGO_LOCK_GIT_SOURCE = /\bsource\s*=\s*"git\+([^"]+)"/g;
 
 /**
  * Derive the egress decision (ADR 0005 / 0010) as the union of Build Egress and
@@ -96,7 +103,7 @@ export function deriveEgress(input: EgressInput): EgressDecision {
 
 function buildEgressHosts(input: EgressInput): string[] {
   if (input.buildPhase === "cargo-vendor") {
-    return uniqueHosts([...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoManifest ?? "")]);
+    return uniqueHosts([...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoLock ?? "")]);
   }
 
   const hosts = phaseBuildHosts(input);
@@ -114,7 +121,7 @@ function phaseBuildHosts(input: EgressInput): string[] {
     case "runtime":
       return runtimeBuildHosts(input);
     case "cargo-vendor":
-      return [...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoManifest ?? "")];
+      return [...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoLock ?? "")];
   }
 }
 
@@ -155,36 +162,21 @@ export function parseGitRemoteHost(remoteUrl: string): string | undefined {
   }
 }
 
-/** Derive host:port entries from Cargo.toml `git = "…"` dependency references. */
-export function cargoGitDependencyHosts(cargoManifest: string): string[] {
+/**
+ * Derive host:port entries from a Cargo.lock's `source = "git+…"` dependency
+ * origins. The lockfile is the resolved truth, so this covers transitive git deps
+ * that never appear in the root Cargo.toml; `git+https` with no explicit port
+ * normalizes to `:443` (dustcastle-gy5.5).
+ */
+export function cargoGitDependencyHosts(cargoLock: string): string[] {
   const hosts: string[] = [];
 
-  for (const rawLine of cargoManifest.split(/\r?\n/)) {
-    const line = stripTomlComment(rawLine);
-    for (const match of line.matchAll(TOML_GIT_ATTRIBUTE)) {
-      const host = gitDependencyHostWithPort(match[2] ?? "");
-      if (host !== undefined) hosts.push(host);
-    }
+  for (const match of cargoLock.matchAll(CARGO_LOCK_GIT_SOURCE)) {
+    const host = gitDependencyHostWithPort(match[1] ?? "");
+    if (host !== undefined) hosts.push(host);
   }
 
   return uniqueHosts(hosts);
-}
-
-function stripTomlComment(line: string): string {
-  let openQuote: string | undefined;
-  for (let i = 0; i < line.length; i += 1) {
-    const c = line[i]!;
-    if (isTomlQuote(c) && line[i - 1] !== "\\") {
-      if (openQuote === c) openQuote = undefined;
-      else if (openQuote === undefined) openQuote = c;
-    }
-    if (c === "#" && openQuote === undefined) return line.slice(0, i);
-  }
-  return line;
-}
-
-function isTomlQuote(value: string): boolean {
-  return value === '"' || value === "'";
 }
 
 function gitDependencyHostWithPort(remoteUrl: string): string | undefined {
