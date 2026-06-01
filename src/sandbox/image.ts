@@ -1,0 +1,121 @@
+import { spawnSync } from "node:child_process";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * dustcastle owns its sandbox IMAGES the way it owns nix-portable: built-once,
+ * dustcastle-managed artifacts (never pushed to a registry) that a downstream
+ * consumer then runs by name. Each image is fully described by an {@link ImageSpec}
+ * — a tag, a shipped Containerfile, and how to label its build output — so building
+ * one is a single idempotent `podman build` over that data. The agent image
+ * (consumed by sandcastle's `podman()` provider) and the egress-proxy image
+ * (consumed by `ensureEgress`) are two such specs; a third would be a third spec,
+ * not a third copy of this logic. We do NOT reinvent sandcastle's container
+ * lifecycle, mounts, or `--userns=keep-id` mapping — we only produce the images
+ * those rely on (sandcastle's own build-image is coupled to a project `.sandcastle/`
+ * dir, which a global tool running in arbitrary repos lacks).
+ */
+
+/** The minimal result of a podman invocation the build logic reasons about. */
+export interface PodmanBuildResult {
+  readonly status: number | null;
+  readonly stderr: string;
+}
+
+/** Runs a `podman <args>` command. Injected in tests; defaults to a real spawn. */
+export type PodmanRunner = (args: readonly string[]) => PodmanBuildResult;
+
+/**
+ * A dustcastle-owned image, as data: everything that distinguishes one built-once
+ * podman image from another. Adding an image is adding one of these, not a module.
+ */
+export interface ImageSpec {
+  /** The image tag (local; never pushed to a registry). */
+  readonly tag: string;
+  /** Path to the shipped Containerfile (resolved beside this module). */
+  readonly containerfile: string;
+  /** Log namespace for the build progress lines (e.g. "sandbox" | "egress"). */
+  readonly logPrefix: string;
+  /** Human noun for the build/built/failed messages (e.g. "agent image" | "proxy image"). */
+  readonly label: string;
+}
+
+export interface EnsureImageOptions {
+  /** Override the image tag (tests). */
+  readonly imageName?: string;
+  /** Override the Containerfile path (tests); defaults to the spec's shipped asset. */
+  readonly containerfile?: string;
+  /** Inject the `podman build` runner (tests); defaults to a real spawn. */
+  readonly run?: PodmanRunner;
+  /** Inject the "image already built?" check (tests); defaults to `podman image exists`. */
+  readonly exists?: (image: string) => boolean;
+  /** Surface build output line-by-line (never silent). */
+  readonly onLine?: (line: string) => void;
+}
+
+/**
+ * Resolve a Containerfile shipped beside this module. It sits next to this module,
+ * so import.meta.url resolves to src/sandbox under tsx/vitest and to dist/sandbox in
+ * the built CLI (copy-assets.mjs copies the *.Containerfile there alongside the
+ * loader; the proxy one's COPY then finds the compiled proxy.js + proxy-main.js
+ * tsc emits into that same dir, completing a self-contained build context).
+ */
+export function containerfilePath(filename: string): string {
+  return fileURLToPath(new URL(`./${filename}`, import.meta.url));
+}
+
+/** The dustcastle-owned agent image, consumed by the sandcastle `podman()` provider. */
+export const AGENT_SPEC: ImageSpec = {
+  tag: "localhost/dustcastle-agent:bookworm",
+  containerfile: containerfilePath("agent.Containerfile"),
+  logPrefix: "sandbox",
+  label: "agent image",
+};
+
+/** The dustcastle-owned egress-proxy image, run by `ensureEgress` on the allowlist path. */
+export const PROXY_SPEC: ImageSpec = {
+  tag: "localhost/dustcastle-egress-proxy:node20",
+  containerfile: containerfilePath("proxy.Containerfile"),
+  logPrefix: "egress",
+  label: "proxy image",
+};
+
+/** The `podman build` args for an image (build context = the Containerfile's dir). */
+export function buildArgs(image: string, containerfile: string): string[] {
+  return ["build", "-t", image, "-f", containerfile, dirname(containerfile)];
+}
+
+/**
+ * Ensure a dustcastle-owned image exists, building it once from its shipped
+ * Containerfile if missing (idempotent: a second run is a no-op `podman image
+ * exists` hit). Returns the image tag for the consumer to run by name.
+ */
+export function ensureImage(spec: ImageSpec, opts: EnsureImageOptions = {}): string {
+  const image = opts.imageName ?? spec.tag;
+  const exists = opts.exists ?? defaultImageExists;
+  if (exists(image)) return image;
+
+  const containerfile = opts.containerfile ?? spec.containerfile;
+  const run = opts.run ?? defaultPodmanRun(opts.onLine);
+  opts.onLine?.(`${spec.logPrefix}: building the dustcastle ${spec.label} ${image} (one-time)…`);
+  const result = run(buildArgs(image, containerfile));
+  if (result.status !== 0) {
+    throw new Error(`${spec.logPrefix}: failed to build the ${spec.label} ${image}:\n${result.stderr.slice(-2000)}`);
+  }
+  opts.onLine?.(`${spec.logPrefix}: built ${image}`);
+  return image;
+}
+
+/** Default check: `podman image exists <image>` exits 0 when the image is present. */
+function defaultImageExists(image: string): boolean {
+  return spawnSync("podman", ["image", "exists", image]).status === 0;
+}
+
+/** Default runner: a real `podman` spawn, streaming stderr to `onLine`. */
+function defaultPodmanRun(onLine?: (line: string) => void): PodmanRunner {
+  return (args) => {
+    const r = spawnSync("podman", [...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    if (onLine && r.stderr) for (const line of r.stderr.split("\n")) onLine(line);
+    return { status: r.status, stderr: r.stderr ?? "" };
+  };
+}

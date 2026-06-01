@@ -24,7 +24,7 @@ import {
   proxyResolvConf,
 } from "./confine.js";
 import { egressHosts, type EgressDecision } from "./egress.js";
-import { PROXY_IMAGE } from "./proxy-image.js";
+import { PROXY_SPEC } from "./image.js";
 
 /** The minimal result of a podman invocation the orchestration reasons about. */
 export interface PodmanResult {
@@ -38,11 +38,11 @@ export interface PodmanResult {
 export type PodmanRunner = (args: readonly string[]) => PodmanResult;
 
 /**
- * The dustcastle-owned proxy image (ensureProxyImage builds it). NOT stock
+ * The dustcastle-owned proxy image (ensureImage builds it from PROXY_SPEC). NOT stock
  * node:20-alpine: that image has no `/opt/dustcastle/proxy-main.js`, so the proxy
  * container crashed on start and the allowlist was enforced over a dead proxy.
  */
-const DEFAULT_PROXY_IMAGE = PROXY_IMAGE;
+const DEFAULT_PROXY_IMAGE = PROXY_SPEC.tag;
 /** The external (internet-facing) network the proxy is also homed on. */
 const DEFAULT_EXTERNAL_NETWORK = "podman";
 
@@ -204,7 +204,7 @@ function isAlreadyExists(r: PodmanResult): boolean {
 /**
  * Materialize the proxy's resolv.conf (external resolvers — see EGRESS_PROXY_DNS)
  * under the dustcastle home and return its path to bind-mount. Idempotent. Called
- * on the allowlist path before `ensureEgress`, the way `ensureProxyImage` is — both
+ * on the allowlist path before `ensureEgress`, the way the proxy image is — both
  * are proxy prerequisites the run prepares, then `ensureEgress` runs the container.
  */
 export function provisionProxyResolvConf(home: string = DUSTCASTLE_HOME): string {

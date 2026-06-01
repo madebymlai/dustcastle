@@ -1,5 +1,5 @@
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
-import { AGENT_IMAGE } from "./agent-image.js";
+import { AGENT_SPEC } from "./image.js";
 import type { Detection } from "../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor, type SandboxStaging } from "../ecosystems/index.js";
 import type { Provisioned } from "../store/index.js";
@@ -56,14 +56,14 @@ export interface SandboxPlan {
 }
 
 /**
- * The dustcastle-owned agent image (built once via {@link ensureAgentImage}): it
+ * The dustcastle-owned agent image (built once via {@link ensureImage}): it
  * ships the agent harness (git, bd, pi) and a writable, keep-id-aligned `agent`
  * user, while the language Toolchain still comes from the Nix closure mounted at
  * /nix/store (ADR 0008). A stock base image has no `agent` user/writable home, so
  * sandcastle's `git config --global` step can't run in it — hence dustcastle owns
  * this image the way it owns nix-portable.
  */
-const DEFAULT_IMAGE = AGENT_IMAGE;
+const DEFAULT_IMAGE = AGENT_SPEC.tag;
 
 /**
  * Plan the Sandbox for a provisioned project (ADR 0002): bind-mount the Store

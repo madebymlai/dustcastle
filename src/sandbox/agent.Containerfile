@@ -6,7 +6,7 @@
 # HARNESS — git (the agent branches/commits/merges), bd (the implement phase reads
 # issues in-container via `bd show`), and pi (the coding agent sandcastle drives) —
 # plus a writable, keep-id-aligned `agent` user. Built once, dustcastle-owned
-# (ensureAgentImage), the way dustcastle owns nix-portable.
+# (ensureImage of AGENT_SPEC), the way dustcastle owns nix-portable.
 FROM node:22-bookworm
 
 # git: sandcastle runs `git config --global` + the agent commits/diffs in-container.

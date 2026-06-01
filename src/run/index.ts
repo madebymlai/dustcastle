@@ -6,8 +6,7 @@ import { parseImpurityMode, type ImpurityDecision, type ImpurityMode } from "../
 import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtime.js";
 import { deriveEgress, type EgressDecision } from "../sandbox/egress.js";
 import { planSandbox, type SandboxPlan } from "../sandbox/plan.js";
-import { ensureAgentImage } from "../sandbox/agent-image.js";
-import { ensureProxyImage } from "../sandbox/proxy-image.js";
+import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore, type Provisioned } from "../store/index.js";
 import {
   defaultGcRootsDir,
@@ -357,7 +356,7 @@ export async function withProvisionedSandbox<T>(
         const image =
           opts.proxyImage ??
           (decision.kind === "allowlist"
-            ? ensureProxyImage(opts.onLine !== undefined ? { onLine: opts.onLine } : {})
+            ? ensureImage(PROXY_SPEC, opts.onLine !== undefined ? { onLine: opts.onLine } : {})
             : undefined);
         // The proxy resolves allowlisted hosts through external resolvers, not the
         // --internal net's aardvark (which would NXDOMAIN-poison resolution).
@@ -398,7 +397,7 @@ export async function withProvisionedSandbox<T>(
     // Containerfile; idempotent thereafter), the way the Store provision ensures
     // nix-portable. The image carries the agent harness (git/bd/pi) + a writable,
     // keep-id-aligned `agent` user that sandcastle's provider maps the host user onto.
-    ensureAgentImage(opts.onLine !== undefined ? { onLine: opts.onLine } : {});
+    ensureImage(AGENT_SPEC, opts.onLine !== undefined ? { onLine: opts.onLine } : {});
 
     // Mount the pi login into the sandbox (~/.pi/agent), so the agent
     // authenticates in-container off the developer's existing `pi login` — no
