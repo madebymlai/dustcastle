@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PROXY_SPEC, ensureImage, type PodmanRunner } from "./image.js";
 
@@ -9,10 +10,15 @@ import { PROXY_SPEC, ensureImage, type PodmanRunner } from "./image.js";
 // core to the right tag, Containerfile, and log prefix.
 
 describe("the dustcastle-owned egress-proxy image (PROXY_SPEC)", () => {
-  it("names the local proxy tag and ships its Containerfile beside the module", () => {
+  it("names the local proxy tag, prefix, and noun, and ships its Containerfile beside the module", () => {
     expect(PROXY_SPEC.tag).toBe("localhost/dustcastle-egress-proxy:node20");
     expect(PROXY_SPEC.containerfile).toMatch(/proxy\.Containerfile$/);
     expect(PROXY_SPEC.logPrefix).toBe("egress");
+    expect(PROXY_SPEC.label).toBe("proxy image");
+  });
+
+  it("ships its Containerfile as a real resolvable file (so dist copy-assets stays wired)", () => {
+    expect(existsSync(PROXY_SPEC.containerfile)).toBe(true);
   });
 
   it("builds the proxy image through ensureImage from that spec", () => {
@@ -25,5 +31,12 @@ describe("the dustcastle-owned egress-proxy image (PROXY_SPEC)", () => {
     expect(image).toBe(PROXY_SPEC.tag);
     expect(args?.slice(0, 3)).toEqual(["build", "-t", PROXY_SPEC.tag]);
     expect(args?.some((a) => a.endsWith("proxy.Containerfile"))).toBe(true);
+  });
+
+  it("renders the egress prefix and noun in the build-failure error (real strings, not synthetic)", () => {
+    const run: PodmanRunner = () => ({ status: 1, stderr: "boom: no base image" });
+    expect(() => ensureImage(PROXY_SPEC, { exists: () => false, run })).toThrowError(
+      /egress: failed to build the proxy image .*boom/s,
+    );
   });
 });
