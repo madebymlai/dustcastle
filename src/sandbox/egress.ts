@@ -89,25 +89,20 @@ export function deriveEgress(input: EgressInput): EgressDecision {
 
 function buildEgressHosts(input: EgressInput): string[] {
   const hosts = phaseBuildHosts(input);
+  if (hosts.length === 0) return hosts;
 
-  if (hosts.length > 0 && input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) {
-    hosts.push(input.gitRemoteHost);
-  }
+  const gitRemoteHost = input.gitRemoteHost;
+  if (gitRemoteHost !== undefined && gitRemoteHost.length > 0) hosts.push(gitRemoteHost);
   return hosts;
 }
 
 function phaseBuildHosts(input: EgressInput): string[] {
   switch (input.buildPhase ?? "runtime") {
     case "lockOnlyResolve":
-      return lockOnlyResolveHosts(input);
+      return [...(LOCK_ONLY_RESOLVE_HOSTS[input.packageManager] ?? [])];
     case "runtime":
-    default:
       return runtimeBuildHosts(input);
   }
-}
-
-function lockOnlyResolveHosts(input: EgressInput): string[] {
-  return [...(LOCK_ONLY_RESOLVE_HOSTS[input.packageManager] ?? [])];
 }
 
 function runtimeBuildHosts(input: EgressInput): string[] {
