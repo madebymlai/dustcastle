@@ -5,8 +5,10 @@
  * "impure build":
  *
  *  - **Build Egress** — the registry the package manager names + the repo's git
- *    host, DERIVED from detection (ADR 0005's "derived, not declared"). Present
- *    only on an impure build; a pure build's deps are pre-assembled offline.
+ *    host, DERIVED from detection/manifest content (ADR 0005's "derived, not
+ *    declared"). Present on impure installs and on explicit pre-Sandbox fetch
+ *    phases (for example Cargo's vendor FOD); ordinary pure Sandbox builds stay
+ *    offline.
  *  - **Agent Egress** — the coding agent's own model-provider API host (ADR 0010).
  *    Present whenever an agent will run, REGARDLESS of build purity: the agent
  *    must reach its LLM even when the build itself reaches nothing it would use.
@@ -30,6 +32,15 @@ export interface EgressInput {
   readonly packageManager: string;
   /** Whether this build runs impurely (untrusted install code with network). */
   readonly impure: boolean;
+  /**
+   * Network-using build phase, when the build is pure from the Sandbox's point of
+   * view but a pre-Sandbox fetch step still needs scoped Build Egress. Cargo's
+   * vendor FOD is the first such phase: it fetches crates into the Store, then the
+   * Sandbox itself remains offline.
+   */
+  readonly buildPhase?: "cargo-vendor";
+  /** Cargo.toml contents used to derive git dependency hosts for Cargo Build Egress. */
+  readonly cargoManifest?: string;
   /** The repo's git remote host, when known (for git-sourced deps). */
   readonly gitRemoteHost?: string;
   /**
@@ -50,29 +61,39 @@ const REGISTRY_HOSTS: Readonly<Record<string, string>> = {
   pip: "pypi.org",
 };
 
+const CARGO_VENDOR_HOSTS = ["index.crates.io", "static.crates.io"] as const;
+const SCP_STYLE_GIT_REMOTE = /^(?:[^@/]+@)?([^/:]+):/;
+const TOML_GIT_ATTRIBUTE = /\bgit\s*=\s*(["'])(.*?)\1/g;
+
 /**
  * Derive the egress decision (ADR 0005 / 0010) as the union of Build Egress and
- * Agent Egress. Build Egress (impure-only) is the registry the manager already
- * uses plus the repo's git host — turning "a compromised dep can exfiltrate
- * anywhere" into "it can reach the registries it was going to anyway." Agent
- * Egress is the model host, added whenever an agent will run regardless of purity.
- * Closed (`none`) only when neither source contributes a host — a pure build with
- * no agent.
+ * Agent Egress. Build Egress is either the registry the impure manager already
+ * uses plus the repo's git host, or an explicit pre-Sandbox fetch phase such as
+ * Cargo's vendor FOD (`index.crates.io` + `static.crates.io` + manifest git dep
+ * hosts). Agent Egress is the model host, added whenever an agent will run
+ * regardless of purity. Closed (`none`) only when neither source contributes a
+ * host — a pure Sandbox build with no agent.
  */
 export function deriveEgress(input: EgressInput): EgressDecision {
-  const buildHosts: string[] = [];
-  if (input.impure) {
-    const registry = REGISTRY_HOSTS[input.packageManager];
-    if (registry !== undefined) buildHosts.push(registry);
-    if (input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) {
-      buildHosts.push(input.gitRemoteHost);
-    }
-  }
-
-  const agentHosts: string[] = (input.agentModelHosts ?? []).filter((h) => h.length > 0);
+  const buildHosts = buildEgressHosts(input);
+  const agentHosts = (input.agentModelHosts ?? []).filter((h) => h.length > 0);
 
   if (buildHosts.length === 0 && agentHosts.length === 0) return { kind: "none" };
   return { kind: "allowlist", buildHosts, agentHosts };
+}
+
+function buildEgressHosts(input: EgressInput): string[] {
+  if (input.buildPhase === "cargo-vendor") {
+    return uniqueHosts([...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoManifest ?? "")]);
+  }
+
+  if (!input.impure) return [];
+
+  const hosts: string[] = [];
+  const registry = REGISTRY_HOSTS[input.packageManager];
+  if (registry !== undefined) hosts.push(registry);
+  if (input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) hosts.push(input.gitRemoteHost);
+  return uniqueHosts(hosts);
 }
 
 /**
@@ -82,7 +103,7 @@ export function deriveEgress(input: EgressInput): EgressDecision {
  */
 export function egressHosts(decision: EgressDecision): string[] {
   if (decision.kind === "none") return [];
-  return [...new Set([...decision.buildHosts, ...decision.agentHosts])];
+  return uniqueHosts([...decision.buildHosts, ...decision.agentHosts]);
 }
 
 /**
@@ -94,8 +115,8 @@ export function parseGitRemoteHost(remoteUrl: string): string | undefined {
   if (url.length === 0) return undefined;
 
   // scp-style: user@host:path (no scheme, a colon before the path, no "//").
-  const scp = url.match(/^(?:[^@/]+@)?([^/:]+):/);
-  if (scp && !url.includes("://")) return scp[1];
+  const scpHost = parseScpStyleGitHost(url);
+  if (scpHost !== undefined && !url.includes("://")) return scpHost;
 
   // Scheme URLs: ssh://, https://, git://, …
   try {
@@ -103,5 +124,79 @@ export function parseGitRemoteHost(remoteUrl: string): string | undefined {
     return host.length > 0 ? host : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** Derive host:port entries from Cargo.toml `git = "…"` dependency references. */
+export function cargoGitDependencyHosts(cargoManifest: string): string[] {
+  const hosts: string[] = [];
+
+  for (const rawLine of cargoManifest.split(/\r?\n/)) {
+    const line = stripTomlComment(rawLine);
+    for (const match of line.matchAll(TOML_GIT_ATTRIBUTE)) {
+      const host = gitDependencyHostWithPort(match[2] ?? "");
+      if (host !== undefined) hosts.push(host);
+    }
+  }
+
+  return uniqueHosts(hosts);
+}
+
+function stripTomlComment(line: string): string {
+  let openQuote: string | undefined;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i]!;
+    if (isTomlQuote(c) && line[i - 1] !== "\\") {
+      if (openQuote === c) openQuote = undefined;
+      else if (openQuote === undefined) openQuote = c;
+    }
+    if (c === "#" && openQuote === undefined) return line.slice(0, i);
+  }
+  return line;
+}
+
+function isTomlQuote(value: string): boolean {
+  return value === '"' || value === "'";
+}
+
+function gitDependencyHostWithPort(remoteUrl: string): string | undefined {
+  const url = remoteUrl.trim();
+  if (url.length === 0) return undefined;
+
+  const scpHost = parseScpStyleGitHost(url);
+  if (scpHost !== undefined && !url.includes("://")) return `${scpHost}:22`;
+
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    if (host.length === 0) return undefined;
+    const port = parsed.port || defaultGitPort(parsed.protocol);
+    return port === undefined ? host : `${host}:${port}`;
+  } catch {
+    const host = parseGitRemoteHost(url);
+    return host === undefined ? undefined : `${host}:443`;
+  }
+}
+
+function parseScpStyleGitHost(remoteUrl: string): string | undefined {
+  return SCP_STYLE_GIT_REMOTE.exec(remoteUrl)?.[1];
+}
+
+function uniqueHosts(hosts: readonly string[]): string[] {
+  return [...new Set(hosts)];
+}
+
+function defaultGitPort(protocol: string): string | undefined {
+  switch (protocol) {
+    case "http:":
+      return "80";
+    case "https:":
+      return "443";
+    case "ssh:":
+      return "22";
+    case "git:":
+      return "9418";
+    default:
+      return undefined;
   }
 }

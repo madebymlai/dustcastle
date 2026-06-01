@@ -107,6 +107,19 @@ export function stageRustProject(root: string): string {
   return projectDir;
 }
 
+// The committed Rust git-dependency sample (dustcastle-gy5.5): itoa is sourced
+// from its git repo, proving fetchCargoVendor covers git deps under the single
+// aggregate cargoHash and the rebased Cargo config resolves them offline.
+export const RUST_GIT_SAMPLE = resolve(process.cwd(), "test/fixtures/rust-git-sample");
+
+/** Stage the Rust git-dependency sample under the same "sample" crate name. */
+export function stageRustGitProject(root: string): string {
+  const projectDir = join(root, "sample");
+  mkdirSync(projectDir);
+  cpSync(RUST_GIT_SAMPLE, projectDir, { recursive: true });
+  return projectDir;
+}
+
 // The committed Python sample (slice laimk-hse.2): a hash-pinned, wheels-only
 // requirements.txt (idna + urllib3, both pure-Python wheels → pip-FOD pure path)
 // + a `python -m pytest` gate. Signalled by requirements.txt so detection routes
