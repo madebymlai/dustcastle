@@ -44,7 +44,7 @@ describe("dustcastle (3a-ii: per-workspace monorepo provisioning, ADR 0006d)", (
     const { root: wsRoot, members } = stageWorkspaceProject(root);
 
     // The fan-out: detect the workspace, provision EACH member into the Store.
-    const ws = prepareWorkspace({ cwd: wsRoot, vendorHash: KNOWN_NPM_DEPS_HASH });
+    const ws = prepareWorkspace({ cwd: wsRoot, depsHash: KNOWN_NPM_DEPS_HASH });
 
     expect(ws.isWorkspace).toBe(true);
     expect(ws.members.map((m) => m.dir).sort()).toEqual([...members].sort());

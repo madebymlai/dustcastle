@@ -32,7 +32,7 @@ describe("scoped GC roots (ADR 0007 — protect an in-flight run's closure)", ()
     const gcrootsDir = join(root, "gcroots");
 
     const detection = detect(projectDir)[0]!;
-    const provisioned = provisionStore({ projectDir, detection, vendorHash: KNOWN_NPM_DEPS_HASH });
+    const provisioned = provisionStore({ projectDir, detection, depsHash: KNOWN_NPM_DEPS_HASH });
     expect(provisioned.toolchainStorePath).toContain("/nix/store/");
     expect(provisioned.depsStorePath).toContain("/nix/store/");
 

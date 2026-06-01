@@ -21,11 +21,12 @@ export interface ProvisionSpec {
   /** What detection concluded (ADR 0006) — selects the importer. */
   readonly detection: Detection;
   /**
-   * Known deps hash (Go vendor hash / Node npmDepsHash / Python pip-FOD hash).
-   * When omitted, the store discovers it via a placeholder build (ADR 0004 — v1
-   * has no dynamic-derivations).
+   * Known deps hash to skip discovery. The single honest hash for any ecosystem
+   * (each importer maps it onto its own Nix attr internally). When omitted, the
+   * store discovers it via a placeholder build (ADR 0004 — v1 has no
+   * dynamic-derivations).
    */
-  readonly vendorHash?: string;
+  readonly depsHash?: string;
   /**
    * Provision impurely (ADR 0004 `allow`): build only the Toolchain into the
    * Store and leave Project Deps to a container-side install under scoped egress.
@@ -155,7 +156,7 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
   }
 
   // Pure path. Pass 1: discover the deps hash if not supplied (ADR 0004).
-  let depsHash = spec.vendorHash;
+  let depsHash = spec.depsHash;
   if (depsHash === undefined) {
     write(FAKE_VENDOR_HASH);
     const probe = ctx.run(["-A", attrs.deps, "--no-out-link"]);

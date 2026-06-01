@@ -55,7 +55,7 @@ describe("dustcastle run (slice 2: Node pure path, ADR 0002/0003/0004/0005/0008)
       // → plan the Sandbox. The fixture has no install scripts, so it's pure.
       const prepared = prepareRun({
         cwd: projectDir,
-        vendorHash: KNOWN_NPM_DEPS_HASH,
+        depsHash: KNOWN_NPM_DEPS_HASH,
       });
       expect(prepared.detection.ecosystem).toBe("node");
       expect(prepared.impurity.kind).toBe("pure");

@@ -54,7 +54,7 @@ describe("dustcastle run (slice 1: Go path, ADR 0002/0003/0004/0005/0008)", () =
       // dustcastle's real pipeline: detect → realize the Store → plan the Sandbox.
       const prepared = prepareRun({
         cwd: projectDir,
-        vendorHash: KNOWN_VENDOR_HASH,
+        depsHash: KNOWN_VENDOR_HASH,
       });
       expect(prepared.detection.ecosystem).toBe("go");
       expect(prepared.plan.podmanOptions.network).toBe("none");

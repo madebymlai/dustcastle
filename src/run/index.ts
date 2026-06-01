@@ -31,8 +31,8 @@ export interface PrepareOptions {
   readonly nixPortable?: string;
   /** Override the physical rootless store root. */
   readonly physStoreRoot?: string;
-  /** Supply a known deps hash to skip discovery (Go vendor hash / Node npmDepsHash / Python pip-FOD hash). */
-  readonly vendorHash?: string;
+  /** Supply a known deps hash to skip discovery (the single hash for any ecosystem). */
+  readonly depsHash?: string;
   /** Stream provisioning output (progress surfacing). */
   readonly onLine?: (line: string) => void;
   /** Environment to source the impurity mode from (ADR 0005); defaults to process.env. */
@@ -182,7 +182,7 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
     impure,
     ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
     ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
-    ...(opts.vendorHash !== undefined ? { vendorHash: opts.vendorHash } : {}),
+    ...(opts.depsHash !== undefined ? { depsHash: opts.depsHash } : {}),
     ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
   });
 

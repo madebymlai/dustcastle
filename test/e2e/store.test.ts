@@ -29,7 +29,7 @@ describe("provisionStore (rootless Store, ADR 0004/0008)", () => {
     const provisioned = provisionStore({
       projectDir,
       detection: detection!,
-      vendorHash: KNOWN_VENDOR_HASH,
+      depsHash: KNOWN_VENDOR_HASH,
     });
 
     // The Toolchain and Project Deps land as distinct content-addressed paths.
