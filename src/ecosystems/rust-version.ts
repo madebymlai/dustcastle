@@ -2,7 +2,7 @@ import type { ToolchainVersionInput } from "./types.js";
 
 const RUST_TOOLCHAIN_TOML = "rust-toolchain.toml";
 const LEGACY_RUST_TOOLCHAIN = "rust-toolchain";
-const TOOLCHAIN_TABLE = "[toolchain]";
+const TOOLCHAIN_TABLE = "toolchain";
 const CHANNEL_KEY = "channel";
 
 /**
@@ -27,7 +27,7 @@ export function readRustToolchainToml(text: string | undefined): string | undefi
     if (trimmedLine.length === 0) continue;
 
     if (trimmedLine.startsWith("[")) {
-      inToolchainTable = trimmedLine === TOOLCHAIN_TABLE;
+      inToolchainTable = readTableHeader(trimmedLine) === TOOLCHAIN_TABLE;
       continue;
     }
     if (!inToolchainTable) continue;
@@ -38,6 +38,11 @@ export function readRustToolchainToml(text: string | undefined): string | undefi
   }
 
   return undefined;
+}
+
+function readTableHeader(line: string): string | undefined {
+  if (!line.startsWith("[") || !line.endsWith("]") || line.startsWith("[[")) return undefined;
+  return nonEmpty(line.slice(1, -1).trim());
 }
 
 function readAssignment(line: string): { key: string; value: string } | undefined {

@@ -19,6 +19,10 @@ describe("readRustToolchainToml ([toolchain] channel parser)", () => {
       raw: '[toolchain]\ncomponents = ["rustfmt"]\nchannel = "1.76.0"\n',
       expected: "1.76.0",
     },
+    {
+      raw: '[ toolchain ]\nchannel = "beta"\n',
+      expected: "beta",
+    },
   ])("reads $expected", ({ raw, expected }) => {
     expect(readRustToolchainToml(raw)).toBe(expected);
   });
