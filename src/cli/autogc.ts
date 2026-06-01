@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import { DUSTCASTLE_HOME } from "../config/global.js";
 import { autoGc, type AutoGcOptions } from "../store/autogc.js";
 import { diskSpace, measureStoreBytes } from "../store/ceiling.js";

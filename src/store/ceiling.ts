@@ -1,5 +1,5 @@
 import { statfsSync } from "node:fs";
-import type { NixResult, NixRunner } from "./gc.js";
+import type { NixRunner } from "./gc.js";
 
 /**
  * The disk-derived hybrid ceiling (ADR 0007). Nix never garbage-collects by
