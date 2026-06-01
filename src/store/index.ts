@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 import type { Detection } from "../detect/index.js";
 import { CARGO_HOME_BASENAME } from "../nix/rust.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
@@ -187,13 +187,13 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
   };
 }
 
-// Rebuild artifacts that never belong in the deps build even if a project tracks
+// Rebuild artifacts that never belong in the deps build even if a project commits
 // them: VCS metadata, nix build outputs, and per-ecosystem dependency/cache dirs
 // rebuilt purely from the lockfile (node's `node_modules`/Go's `vendor`, Python's
-// `.venv` + dev caches — often hundreds of MB). Distinct from .gitignore: this is
-// the "rebuilt, so excluded from the hermetic build" set, applied on TOP of git's
-// ignore rules so a project that mistakenly tracks node_modules can't bloat / churn
-// the deps hash.
+// `.venv` + dev caches — often hundreds of MB). The committed tree already excludes
+// untracked junk; this is the "rebuilt, so excluded from the hermetic build" set,
+// pruned from the checkout so a project that mistakenly *tracks* node_modules can't
+// bloat / churn the deps hash.
 const STAGE_SKIP: ReadonlySet<string> = new Set([
   ".git",
   "vendor",
@@ -214,46 +214,79 @@ export function isStageableSource(path: string): boolean {
 }
 
 /**
- * Stage the project source into the build dir. Honors git's ignore rules so the
- * deps derivation's `src` is exactly the project's source — never the gitignored
- * junk (.beads DBs, `*.db`, build logs, scratch files) that would otherwise churn
- * the FOD hash and rebuild deps on every change. `git ls-files --cached --others
- * --exclude-standard` lists tracked + untracked files minus everything .gitignore
- * (at every level), `.git/info/exclude`, and the global excludes file mark ignored
- * — the same view a `git worktree` checkout gives. Falls back to a static skip-set
- * copy when the project is not a git work tree.
+ * Stage the project's COMMITTED source into the build dir so the deps derivation's
+ * `src` is exactly what git tracks at HEAD — reproducible from commits, never the
+ * dirty working tree. Materializes the committed tree with `git archive HEAD` (the
+ * same checkout model as sandcastle's `git worktree add`), then drops rebuild
+ * artifacts the commit may carry.
+ *
+ * Tracked-only by design, mirroring sandcastle: untracked / gitignored files (.beads
+ * DBs, scratch, build logs) are simply not in the committed tree, so they can never
+ * churn the FOD hash — and the few untracked paths an agent genuinely needs are
+ * opted in elsewhere by name via `copyToWorktree`/`worktreeCopies`, never staged
+ * wholesale here. Reading committed blobs instead of the work tree also makes
+ * index/work-tree skew — a tracked file deleted from disk without staging the
+ * deletion — structurally harmless: there is no disk read left to ENOENT on (the old
+ * `.beads/.beads/.gitignore` crash). The tradeoff is sandcastle's exact contract:
+ * uncommitted edits to tracked files are not built until committed.
+ *
+ * Falls back to a filtered working-dir copy when there is no committed tree to read
+ * (not a git work tree, or a repo with no commit yet).
  */
 export function stageSource(projectDir: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
-  const files = gitWorkTreeFiles(projectDir);
-  if (files === undefined) {
+  if (!archiveCommittedTree(projectDir, dest)) {
+    // No committed tree to read: best-effort copy of the working dir, still dropping
+    // rebuild artifacts. Tracked-only is unenforceable with nothing committed.
     cpSync(projectDir, dest, { recursive: true, filter: isStageableSource });
     return;
   }
-  for (const rel of files) {
-    // git already dropped ignored paths; additionally drop tracked rebuild artifacts.
-    if (rel.split("/").some((seg) => !isStageableSource(seg))) continue;
-    const to = join(dest, rel);
-    mkdirSync(dirname(to), { recursive: true });
-    cpSync(join(projectDir, rel), to);
+  // Drop tracked rebuild artifacts (node_modules / vendor / __pycache__ / …) that the
+  // committed tree may carry — applied on TOP of the checkout, same intent as before.
+  pruneRebuildArtifacts(dest);
+}
+
+/**
+ * Materialize the committed tree at HEAD into `dest` via `git archive` piped through
+ * `tar` (a temp tarball keeps huge trees off the heap; symlinks — even dangling ones
+ * — survive as the link entries git stored). Returns false when there is no committed
+ * tree to read (not a git work tree, git unavailable, or no commit yet) so the caller
+ * falls back; throws only if extraction of a real archive fails.
+ */
+function archiveCommittedTree(projectDir: string, dest: string): boolean {
+  const tarDir = mkdtempSync(join(tmpdir(), "dustcastle-archive-"));
+  const tarPath = join(tarDir, "src.tar");
+  try {
+    const archive = spawnSync(
+      "git",
+      ["-C", projectDir, "archive", "--format=tar", "-o", tarPath, "HEAD"],
+      { encoding: "utf8" },
+    );
+    if (archive.status !== 0) return false;
+    const extract = spawnSync("tar", ["-xf", tarPath, "-C", dest], { encoding: "utf8" });
+    if (extract.status !== 0) {
+      throw new Error(`store: failed to extract committed tree:\n${extract.stderr}`);
+    }
+    return true;
+  } finally {
+    rmSync(tarDir, { recursive: true, force: true });
   }
 }
 
 /**
- * The project's work-tree files honoring ALL standard git ignore sources
- * (`--exclude-standard`: every `.gitignore`, `$GIT_DIR/info/exclude`, and the
- * user's global excludes file). Tracked + untracked, minus ignored. `undefined`
- * when `projectDir` is not a git work tree (or git is unavailable) so the caller
- * falls back to the static skip-set copy.
+ * Recursively delete rebuild artifacts from the staged tree by basename — the
+ * `isStageableSource` set (node_modules, vendor, result*, Python caches), at any
+ * depth. Drops a whole tracked `node_modules` so it can't bloat / churn the deps hash.
  */
-function gitWorkTreeFiles(projectDir: string): string[] | undefined {
-  const r = spawnSync(
-    "git",
-    ["-C", projectDir, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-  );
-  if (r.status !== 0) return undefined;
-  return r.stdout.split("\0").filter((p) => p.length > 0);
+function pruneRebuildArtifacts(dir: string): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (!isStageableSource(entry.name)) {
+      rmSync(path, { recursive: true, force: true });
+    } else if (entry.isDirectory()) {
+      pruneRebuildArtifacts(path);
+    }
+  }
 }
 
 function runNixBuild(

@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -91,9 +100,12 @@ describe("isStageableSource (the staged-build-source filter)", () => {
   });
 });
 
-describe("stageSource (honors git's ignore rules so the deps hash is stable)", () => {
+describe("stageSource (stages the committed tree so the deps hash is reproducible)", () => {
   const git = (dir: string, ...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
 
+  // A git project with one commit, so HEAD has a tree to stage. stageSource reads
+  // the COMMITTED tree (`git archive HEAD`), not the working dir — so fixtures must
+  // commit anything they expect to be staged.
   function gitProject(): string {
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-stage-"));
     tmps.push(dir);
@@ -102,58 +114,105 @@ describe("stageSource (honors git's ignore rules so the deps hash is stable)", (
     git(dir, "config", "user.name", "t");
     writeFileSync(join(dir, "package.json"), "{}");
     writeFileSync(join(dir, "index.js"), "export const x = 1;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "init");
     return dir;
   }
 
-  it("excludes .gitignored files (the deps build must not see gitignored junk)", () => {
+  const destDir = () => {
+    const dest = mkdtempSync(join(tmpdir(), "dustcastle-stage-dest-"));
+    tmps.push(dest);
+    return join(dest, "src");
+  };
+
+  it("stages only the committed tree — untracked files never reach the build", () => {
     const dir = gitProject();
-    writeFileSync(join(dir, ".gitignore"), "*.db\nscratch/\n");
+    // Junk that lives in the work tree but was never committed (gitignored or not):
+    // the committed-tree model excludes it by construction — no .gitignore needed.
     writeFileSync(join(dir, "scratch.db"), "binary");
     mkdirSync(join(dir, "scratch"));
     writeFileSync(join(dir, "scratch", "tmp.txt"), "junk");
-    const dest = mkdtempSync(join(tmpdir(), "dustcastle-stage-dest-"));
-    tmps.push(dest);
-    stageSource(dir, join(dest, "src"));
-    expect(existsSync(join(dest, "src", "package.json"))).toBe(true);
-    expect(existsSync(join(dest, "src", "index.js"))).toBe(true);
-    expect(existsSync(join(dest, "src", "scratch.db"))).toBe(false);
-    expect(existsSync(join(dest, "src", "scratch"))).toBe(false);
+    const src = destDir();
+    stageSource(dir, src);
+    expect(existsSync(join(src, "package.json"))).toBe(true);
+    expect(existsSync(join(src, "index.js"))).toBe(true);
+    expect(existsSync(join(src, "scratch.db"))).toBe(false);
+    expect(existsSync(join(src, "scratch"))).toBe(false);
   });
 
-  it("honors .git/info/exclude (a local, uncommitted ignore source)", () => {
+  it("stages committed content, not uncommitted edits to tracked files", () => {
+    // The (b) tradeoff: editing a tracked file on disk without committing must not
+    // change the build — the deps hash tracks commits, not the dirty work tree.
     const dir = gitProject();
-    writeFileSync(join(dir, ".git", "info", "exclude"), "secret.txt\n");
-    writeFileSync(join(dir, "secret.txt"), "do-not-stage");
-    const dest = mkdtempSync(join(tmpdir(), "dustcastle-stage-dest-"));
-    tmps.push(dest);
-    stageSource(dir, join(dest, "src"));
-    expect(existsSync(join(dest, "src", "secret.txt"))).toBe(false);
-    expect(existsSync(join(dest, "src", "package.json"))).toBe(true);
+    writeFileSync(join(dir, "index.js"), "export const x = 999; // uncommitted edit\n");
+    const src = destDir();
+    stageSource(dir, src);
+    expect(readFileSync(join(src, "index.js"), "utf8")).toBe("export const x = 1;\n");
   });
 
-  it("excludes rebuild artifacts even when a project tracks them (node_modules)", () => {
+  it("excludes rebuild artifacts even when a project commits them (node_modules)", () => {
     const dir = gitProject();
-    // No .gitignore for node_modules — force-track it; staging must still drop it.
+    // No .gitignore for node_modules — commit it; staging must still drop it.
     mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true });
     writeFileSync(join(dir, "node_modules", "pkg", "index.js"), "module.exports={}");
     git(dir, "add", "-A", "-f");
-    const dest = mkdtempSync(join(tmpdir(), "dustcastle-stage-dest-"));
-    tmps.push(dest);
-    stageSource(dir, join(dest, "src"));
-    expect(existsSync(join(dest, "src", "node_modules"))).toBe(false);
-    expect(existsSync(join(dest, "src", "index.js"))).toBe(true);
+    git(dir, "commit", "-q", "-m", "track node_modules");
+    const src = destDir();
+    stageSource(dir, src);
+    expect(existsSync(join(src, "node_modules"))).toBe(false);
+    expect(existsSync(join(src, "index.js"))).toBe(true);
   });
 
-  it("falls back to the static skip-set copy outside a git work tree", () => {
+  it("does not crash on index/worktree skew (a tracked file deleted from disk, unstaged)", () => {
+    // The phantom-file bug (`.beads/.beads/.gitignore`): a committed file deleted from
+    // disk WITHOUT staging the deletion. The old code listed it then copied from disk
+    // → ENOENT. Reading the committed tree from blobs can't ENOENT, and HEAD still has
+    // the file, so it is materialized from its blob — git-faithful and crash-free.
+    const dir = gitProject();
+    writeFileSync(join(dir, "ghost.js"), "export const ghost = 1;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "add ghost");
+    rmSync(join(dir, "ghost.js")); // gone from disk, deletion NOT staged → the skew
+    const src = destDir();
+    expect(() => stageSource(dir, src)).not.toThrow();
+    expect(existsSync(join(src, "ghost.js"))).toBe(true); // restored from HEAD's blob
+    expect(existsSync(join(src, "index.js"))).toBe(true);
+  });
+
+  it("materializes a committed symlink, dangling target and all", () => {
+    // git stores symlinks as blobs; `git archive` + tar recreate them as links even
+    // when the target is missing — no special copy handling needed.
+    const dir = gitProject();
+    symlinkSync("does-not-exist", join(dir, "link.txt"));
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "add dangling symlink");
+    const src = destDir();
+    expect(() => stageSource(dir, src)).not.toThrow();
+    expect(lstatSync(join(src, "link.txt")).isSymbolicLink()).toBe(true);
+  });
+
+  it("falls back to a filtered copy outside a git work tree", () => {
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-stage-nogit-"));
     tmps.push(dir);
     writeFileSync(join(dir, "package.json"), "{}");
     mkdirSync(join(dir, "node_modules"));
     writeFileSync(join(dir, "node_modules", "x.js"), "x");
-    const dest = mkdtempSync(join(tmpdir(), "dustcastle-stage-dest-"));
-    tmps.push(dest);
-    stageSource(dir, join(dest, "src")); // no .git → fallback path
-    expect(existsSync(join(dest, "src", "package.json"))).toBe(true);
-    expect(existsSync(join(dest, "src", "node_modules"))).toBe(false);
+    const src = destDir();
+    stageSource(dir, src); // no .git → fallback path
+    expect(existsSync(join(src, "package.json"))).toBe(true);
+    expect(existsSync(join(src, "node_modules"))).toBe(false);
+  });
+
+  it("falls back to a filtered copy in a git repo with no commit yet (no HEAD)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-stage-nohead-"));
+    tmps.push(dir);
+    git(dir, "init", "-q"); // a work tree, but `git archive HEAD` has nothing to read
+    writeFileSync(join(dir, "package.json"), "{}");
+    mkdirSync(join(dir, "node_modules"));
+    writeFileSync(join(dir, "node_modules", "x.js"), "x");
+    const src = destDir();
+    stageSource(dir, src);
+    expect(existsSync(join(src, "package.json"))).toBe(true);
+    expect(existsSync(join(src, "node_modules"))).toBe(false);
   });
 });
