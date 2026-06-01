@@ -23,16 +23,16 @@ export function readRustToolchainToml(text: string | undefined): string | undefi
 
   let inToolchainTable = false;
   for (const line of text.split(/\r?\n/)) {
-    const trimmedLine = stripComment(line).trim();
+    const trimmedLine = stripTomlComment(line).trim();
     if (trimmedLine.length === 0) continue;
 
     if (trimmedLine.startsWith("[")) {
-      inToolchainTable = readTableHeader(trimmedLine) === TOOLCHAIN_TABLE;
+      inToolchainTable = parseTomlTableHeader(trimmedLine) === TOOLCHAIN_TABLE;
       continue;
     }
     if (!inToolchainTable) continue;
 
-    const assignment = readAssignment(trimmedLine);
+    const assignment = parseTomlAssignment(trimmedLine);
     if (assignment?.key !== CHANNEL_KEY) continue;
     return readTomlScalar(assignment.value);
   }
@@ -40,12 +40,12 @@ export function readRustToolchainToml(text: string | undefined): string | undefi
   return undefined;
 }
 
-function readTableHeader(line: string): string | undefined {
+function parseTomlTableHeader(line: string): string | undefined {
   if (!line.startsWith("[") || !line.endsWith("]") || line.startsWith("[[")) return undefined;
   return nonEmpty(line.slice(1, -1).trim());
 }
 
-function readAssignment(line: string): { key: string; value: string } | undefined {
+function parseTomlAssignment(line: string): { key: string; value: string } | undefined {
   const separator = line.indexOf("=");
   if (separator === -1) return undefined;
 
@@ -56,7 +56,7 @@ function readAssignment(line: string): { key: string; value: string } | undefine
 }
 
 /** Drop a trailing `# comment` not inside a quoted string. */
-function stripComment(line: string): string {
+function stripTomlComment(line: string): string {
   let inString: '"' | "'" | undefined;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
@@ -80,6 +80,7 @@ function readTomlScalar(value: string): string | undefined {
       return value.slice(1, -1).trim();
     }
   }
+
   return nonEmpty(value.trim());
 }
 
