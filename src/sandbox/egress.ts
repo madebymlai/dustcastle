@@ -62,6 +62,8 @@ const REGISTRY_HOSTS: Readonly<Record<string, string>> = {
 };
 
 const CARGO_VENDOR_HOSTS = ["index.crates.io", "static.crates.io"] as const;
+const SCP_STYLE_GIT_REMOTE = /^(?:[^@/]+@)?([^/:]+):/;
+const TOML_GIT_ATTRIBUTE = /\bgit\s*=\s*(["'])(.*?)\1/g;
 
 /**
  * Derive the egress decision (ADR 0005 / 0010) as the union of Build Egress and
@@ -73,21 +75,25 @@ const CARGO_VENDOR_HOSTS = ["index.crates.io", "static.crates.io"] as const;
  * host — a pure Sandbox build with no agent.
  */
 export function deriveEgress(input: EgressInput): EgressDecision {
-  const buildHosts: string[] = [];
-  if (input.buildPhase === "cargo-vendor") {
-    buildHosts.push(...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoManifest ?? ""));
-  } else if (input.impure) {
-    const registry = REGISTRY_HOSTS[input.packageManager];
-    if (registry !== undefined) buildHosts.push(registry);
-    if (input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) {
-      buildHosts.push(input.gitRemoteHost);
-    }
-  }
-
-  const agentHosts: string[] = (input.agentModelHosts ?? []).filter((h) => h.length > 0);
+  const buildHosts = buildEgressHosts(input);
+  const agentHosts = (input.agentModelHosts ?? []).filter((h) => h.length > 0);
 
   if (buildHosts.length === 0 && agentHosts.length === 0) return { kind: "none" };
-  return { kind: "allowlist", buildHosts: [...new Set(buildHosts)], agentHosts };
+  return { kind: "allowlist", buildHosts, agentHosts };
+}
+
+function buildEgressHosts(input: EgressInput): string[] {
+  if (input.buildPhase === "cargo-vendor") {
+    return uniqueHosts([...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoManifest ?? "")]);
+  }
+
+  if (!input.impure) return [];
+
+  const hosts: string[] = [];
+  const registry = REGISTRY_HOSTS[input.packageManager];
+  if (registry !== undefined) hosts.push(registry);
+  if (input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) hosts.push(input.gitRemoteHost);
+  return uniqueHosts(hosts);
 }
 
 /**
@@ -97,7 +103,7 @@ export function deriveEgress(input: EgressInput): EgressDecision {
  */
 export function egressHosts(decision: EgressDecision): string[] {
   if (decision.kind === "none") return [];
-  return [...new Set([...decision.buildHosts, ...decision.agentHosts])];
+  return uniqueHosts([...decision.buildHosts, ...decision.agentHosts]);
 }
 
 /**
@@ -109,8 +115,8 @@ export function parseGitRemoteHost(remoteUrl: string): string | undefined {
   if (url.length === 0) return undefined;
 
   // scp-style: user@host:path (no scheme, a colon before the path, no "//").
-  const scp = url.match(/^(?:[^@/]+@)?([^/:]+):/);
-  if (scp && !url.includes("://")) return scp[1];
+  const scpHost = parseScpStyleGitHost(url);
+  if (scpHost !== undefined && !url.includes("://")) return scpHost;
 
   // Scheme URLs: ssh://, https://, git://, …
   try {
@@ -124,37 +130,41 @@ export function parseGitRemoteHost(remoteUrl: string): string | undefined {
 /** Derive host:port entries from Cargo.toml `git = "…"` dependency references. */
 export function cargoGitDependencyHosts(cargoManifest: string): string[] {
   const hosts: string[] = [];
-  const gitAttr = /\bgit\s*=\s*(["'])(.*?)\1/g;
 
   for (const rawLine of cargoManifest.split(/\r?\n/)) {
     const line = stripTomlComment(rawLine);
-    for (const match of line.matchAll(gitAttr)) {
-      const host = gitUrlHostPort(match[2] ?? "");
+    for (const match of line.matchAll(TOML_GIT_ATTRIBUTE)) {
+      const host = gitDependencyHostWithPort(match[2] ?? "");
       if (host !== undefined) hosts.push(host);
     }
   }
 
-  return [...new Set(hosts)];
+  return uniqueHosts(hosts);
 }
 
 function stripTomlComment(line: string): string {
-  let quote: string | undefined;
+  let openQuote: string | undefined;
   for (let i = 0; i < line.length; i += 1) {
     const c = line[i]!;
-    if ((c === '"' || c === "'") && line[i - 1] !== "\\") {
-      quote = quote === c ? undefined : quote ?? c;
+    if (isTomlQuote(c) && line[i - 1] !== "\\") {
+      if (openQuote === c) openQuote = undefined;
+      else if (openQuote === undefined) openQuote = c;
     }
-    if (c === "#" && quote === undefined) return line.slice(0, i);
+    if (c === "#" && openQuote === undefined) return line.slice(0, i);
   }
   return line;
 }
 
-function gitUrlHostPort(remoteUrl: string): string | undefined {
+function isTomlQuote(value: string): boolean {
+  return value === '"' || value === "'";
+}
+
+function gitDependencyHostWithPort(remoteUrl: string): string | undefined {
   const url = remoteUrl.trim();
   if (url.length === 0) return undefined;
 
-  const scp = url.match(/^(?:[^@/]+@)?([^/:]+):/);
-  if (scp && !url.includes("://")) return `${scp[1]}:22`;
+  const scpHost = parseScpStyleGitHost(url);
+  if (scpHost !== undefined && !url.includes("://")) return `${scpHost}:22`;
 
   try {
     const parsed = new URL(url);
@@ -166,6 +176,14 @@ function gitUrlHostPort(remoteUrl: string): string | undefined {
     const host = parseGitRemoteHost(url);
     return host === undefined ? undefined : `${host}:443`;
   }
+}
+
+function parseScpStyleGitHost(remoteUrl: string): string | undefined {
+  return SCP_STYLE_GIT_REMOTE.exec(remoteUrl)?.[1];
+}
+
+function uniqueHosts(hosts: readonly string[]): string[] {
+  return [...new Set(hosts)];
 }
 
 function defaultGitPort(protocol: string): string | undefined {
