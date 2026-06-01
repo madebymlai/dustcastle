@@ -37,6 +37,8 @@ const npm: PackageManagerDescriptor = {
   // The impure in-container install (ADR 0004/0005): `npm ci` installs strictly
   // from the committed package-lock.json (frozen), running postinstall under scoped egress.
   impureInstall: ["npm ci"],
+  // Build Egress (ADR 0005): the registry `npm ci` fetches from on the impure path.
+  registryHost: "registry.npmjs.org",
 };
 
 const pnpm: PackageManagerDescriptor = {
@@ -63,6 +65,8 @@ const pnpm: PackageManagerDescriptor = {
   },
   // The impure in-container install (ADR 0004/0005): frozen to pnpm-lock.yaml.
   impureInstall: ["pnpm install --frozen-lockfile"],
+  // Build Egress (ADR 0005): pnpm fetches from the npm registry too.
+  registryHost: "registry.npmjs.org",
 };
 
 const yarn: PackageManagerDescriptor = {
@@ -94,6 +98,9 @@ const yarn: PackageManagerDescriptor = {
   // The impure in-container install (ADR 0004/0005): frozen to yarn.lock. (yarn's
   // signal is present-but-always-false, but the install is carried for uniformity.)
   impureInstall: ["yarn install --frozen-lockfile"],
+  // Build Egress (ADR 0005): yarn classic's own registry. Carried for uniformity
+  // alongside impureInstall, though yarn's always-false signal keeps it pure today.
+  registryHost: "registry.yarnpkg.com",
 };
 
 const bun: PackageManagerDescriptor = {
@@ -128,6 +135,9 @@ const bun: PackageManagerDescriptor = {
   // for uniformity though bun's provisionGate fires first (exactly like its
   // never-realized generateBuild) — a half-added manager stays honest.
   impureInstall: ["bun install --frozen-lockfile"],
+  // Build Egress (ADR 0005): bun uses the npm registry. Carried for uniformity
+  // alongside impureInstall, though bun's provisionGate fires before any build.
+  registryHost: "registry.npmjs.org",
 };
 
 // Keyed by Package Manager name for the Registry's compile-time exhaustiveness

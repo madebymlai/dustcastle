@@ -163,6 +163,32 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("cargo").impureInstall).toBeUndefined();
     });
 
+    // The Build Egress host is the NETWORK half of impureInstall (the install runs,
+    // and it reaches this registry), so it shares the same biconditional: a manager
+    // carries `registryHost` IFF it carries `impuritySignal`. This keeps a half-added
+    // manager honest — anything that can reach the impure path is proven to name the
+    // registry its install fetches from, so egress.ts never silently reaches no host
+    // (architecture review candidate 1). go/cargo have neither (they build pure).
+    it.each([...PACKAGE_MANAGERS])("%s has registryHost iff it has impuritySignal", (pm) => {
+      const d = packageManagerDescriptor(pm);
+      expect(d.registryHost !== undefined).toBe(d.impuritySignal !== undefined);
+    });
+
+    it("the node managers name their registry, the python managers name pypi", () => {
+      expect(packageManagerDescriptor("npm").registryHost).toBe("registry.npmjs.org");
+      expect(packageManagerDescriptor("pnpm").registryHost).toBe("registry.npmjs.org");
+      expect(packageManagerDescriptor("bun").registryHost).toBe("registry.npmjs.org");
+      expect(packageManagerDescriptor("yarn").registryHost).toBe("registry.yarnpkg.com");
+      expect(packageManagerDescriptor("pip").registryHost).toBe("pypi.org");
+      expect(packageManagerDescriptor("uv").registryHost).toBe("pypi.org");
+      expect(packageManagerDescriptor("poetry").registryHost).toBe("pypi.org");
+    });
+
+    it("go and cargo name no registry (no Build Egress — they build pure)", () => {
+      expect(packageManagerDescriptor("go").registryHost).toBeUndefined();
+      expect(packageManagerDescriptor("cargo").registryHost).toBeUndefined();
+    });
+
     describe("node managers install strictly from the committed lockfile (frozen/immutable)", () => {
       it("npm runs npm ci", () => {
         expect(packageManagerDescriptor("npm").impureInstall).toEqual(["npm ci"]);

@@ -88,6 +88,8 @@ const pip: PackageManagerDescriptor = {
   // The impure in-container install (ADR 0004/0005). pip consumes requirements.txt
   // directly (no export front-end), so it is JUST the shared pip-into-site install.
   impureInstall: [PIP_INSTALL_INTO_SITE],
+  // Build Egress (ADR 0005): the shared pip-into-site install fetches wheels from pypi.org.
+  registryHost: "pypi.org",
 };
 
 /**
@@ -141,6 +143,11 @@ const uv: PackageManagerDescriptor = {
   // the hash-pinned requirements (derived from `uvExport`, so the command is
   // single-sourced — never a duplicated literal), then install them into ./site.
   impureInstall: [exportCommand(uvExport), PIP_INSTALL_INTO_SITE],
+  // Build Egress (ADR 0005): uv's impure path runs `pip install` into ./site, which
+  // fetches wheels from pypi.org — so the allowlist must open pypi.org for an impure
+  // uv build. (Previously missing from egress.ts's table — impure uv builds had pypi
+  // blocked; the descriptor fold restores it and proves it at tsc.)
+  registryHost: "pypi.org",
 };
 
 /**
@@ -208,6 +215,9 @@ const poetry: PackageManagerDescriptor = {
   // (derived from `poetryExport`, single-sourced) to produce the hash-pinned
   // requirements, then install them into ./site.
   impureInstall: [exportCommand(poetryExport), PIP_INSTALL_INTO_SITE],
+  // Build Egress (ADR 0005): poetry's impure path runs `pip install` into ./site,
+  // fetching wheels from pypi.org (previously missing from egress.ts's table).
+  registryHost: "pypi.org",
   // No provisionGate: the laimk-hse.7 spike proved `poetry export` hermetic, so
   // poetry provisions through the same pure pip-FOD path as uv (the gate the
   // bun-gate honesty pattern reserved for an unproven front-end is no longer

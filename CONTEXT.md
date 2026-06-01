@@ -53,7 +53,7 @@ What a Sandbox can reach over the network — always an **allowlist** enforced b
 _Avoid_: network access, internet (reserve "Egress")
 
 **Build Egress**:
-The hosts the *build itself* needs — the package registry the Package Manager names, plus the repo's git host — derived from detection (ADR 0006), present **only on an impure build**. A pure build's Project Deps are pre-assembled offline in the Store, so it needs no Build Egress at all. This is ADR 0005's original derived allowlist.
+The hosts the *build itself* needs — the package registry the Package Manager names (the `registryHost` on its Ecosystem Registry descriptor), plus the repo's git host — derived from detection (ADR 0006), present **only on an impure build**. A pure build's Project Deps are pre-assembled offline in the Store, so it needs no Build Egress at all. This is ADR 0005's original derived allowlist. The registry host lives on the descriptor (not a standalone egress table), so it is exhaustive at `tsc` like every other dispatch grain — `registryHost` is present **iff** the manager has an `impuritySignal` (i.e. can reach the impure path). The host-side loose-pin resolve and the Cargo vendor FOD reach the network *outside* this allowlist by design (ADR 0005 amendment) — they are not Build Egress.
 _Avoid_: build network, registry allowlist
 
 **Agent Egress**:

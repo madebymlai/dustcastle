@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PackageManager } from "../ecosystems/index.js";
 import { deriveEgress, egressHosts, parseGitRemoteHost } from "./egress.js";
 
 // Scoped egress (ADR 0005 / 0010). Egress is the union of two sources: Build Egress
@@ -9,19 +10,39 @@ import { deriveEgress, egressHosts, parseGitRemoteHost } from "./egress.js";
 
 describe("deriveEgress — Build Egress (ADR 0005 derived allowlist)", () => {
   it("closes egress entirely for a pure build with no agent — no network at all", () => {
-    for (const packageManager of ["npm", "pnpm", "yarn", "go", "cargo"]) {
+    const managers: PackageManager[] = ["npm", "pnpm", "yarn", "go", "cargo"];
+    for (const packageManager of managers) {
       expect(deriveEgress({ packageManager, impure: false })).toEqual({ kind: "none" });
     }
   });
 
   it("allows only the npm registry for an impure npm/pnpm/bun build", () => {
-    for (const packageManager of ["npm", "pnpm", "bun"]) {
+    const managers: PackageManager[] = ["npm", "pnpm", "bun"];
+    for (const packageManager of managers) {
       const decision = deriveEgress({ packageManager, impure: true });
       expect(decision.kind).toBe("allowlist");
       if (decision.kind !== "allowlist") throw new Error("unreachable");
       expect(decision.buildHosts).toContain("registry.npmjs.org");
       expect(decision.agentHosts).toEqual([]);
     }
+  });
+
+  it("allows pypi.org for an impure uv build (uv's impure install fetches wheels from pypi)", () => {
+    const decision = deriveEgress({ packageManager: "uv", impure: true });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("pypi.org");
+  });
+
+  it("allows pypi.org for an impure poetry build (poetry's impure install fetches from pypi)", () => {
+    const decision = deriveEgress({ packageManager: "poetry", impure: true });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("pypi.org");
+  });
+
+  it("allows pypi.org for an impure pip build", () => {
+    const decision = deriveEgress({ packageManager: "pip", impure: true });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("pypi.org");
   });
 
   it("allows the yarn registry for an impure yarn build", () => {
@@ -35,110 +56,6 @@ describe("deriveEgress — Build Egress (ADR 0005 derived allowlist)", () => {
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("registry.npmjs.org");
     expect(decision.buildHosts).toContain("github.com");
-  });
-
-  it("derives Cargo vendor egress from sparse crates.io plus lockfile git dependency hosts only", () => {
-    const decision = deriveEgress({
-      packageManager: "cargo",
-      impure: false,
-      buildPhase: "cargo-vendor",
-      cargoLock: `
-[[package]]
-name = "itoa"
-version = "1.0.15"
-source = "git+https://github.com/dtolnay/itoa?tag=1.0.15#e2766b8"
-
-[[package]]
-name = "serde"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-`,
-    });
-
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    // The registry source's github.com host is NOT a git dep — only the git+ source is.
-    expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io", "github.com:443"]);
-    expect(decision.buildHosts).not.toContain("github.com/rust-lang/crates.io-index");
-    expect(decision.buildHosts).not.toContain("crates.io");
-  });
-
-  it("normalizes a git+https source with no explicit port to :443", () => {
-    const decision = deriveEgress({
-      packageManager: "cargo",
-      impure: false,
-      buildPhase: "cargo-vendor",
-      cargoLock: `
-[[package]]
-name = "repo"
-version = "0.1.0"
-source = "git+https://gitlab.com/g/sub/repo"
-`,
-    });
-
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("gitlab.com:443");
-  });
-
-  it("derives the scheme's default port for a non-https git source (git+ssh → :22)", () => {
-    const decision = deriveEgress({
-      packageManager: "cargo",
-      impure: false,
-      buildPhase: "cargo-vendor",
-      cargoLock: `
-[[package]]
-name = "repo"
-version = "0.1.0"
-source = "git+ssh://git@github.com/org/repo?rev=abc"
-`,
-    });
-
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("github.com:22");
-  });
-
-  it("derives a git host from a Cargo.lock-only git dependency (transitive, absent from Cargo.toml)", () => {
-    // The lockfile is the resolved truth: a transitive git dep need never appear in
-    // the root Cargo.toml, yet its host must still be allowlisted for the vendor FOD.
-    const decision = deriveEgress({
-      packageManager: "cargo",
-      impure: false,
-      buildPhase: "cargo-vendor",
-      cargoLock: `
-# This file is automatically @generated by Cargo.
-[[package]]
-name = "deep"
-version = "0.3.1"
-source = "git+https://github.com/foo/bar?rev=abc123#abc123def"
-`,
-    });
-
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io", "github.com:443"]);
-  });
-
-  it("does not add any git host to Cargo vendor egress when the lockfile has no git dependency", () => {
-    const decision = deriveEgress({
-      packageManager: "cargo",
-      impure: false,
-      buildPhase: "cargo-vendor",
-      cargoLock: `
-[[package]]
-name = "serde"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-`,
-    });
-
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io"]);
-  });
-
-  it("allows only the crates.io sparse index for a cargo lock-only resolve", () => {
-    const decision = deriveEgress({ packageManager: "cargo", impure: false, buildPhase: "lockOnlyResolve" });
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toEqual(["index.crates.io"]);
-    expect(decision.buildHosts).not.toContain("static.crates.io");
-    expect(decision.agentHosts).toEqual([]);
   });
 
   it("is an allowlist, never unrestricted — no wildcard / catch-all host", () => {

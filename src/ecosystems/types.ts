@@ -221,6 +221,21 @@ export interface PackageManagerDescriptor {
    * the field is legitimately optional, so the guarantee is a test, not the type system.
    */
   readonly impureInstall?: readonly string[];
+  /**
+   * The registry host this manager's impure install fetches from — the Build Egress
+   * the allowlist proxy opens on an impure runtime build (ADR 0005; CONTEXT.md:
+   * "the package registry the Package Manager names"). npm/pnpm/bun → registry.npmjs.org,
+   * yarn → registry.yarnpkg.com, pip/uv/poetry → pypi.org.
+   *
+   * This is the NETWORK half of {@link impureInstall}: the command runs, and it reaches
+   * THIS host. So the invariant is the same biconditional — `registryHost` present IFF
+   * `impuritySignal` present (the manager can reach the impure path). ABSENT for go/cargo,
+   * which have no `impuritySignal` and build pure unconditionally, so they open no Build
+   * Egress at all. `egress.ts` derives the allowlist off this descriptor field rather than
+   * a free-`string` table, so a half-added manager fails at `tsc` instead of silently
+   * reaching no registry. `ecosystems.test.ts` pins the biconditional.
+   */
+  readonly registryHost?: string;
   /** The honest provision gate (ADR 0001). Present only for bun in v1. */
   readonly provisionGate?: ProvisionGate;
 }
