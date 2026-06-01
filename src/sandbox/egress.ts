@@ -80,22 +80,40 @@ const LOCK_ONLY_RESOLVE_HOSTS: Readonly<Record<string, readonly string[]>> = {
  * no agent.
  */
 export function deriveEgress(input: EgressInput): EgressDecision {
-  const buildHosts: string[] = [];
-  const phase = input.buildPhase ?? "runtime";
-  if (phase === "lockOnlyResolve") {
-    buildHosts.push(...(LOCK_ONLY_RESOLVE_HOSTS[input.packageManager] ?? []));
-  } else if (input.impure) {
-    const registry = REGISTRY_HOSTS[input.packageManager];
-    if (registry !== undefined) buildHosts.push(registry);
-  }
-  if (buildHosts.length > 0 && input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) {
-    buildHosts.push(input.gitRemoteHost);
-  }
-
-  const agentHosts: string[] = (input.agentModelHosts ?? []).filter((h) => h.length > 0);
+  const buildHosts = buildEgressHosts(input);
+  const agentHosts = (input.agentModelHosts ?? []).filter((host) => host.length > 0);
 
   if (buildHosts.length === 0 && agentHosts.length === 0) return { kind: "none" };
   return { kind: "allowlist", buildHosts, agentHosts };
+}
+
+function buildEgressHosts(input: EgressInput): string[] {
+  const hosts = phaseBuildHosts(input);
+
+  if (hosts.length > 0 && input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) {
+    hosts.push(input.gitRemoteHost);
+  }
+  return hosts;
+}
+
+function phaseBuildHosts(input: EgressInput): string[] {
+  switch (input.buildPhase ?? "runtime") {
+    case "lockOnlyResolve":
+      return lockOnlyResolveHosts(input);
+    case "runtime":
+    default:
+      return runtimeBuildHosts(input);
+  }
+}
+
+function lockOnlyResolveHosts(input: EgressInput): string[] {
+  return [...(LOCK_ONLY_RESOLVE_HOSTS[input.packageManager] ?? [])];
+}
+
+function runtimeBuildHosts(input: EgressInput): string[] {
+  if (!input.impure) return [];
+  const registry = REGISTRY_HOSTS[input.packageManager];
+  return registry === undefined ? [] : [registry];
 }
 
 /**

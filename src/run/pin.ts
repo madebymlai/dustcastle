@@ -146,18 +146,34 @@ export function exportRequirements(opts: ExportOptions): Exported | undefined {
 }
 
 function defaultResolve(command: string, args: readonly string[], cwd: string): ResolveResult {
-  // `cargo generate-lockfile` writes the sparse index cache under CARGO_HOME. Give
-  // it an isolated writable home (and do not set --offline); the generated
-  // Cargo.lock is the only artifact dustcastle keeps before the pure vendor path.
-  const cargoHome = command === "cargo" && args[0] === "generate-lockfile"
+  const cargoHome = isCargoGenerateLockfile(command, args)
     ? mkdtempSync(join(tmpdir(), "dustcastle-cargo-home-"))
     : undefined;
+
   try {
-    const env = cargoHome === undefined ? process.env : { ...process.env, CARGO_HOME: cargoHome };
-    const r = spawnSync(command, [...args], { cwd, encoding: "utf8", env });
+    const r = spawnSync(command, [...args], {
+      cwd,
+      encoding: "utf8",
+      env: resolveEnv(cargoHome),
+    });
     const stderr = r.stderr ?? (r.error instanceof Error ? r.error.message : "");
     return { status: r.status, stderr };
   } finally {
     if (cargoHome !== undefined) rmSync(cargoHome, { recursive: true, force: true });
   }
+}
+
+function isCargoGenerateLockfile(command: string, args: readonly string[]): boolean {
+  return command === "cargo" && args[0] === "generate-lockfile";
+}
+
+function resolveEnv(cargoHome: string | undefined): NodeJS.ProcessEnv {
+  if (cargoHome === undefined) return process.env;
+
+  // `cargo generate-lockfile` writes the sparse index cache under CARGO_HOME. Give
+  // it an isolated writable home and force the resolve online; the generated
+  // Cargo.lock is the only artifact dustcastle keeps before the pure vendor path.
+  const env: NodeJS.ProcessEnv = { ...process.env, CARGO_HOME: cargoHome };
+  delete env.CARGO_NET_OFFLINE;
+  return env;
 }
