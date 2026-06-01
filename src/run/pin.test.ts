@@ -97,22 +97,20 @@ describe("pinLooseManifest (the one-time online resolve — ADR 0006c)", () => {
     const cargoHomeCapture = join(dir, "cargo-home.txt");
     const offlineCapture = join(dir, "cargo-offline.txt");
     mkdirSync(bin);
+    // Capture to cwd-relative files (cwd == project dir): the scoped resolve env
+    // (dustcastle-4ky) drops ambient vars, so the capture channel can't rely on one.
     writeFileSync(
       join(bin, "cargo"),
       "#!/bin/sh\n" +
-        'printf "%s" "$CARGO_HOME" > "$DUSTCASTLE_CAPTURE_CARGO_HOME"\n' +
-        'printf "%s" "${CARGO_NET_OFFLINE-}" > "$DUSTCASTLE_CAPTURE_CARGO_OFFLINE"\n',
+        'printf "%s" "${CARGO_HOME-}" > cargo-home.txt\n' +
+        'printf "%s" "${CARGO_NET_OFFLINE-}" > cargo-offline.txt\n',
     );
     chmodSync(join(bin, "cargo"), 0o755);
 
     const oldPath = process.env.PATH;
     const oldCargoOffline = process.env.CARGO_NET_OFFLINE;
-    const oldCaptureHome = process.env.DUSTCASTLE_CAPTURE_CARGO_HOME;
-    const oldCaptureOffline = process.env.DUSTCASTLE_CAPTURE_CARGO_OFFLINE;
     process.env.PATH = oldPath === undefined ? bin : `${bin}:${oldPath}`;
-    process.env.CARGO_NET_OFFLINE = "true";
-    process.env.DUSTCASTLE_CAPTURE_CARGO_HOME = cargoHomeCapture;
-    process.env.DUSTCASTLE_CAPTURE_CARGO_OFFLINE = offlineCapture;
+    process.env.CARGO_NET_OFFLINE = "true"; // a host-set offline flag must be dropped
 
     try {
       const pinned = pinLooseManifest({ cwd: dir, packageManager: "cargo" });
@@ -125,8 +123,40 @@ describe("pinLooseManifest (the one-time online resolve — ADR 0006c)", () => {
     } finally {
       restoreEnv("PATH", oldPath);
       restoreEnv("CARGO_NET_OFFLINE", oldCargoOffline);
-      restoreEnv("DUSTCASTLE_CAPTURE_CARGO_HOME", oldCaptureHome);
-      restoreEnv("DUSTCASTLE_CAPTURE_CARGO_OFFLINE", oldCaptureOffline);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes the cargo resolve env — no ambient host secret leaks to the subprocess (dustcastle-4ky)", () => {
+    // ADR 0005 decision 1: the host-side loose-pin resolve is trusted + pre-Sandbox,
+    // but it must inherit no ambient host credentials. The fake cargo writes what it
+    // sees into cwd-relative files (cwd == project dir), so the capture channel needs
+    // no env var of its own to survive the scoped env.
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-pin-env-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "cargo"),
+      "#!/bin/sh\n" +
+        'printf "%s" "${DUSTCASTLE_PIN_SENTINEL-}" > sentinel.txt\n' +
+        'printf "%s" "${CARGO_HOME-}" > cargo-home.txt\n',
+    );
+    chmodSync(join(bin, "cargo"), 0o755);
+
+    const oldPath = process.env.PATH;
+    const oldSentinel = process.env.DUSTCASTLE_PIN_SENTINEL;
+    process.env.PATH = oldPath === undefined ? bin : `${bin}:${oldPath}`;
+    process.env.DUSTCASTLE_PIN_SENTINEL = "leak-me"; // stands in for a host secret
+
+    try {
+      pinLooseManifest({ cwd: dir, packageManager: "cargo" });
+      // The ambient secret must NOT reach the resolve…
+      expect(readFileSync(join(dir, "sentinel.txt"), "utf8")).toBe("");
+      // …but the isolated, writable CARGO_HOME the resolve genuinely needs IS present.
+      expect(readFileSync(join(dir, "cargo-home.txt"), "utf8")).toContain("dustcastle-cargo-home-");
+    } finally {
+      restoreEnv("PATH", oldPath);
+      restoreEnv("DUSTCASTLE_PIN_SENTINEL", oldSentinel);
       rmSync(dir, { recursive: true, force: true });
     }
   });

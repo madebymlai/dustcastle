@@ -173,11 +173,44 @@ function isCargoGenerateLockfile(command: string, args: readonly string[]): bool
   return command === "cargo" && args[0] === "generate-lockfile";
 }
 
+// Deny-by-default env allowlist for the host-side loose-pin resolve (ADR 0005
+// decision 1 / dustcastle-4ky). `cargo generate-lockfile` is a trusted, pre-Sandbox
+// metadata-only resolve, but it must inherit NO ambient host secrets — pass only the
+// TLS/toolchain/locale/proxy vars cargo legitimately needs to read the sparse index
+// online. CARGO_HOME is set explicitly (isolated writable home); CARGO_NET_OFFLINE is
+// intentionally absent so the one-time resolve runs online.
+const CARGO_RESOLVE_ENV_ALLOWLIST = [
+  "HOME",
+  "PATH",
+  "USER",
+  "LOGNAME",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  // TLS trust roots — without these cargo can't establish HTTPS to the sparse index.
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NIX_SSL_CERT_FILE",
+  "CURL_CA_BUNDLE",
+  // rustup-managed hosts: a `cargo` shim resolves the toolchain through these.
+  "RUSTUP_HOME",
+  "RUSTUP_TOOLCHAIN",
+  // Outbound proxy config (corporate hosts) — network plumbing, not a host secret.
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+] as const;
+
 function cargoGenerateLockfileEnv(cargoHome: string): NodeJS.ProcessEnv {
-  // `cargo generate-lockfile` writes the sparse index cache under CARGO_HOME. Give
-  // it an isolated writable home and force the resolve online; the generated
-  // Cargo.lock is the only artifact dustcastle keeps before the pure vendor path.
-  const env: NodeJS.ProcessEnv = { ...process.env, CARGO_HOME: cargoHome };
-  delete env.CARGO_NET_OFFLINE;
+  const env: NodeJS.ProcessEnv = { CARGO_HOME: cargoHome };
+  for (const name of CARGO_RESOLVE_ENV_ALLOWLIST) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
   return env;
 }
