@@ -4,9 +4,10 @@
  * derived sources, kept distinct so a reader never mistakes "has an allowlist" for
  * "impure build":
  *
- *  - **Build Egress** — the registry the package manager names + the repo's git
- *    host, DERIVED from detection (ADR 0005's "derived, not declared"). Present
- *    only on an impure build; a pure build's deps are pre-assembled offline.
+ *  - **Build Egress** — the registry/index the package manager names + the repo's
+ *    git host, DERIVED from detection (ADR 0005's "derived, not declared").
+ *    Present on impure runtime installs and on explicit online pin phases; a pure
+ *    runtime build's deps are pre-assembled offline.
  *  - **Agent Egress** — the coding agent's own model-provider API host (ADR 0010).
  *    Present whenever an agent will run, REGARDLESS of build purity: the agent
  *    must reach its LLM even when the build itself reaches nothing it would use.
@@ -19,17 +20,25 @@ export type EgressDecision =
   | { readonly kind: "none" }
   | {
       readonly kind: "allowlist";
-      /** Hosts the *build* needs (registry + git); impure-only (ADR 0005). */
+      /** Hosts the *build* needs (registry/index + git) for the scoped phase. */
       readonly buildHosts: readonly string[];
       /** The *agent's* model-provider API host(s) (ADR 0010). */
       readonly agentHosts: readonly string[];
     };
+
+export type BuildEgressPhase = "runtime" | "lockOnlyResolve";
 
 export interface EgressInput {
   /** The detected package manager (names its registry). */
   readonly packageManager: string;
   /** Whether this build runs impurely (untrusted install code with network). */
   readonly impure: boolean;
+  /**
+   * Which build-side network phase is being scoped. The default runtime phase only
+   * opens Build Egress for impure installs; lockOnlyResolve is the one-time
+   * pin-then-pure resolve for loose manifests (online, but not an impure install).
+   */
+  readonly buildPhase?: BuildEgressPhase;
   /** The repo's git remote host, when known (for git-sourced deps). */
   readonly gitRemoteHost?: string;
   /**
@@ -50,23 +59,37 @@ const REGISTRY_HOSTS: Readonly<Record<string, string>> = {
   pip: "pypi.org",
 };
 
+const LOCK_ONLY_RESOLVE_HOSTS: Readonly<Record<string, readonly string[]>> = {
+  npm: ["registry.npmjs.org"],
+  pnpm: ["registry.npmjs.org"],
+  pip: ["pypi.org"],
+  // `cargo generate-lockfile` reads package metadata/checksums from the sparse
+  // index, but downloads no crate tarballs, so static.crates.io is deliberately
+  // absent (dustcastle-gy5.4).
+  cargo: ["index.crates.io"],
+};
+
 /**
  * Derive the egress decision (ADR 0005 / 0010) as the union of Build Egress and
- * Agent Egress. Build Egress (impure-only) is the registry the manager already
- * uses plus the repo's git host — turning "a compromised dep can exfiltrate
- * anywhere" into "it can reach the registries it was going to anyway." Agent
- * Egress is the model host, added whenever an agent will run regardless of purity.
+ * Agent Egress. Runtime Build Egress opens only for impure installs: the registry
+ * the manager already uses plus the repo's git host — turning "a compromised dep
+ * can exfiltrate anywhere" into "it can reach the registries it was going to
+ * anyway." Lock-only resolve phases can also request their minimal online index.
+ * Agent Egress is the model host, added whenever an agent will run regardless of purity.
  * Closed (`none`) only when neither source contributes a host — a pure build with
  * no agent.
  */
 export function deriveEgress(input: EgressInput): EgressDecision {
   const buildHosts: string[] = [];
-  if (input.impure) {
+  const phase = input.buildPhase ?? "runtime";
+  if (phase === "lockOnlyResolve") {
+    buildHosts.push(...(LOCK_ONLY_RESOLVE_HOSTS[input.packageManager] ?? []));
+  } else if (input.impure) {
     const registry = REGISTRY_HOSTS[input.packageManager];
     if (registry !== undefined) buildHosts.push(registry);
-    if (input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) {
-      buildHosts.push(input.gitRemoteHost);
-    }
+  }
+  if (buildHosts.length > 0 && input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) {
+    buildHosts.push(input.gitRemoteHost);
   }
 
   const agentHosts: string[] = (input.agentModelHosts ?? []).filter((h) => h.length > 0);

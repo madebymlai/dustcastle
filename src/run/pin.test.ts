@@ -22,6 +22,13 @@ describe("lockOnlyResolve (the lock-only resolve invocation — ADR 0006c)", () 
     expect(resolve.lockfile).toBe("pnpm-lock.yaml");
   });
 
+  it("resolves a loose Cargo.toml with `cargo generate-lockfile`", () => {
+    const resolve = lockOnlyResolve("cargo");
+    expect(resolve.command).toBe("cargo");
+    expect(resolve.args).toEqual(["generate-lockfile"]);
+    expect(resolve.lockfile).toBe("Cargo.lock");
+  });
+
   it("resolves a loose pip manifest with `uv pip compile --generate-hashes` (laimk-hse.5)", () => {
     // A loose Python manifest (unpinned/hash-less requirements.txt, abstract
     // pyproject) resolves ONCE into a VISIBLE, hash-pinned requirements.txt, then
@@ -66,6 +73,19 @@ describe("pinLooseManifest (the one-time online resolve — ADR 0006c)", () => {
     expect(() => pinLooseManifest({ cwd: "/proj", packageManager: "npm", run })).toThrow(
       /lock-only resolve failed/i,
     );
+  });
+
+  it("runs the cargo loose resolve and surfaces the generated Cargo.lock", () => {
+    const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+    const run = (command: string, args: readonly string[], cwd: string): ResolveResult => {
+      calls.push({ command, args, cwd });
+      return OK;
+    };
+
+    const pinned = pinLooseManifest({ cwd: "/rust", packageManager: "cargo", run });
+
+    expect(calls).toEqual([{ command: "cargo", args: ["generate-lockfile"], cwd: "/rust" }]);
+    expect(pinned.lockfile).toBe("Cargo.lock");
   });
 
   it("runs the pip loose resolve (uv pip compile) and surfaces the generated requirements.txt", () => {

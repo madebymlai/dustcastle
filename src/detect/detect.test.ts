@@ -236,6 +236,14 @@ describe("detect — Rust ecosystem (Cargo, dustcastle-gy5.2)", () => {
 
     expect(detect(dir)).toContainEqual({ ecosystem: "rust", packageManager: "cargo" });
   });
+
+  it("flags a lockless Cargo.toml as a loose manifest (pin-then-pure)", () => {
+    const dir = repo({
+      "Cargo.toml": '[package]\nname = "sample"\nversion = "0.1.0"\nedition = "2021"\n',
+    });
+
+    expect(detect(dir)).toContainEqual({ ecosystem: "rust", packageManager: "cargo", loose: true });
+  });
 });
 
 describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => {

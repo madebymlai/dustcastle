@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PACKAGE_MANAGERS, packageManagerDescriptor } from "../ecosystems/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 
@@ -41,7 +44,7 @@ export function lockOnlyResolve(packageManager: string): ResolveCommand {
   }
   throw new Error(
     `pin-then-pure: cannot resolve a loose manifest for ${packageManager} — no lockfile-only ` +
-      "resolve is supported (npm and pnpm are; ADR 0006c). Commit a lockfile to build pure.",
+      "resolve is supported for this manager (ADR 0006c). Commit a lockfile to build pure.",
   );
 }
 
@@ -143,7 +146,18 @@ export function exportRequirements(opts: ExportOptions): Exported | undefined {
 }
 
 function defaultResolve(command: string, args: readonly string[], cwd: string): ResolveResult {
-  const r = spawnSync(command, [...args], { cwd, encoding: "utf8" });
-  const stderr = r.stderr ?? (r.error instanceof Error ? r.error.message : "");
-  return { status: r.status, stderr };
+  // `cargo generate-lockfile` writes the sparse index cache under CARGO_HOME. Give
+  // it an isolated writable home (and do not set --offline); the generated
+  // Cargo.lock is the only artifact dustcastle keeps before the pure vendor path.
+  const cargoHome = command === "cargo" && args[0] === "generate-lockfile"
+    ? mkdtempSync(join(tmpdir(), "dustcastle-cargo-home-"))
+    : undefined;
+  try {
+    const env = cargoHome === undefined ? process.env : { ...process.env, CARGO_HOME: cargoHome };
+    const r = spawnSync(command, [...args], { cwd, encoding: "utf8", env });
+    const stderr = r.stderr ?? (r.error instanceof Error ? r.error.message : "");
+    return { status: r.status, stderr };
+  } finally {
+    if (cargoHome !== undefined) rmSync(cargoHome, { recursive: true, force: true });
+  }
 }

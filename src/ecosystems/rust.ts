@@ -2,10 +2,10 @@ import { CARGO_HOME_BASENAME, generateRustBuild } from "../nix/rust.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
- * The Rust Ecosystem descriptors (dustcastle-gy5.2). Cargo is the sole Package
- * Manager. A committed Cargo.lock builds pure: fetchCargoVendor produces one
- * aggregate cargoHash, then the Sandbox stages the relocatable CARGO_HOME deps
- * with the existing env-only cp -RL path.
+ * The Rust Ecosystem descriptors. Cargo is the sole Package Manager. A committed
+ * Cargo.lock builds pure: fetchCargoVendor produces one aggregate cargoHash, then
+ * the Sandbox stages the relocatable CARGO_HOME deps with the existing env-only
+ * cp -RL path. A loose Cargo.toml pins first with cargo generate-lockfile.
  */
 
 const cargo: PackageManagerDescriptor = {
@@ -18,6 +18,12 @@ const cargo: PackageManagerDescriptor = {
       cargoHash: ctx.depsHash,
       ...(ctx.src !== undefined ? { src: ctx.src } : {}),
     }),
+  lockOnlyResolve: {
+    kind: "command",
+    command: "cargo",
+    args: ["generate-lockfile"],
+    lockfile: "Cargo.lock",
+  },
   // No impuritySignal / impureInstall: Cargo builds pure unconditionally in v1.
 };
 
@@ -28,8 +34,8 @@ export const RUST_ECOSYSTEM: EcosystemDescriptor = {
   manifests: ["Cargo.toml", "Cargo.lock"],
   managers: ["cargo"],
   defaultManager: "cargo",
-  // Generic loose detection covers Cargo.toml without Cargo.lock; the lock-only
-  // resolve command lands in the later loose-Cargo slice (dustcastle-gy5.4).
+  // Generic loose detection covers Cargo.toml without Cargo.lock; cargo's
+  // lockOnlyResolve pins it once before the pure vendored build.
   sandbox: {
     stageDir: CARGO_HOME_BASENAME,
     storeSubpath: "",
