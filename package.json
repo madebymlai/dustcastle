@@ -3,21 +3,45 @@
   "version": "0.1.0",
   "private": false,
   "description": "A global toolchain manager for AI coding agent sandboxes — one shared, deduplicated Nix store instead of per-project image builds.",
+  "license": "MIT",
+  "author": "Andrea Alai (madebymlai)",
+  "homepage": "https://github.com/madebymlai/dustcastle#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/madebymlai/dustcastle.git"
+  },
+  "bugs": {
+    "url": "https://github.com/madebymlai/dustcastle/issues"
+  },
+  "keywords": [
+    "sandbox",
+    "nix",
+    "toolchain",
+    "ai-agent",
+    "coding-agent",
+    "cli",
+    "container",
+    "reproducible"
+  ],
   "type": "module",
   "bin": {
-    "dustcastle": "./dist/cli/main.js"
+    "dustcastle": "dist/cli/main.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/*.test.js.map"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
     "dev": "tsx src/cli/main.ts",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:e2e": "vitest run --project e2e",
     "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "0.7.0",

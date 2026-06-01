@@ -64,9 +64,20 @@ HOST
 
 ## Status
 
-Early and not yet on npm. The project is at `v0.1.0`, so for now you build it from
-source (see below). Linux first; macOS and Windows run via a Linux container.
+Early, at `v0.1.0`. Linux first; macOS and Windows run via a Linux container.
 Requires a container runtime (Docker or Podman) and Node `>=22`.
+
+## Install
+
+```bash
+npm install -g dustcastle    # exposes the `dustcastle` command on your PATH
+```
+
+Or run it on demand without installing:
+
+```bash
+npx dustcastle run
+```
 
 ## Build from source
 

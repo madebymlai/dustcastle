@@ -1,0 +1,7 @@
+{
+  // Published-artifact build: same compiler options as tsconfig.json, but excludes
+  // the colocated *.test.ts so dist/ (and therefore the npm tarball) ships only
+  // runtime code. `npm run typecheck` still uses tsconfig.json to type-check tests.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "spike-go-store", "**/*.test.ts"]
+}
