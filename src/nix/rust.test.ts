@@ -26,6 +26,21 @@ describe("generateRustBuild (Cargo importer, dustcastle-gy5.2)", () => {
     expect(build.expression).toContain(`s|@vendor@|${CARGO_VENDOR_DIR}|g`);
   });
 
+  it("rebases the shipped cargo config unconditionally — no hand-written fallback (ADR-0004a Rejected)", () => {
+    const build = generateRustBuild({
+      pname: "sample",
+      cargoHash: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    });
+
+    // fetchCargoVendor always ships .cargo/config.toml with the complete source
+    // mapping (incl. git sources); ADR-0004a rejects hand-writing a minimal config
+    // because it risks dropping non-crates.io sources. The importer must only rebase
+    // the shipped config, never synthesize a fallback.
+    expect(build.expression).toContain(`s|@vendor@|${CARGO_VENDOR_DIR}|g`);
+    expect(build.expression).not.toContain("[source.crates-io]");
+    expect(build.expression).not.toContain('replace-with = "vendored-sources"');
+  });
+
   it("runs cargo test fully offline against staged deps", () => {
     const build = generateRustBuild({
       pname: "sample",

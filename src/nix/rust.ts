@@ -54,17 +54,13 @@ let
     mkdir -p "$out"
     cp -RL \${cargoVendor} "$out/vendor"
     chmod -R u+w "$out"
-    if [ -f "$out/vendor/.cargo/config.toml" ]; then
-      sed "s|@vendor@|${CARGO_VENDOR_DIR}|g" \
-        "$out/vendor/.cargo/config.toml" > "$out/config.toml"
-    else
-      cat > "$out/config.toml" <<'EOF'
-[source.crates-io]
-replace-with = "vendored-sources"
-[source.vendored-sources]
-directory = "${CARGO_VENDOR_DIR}"
-EOF
-    fi
+    # fetchCargoVendor always ships .cargo/config.toml with the complete source
+    # mapping (crates.io + git), so rebase its @vendor@ placeholder to the
+    # relocatable CARGO_HOME vendor dir. Hand-writing a minimal config is rejected
+    # (ADR-0004a): it risks dropping non-crates.io sources. A missing shipped config
+    # means a broken vendor FOD — fail loudly here rather than paper over it.
+    sed "s|@vendor@|${CARGO_VENDOR_DIR}|g" \
+      "$out/vendor/.cargo/config.toml" > "$out/config.toml"
   '';
 
   rustToolchainInputs = [ pkgs.rustc pkgs.cargo pkgs.cc ];
