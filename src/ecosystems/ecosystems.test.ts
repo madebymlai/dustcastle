@@ -41,9 +41,7 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(build.expression).toContain('pname = "sample');
     });
 
-    // (Provisioned now uses a single `depsHash` field — the per-manager hash
-    //  field dispatch was collapsed. The test that checked `outputHashField` is
-    //  removed; the store/run no longer need the attr name.)
+    // outputHashField removed — Provisioned now uses a single depsHash field.
   });
 
   describe("importer derivation reproduces today's JS_IMPORTERS map exactly", () => {
@@ -231,8 +229,7 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("pip").lockfiles).toEqual(["requirements.txt"]);
     });
 
-    // (Provisioned now uses a single `depsHash` field, so `pip` has no
-    //  `outputHashField` — this test is removed along with the field.)
+    // depsHash replaced outputHashField — pip stores its hash in the single field.
 
     it("pip has no provisionGate (the pip-FOD is supported, unlike bun)", () => {
       expect(packageManagerDescriptor("pip").provisionGate).toBeUndefined();
@@ -272,8 +269,7 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("uv").lockfiles).toEqual(["uv.lock"]);
     });
 
-    // (Provisioned now uses a single `depsHash` field — the per-manager hash
-    //  field dispatch was collapsed. This test is removed along with `outputHashField`.)
+    // depsHash replaced outputHashField — uv stores its hash in the single field.
 
     it("has no provisionGate (the pip-FOD is supported)", () => {
       expect(packageManagerDescriptor("uv").provisionGate).toBeUndefined();
@@ -328,8 +324,7 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("poetry").lockfiles).toEqual(["poetry.lock"]);
     });
 
-    // (Provisioned now uses a single `depsHash` field — the per-manager hash
-    //  field dispatch was collapsed. This test is removed along with `outputHashField`.)
+    // depsHash replaced outputHashField — poetry stores its hash in the single field.
 
     it("carries the `poetry export` front-end that feeds the pip-FOD", () => {
       // poetry produces the Importer's hash-pinned requirements via `poetry export`
