@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME, CARGO_VENDOR_DIR, generateRustBuild } from "./rust.js";
 
@@ -51,5 +53,20 @@ describe("generateRustBuild (Cargo importer, dustcastle-gy5.2)", () => {
     expect(build.expression).toContain("export CARGO_NET_OFFLINE=true");
     expect(build.expression).toContain("cargo test --offline --frozen");
     expect(build.expression).toContain("pkgs.cc");
+  });
+});
+
+describe("Cargo vendor-path coverage (dustcastle-kzw)", () => {
+  it("the crates.io fixture declares a real vendored dependency — default-CI tripwire", () => {
+    // The gy5.2 happy path (rust-sample) is zero-dependency, so default CI proves
+    // only the emitted expression shape, never that real crates.io deps vendor. This
+    // fixture carries a real crate; if it ever regresses to zero-dep, this fails in
+    // default CI WITHOUT needing the DUSTCASTLE_E2E live vendor+build gate.
+    const lock = readFileSync(
+      resolve(process.cwd(), "test/fixtures/rust-crate-sample/Cargo.lock"),
+      "utf8",
+    );
+    expect(lock).toMatch(/source = "registry\+https:\/\/github\.com\/rust-lang\/crates\.io-index"/);
+    expect(lock).toMatch(/checksum = "[0-9a-f]{64}"/);
   });
 });

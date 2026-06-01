@@ -120,6 +120,20 @@ export function stageRustGitProject(root: string): string {
   return projectDir;
 }
 
+// The committed Rust crates.io-dependency sample (dustcastle-kzw): a real crates.io
+// crate (itoa) so the happy crates.io vendor path actually vendors a dependency —
+// the gy5.2 rust-sample is zero-dependency and vendors nothing. Proves the vendored
+// tree is non-empty and resolves offline.
+export const RUST_CRATE_SAMPLE = resolve(process.cwd(), "test/fixtures/rust-crate-sample");
+
+/** Stage the Rust crates.io-dependency sample under the same "sample" crate name. */
+export function stageRustCrateProject(root: string): string {
+  const projectDir = join(root, "sample");
+  mkdirSync(projectDir);
+  cpSync(RUST_CRATE_SAMPLE, projectDir, { recursive: true });
+  return projectDir;
+}
+
 // The committed Python sample (slice laimk-hse.2): a hash-pinned, wheels-only
 // requirements.txt (idna + urllib3, both pure-Python wheels → pip-FOD pure path)
 // + a `python -m pytest` gate. Signalled by requirements.txt so detection routes

@@ -1,0 +1,13 @@
+[package]
+name = "sample"
+version = "0.1.0"
+edition = "2021"
+
+# A pure-Rust crates.io leaf dep (no build script, no transitive deps) so the
+# vendored set stays small + deterministic: the fixture proves the crates.io
+# vendor path, not crate-graph noise (dustcastle-kzw).
+[dependencies]
+itoa = "1"
+
+[lib]
+path = "src/lib.rs"

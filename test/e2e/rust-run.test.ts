@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME } from "../../src/nix/rust.js";
 import { prepareRun } from "../../src/run/index.js";
-import { stageRustGitProject, stageRustProject } from "./fixture.js";
+import { stageRustCrateProject, stageRustGitProject, stageRustProject } from "./fixture.js";
 
 // Rust happy-path (dustcastle-gy5.2): a committed Cargo.lock provisions pure,
 // stages deps into CARGO_HOME with the existing cp -RL path, and cargo test runs
@@ -85,5 +85,12 @@ describe("dustcastle run — Rust pure path (dustcastle-gy5.2)", () => {
 
   e2e("vendors a Cargo git dependency under the aggregate hash and resolves it offline", async () => {
     await expectRustFixtureOffline(stageRustGitProject, "dustcastle-rust-git-run-");
+  });
+
+  e2e("vendors a real crates.io dependency under the aggregate hash and resolves it offline", async () => {
+    // The gy5.2 happy path is zero-dependency; this proves a non-empty crates.io
+    // vendor tree builds+tests offline (dustcastle-kzw — the live half of the
+    // default-CI tripwire in src/nix/rust.test.ts).
+    await expectRustFixtureOffline(stageRustCrateProject, "dustcastle-rust-crate-run-");
   });
 });
