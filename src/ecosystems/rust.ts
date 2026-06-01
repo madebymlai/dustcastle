@@ -1,4 +1,5 @@
 import { CARGO_HOME_BASENAME, generateRustBuild } from "../nix/rust.js";
+import { readRustToolchainVersion } from "./rust-version.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
@@ -34,6 +35,7 @@ export const RUST_ECOSYSTEM: EcosystemDescriptor = {
   manifests: ["Cargo.toml", "Cargo.lock"],
   managers: ["cargo"],
   defaultManager: "cargo",
+  readToolchainVersion: readRustToolchainVersion,
   // Generic loose detection covers Cargo.toml without Cargo.lock; cargo's
   // lockOnlyResolve pins it once before the pure vendored build.
   sandbox: {

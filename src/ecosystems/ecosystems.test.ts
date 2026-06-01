@@ -73,6 +73,17 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(build.expression).toContain("fetchCargoVendor");
       expect(build.expression).toContain('cargoHash = "sha256-AAA="');
     });
+
+    it("cargo ignores the recorded Toolchain version in v1 (builds with nixpkgs default)", () => {
+      const unpinned = packageManagerDescriptor("cargo").generateBuild({ pname: "p", depsHash: "sha256-AAA=" });
+      const pinned = packageManagerDescriptor("cargo").generateBuild({
+        pname: "p",
+        depsHash: "sha256-AAA=",
+        toolchainVersion: "1.76.0",
+      });
+
+      expect(pinned).toEqual(unpinned);
+    });
   });
 
   describe("the bun gate is a first-class honest state (ADR 0001), not an ad-hoc throw", () => {
@@ -547,6 +558,31 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
         readVersionFile: () => undefined,
       });
       expect(version).toBe("1.26");
+    });
+
+    describe("rust reads rustup Toolchain version files (dustcastle-gy5.3)", () => {
+      const rust = ecosystemFor("rust");
+
+      it("honours rust-toolchain.toml [toolchain] channel before legacy rust-toolchain", () => {
+        const versionFiles: Record<string, string | undefined> = {
+          "rust-toolchain.toml": '[toolchain]\nchannel = "1.76.0"\n',
+          "rust-toolchain": "stable\n",
+        };
+
+        const version = rust.readToolchainVersion?.({
+          manifest: '[package]\nrust-version = "1.70"\n',
+          readVersionFile: (name) => versionFiles[name],
+        });
+        expect(version).toBe("1.76.0");
+      });
+
+      it("ignores Cargo.toml rust-version because it is the MSRV floor, not a pin", () => {
+        const version = rust.readToolchainVersion?.({
+          manifest: '[package]\nrust-version = "1.70"\n',
+          readVersionFile: () => undefined,
+        });
+        expect(version).toBeUndefined();
+      });
     });
 
     describe("python resolves its Toolchain interpreter (laimk-hse.3)", () => {
