@@ -1,3 +1,6 @@
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { exportRequirements, lockOnlyResolve, pinLooseManifest, type ResolveResult } from "./pin.js";
 
@@ -20,6 +23,13 @@ describe("lockOnlyResolve (the lock-only resolve invocation — ADR 0006c)", () 
     expect(resolve.command).toBe("pnpm");
     expect(resolve.args).toEqual(["install", "--lockfile-only"]);
     expect(resolve.lockfile).toBe("pnpm-lock.yaml");
+  });
+
+  it("resolves a loose Cargo.toml with `cargo generate-lockfile`", () => {
+    const resolve = lockOnlyResolve("cargo");
+    expect(resolve.command).toBe("cargo");
+    expect(resolve.args).toEqual(["generate-lockfile"]);
+    expect(resolve.lockfile).toBe("Cargo.lock");
   });
 
   it("resolves a loose pip manifest with `uv pip compile --generate-hashes` (laimk-hse.5)", () => {
@@ -66,6 +76,59 @@ describe("pinLooseManifest (the one-time online resolve — ADR 0006c)", () => {
     expect(() => pinLooseManifest({ cwd: "/proj", packageManager: "npm", run })).toThrow(
       /lock-only resolve failed/i,
     );
+  });
+
+  it("runs the cargo loose resolve and surfaces the generated Cargo.lock", () => {
+    const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+    const run = (command: string, args: readonly string[], cwd: string): ResolveResult => {
+      calls.push({ command, args, cwd });
+      return OK;
+    };
+
+    const pinned = pinLooseManifest({ cwd: "/rust", packageManager: "cargo", run });
+
+    expect(calls).toEqual([{ command: "cargo", args: ["generate-lockfile"], cwd: "/rust" }]);
+    expect(pinned.lockfile).toBe("Cargo.lock");
+  });
+
+  it("runs cargo generate-lockfile with an isolated online CARGO_HOME", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-pin-test-"));
+    const bin = join(dir, "bin");
+    const cargoHomeCapture = join(dir, "cargo-home.txt");
+    const offlineCapture = join(dir, "cargo-offline.txt");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "cargo"),
+      "#!/bin/sh\n" +
+        'printf "%s" "$CARGO_HOME" > "$DUSTCASTLE_CAPTURE_CARGO_HOME"\n' +
+        'printf "%s" "${CARGO_NET_OFFLINE-}" > "$DUSTCASTLE_CAPTURE_CARGO_OFFLINE"\n',
+    );
+    chmodSync(join(bin, "cargo"), 0o755);
+
+    const oldPath = process.env.PATH;
+    const oldCargoOffline = process.env.CARGO_NET_OFFLINE;
+    const oldCaptureHome = process.env.DUSTCASTLE_CAPTURE_CARGO_HOME;
+    const oldCaptureOffline = process.env.DUSTCASTLE_CAPTURE_CARGO_OFFLINE;
+    process.env.PATH = oldPath === undefined ? bin : `${bin}:${oldPath}`;
+    process.env.CARGO_NET_OFFLINE = "true";
+    process.env.DUSTCASTLE_CAPTURE_CARGO_HOME = cargoHomeCapture;
+    process.env.DUSTCASTLE_CAPTURE_CARGO_OFFLINE = offlineCapture;
+
+    try {
+      const pinned = pinLooseManifest({ cwd: dir, packageManager: "cargo" });
+      const cargoHome = readFileSync(cargoHomeCapture, "utf8");
+
+      expect(pinned.lockfile).toBe("Cargo.lock");
+      expect(cargoHome).toContain("dustcastle-cargo-home-");
+      expect(existsSync(cargoHome)).toBe(false);
+      expect(readFileSync(offlineCapture, "utf8")).toBe("");
+    } finally {
+      restoreEnv("PATH", oldPath);
+      restoreEnv("CARGO_NET_OFFLINE", oldCargoOffline);
+      restoreEnv("DUSTCASTLE_CAPTURE_CARGO_HOME", oldCaptureHome);
+      restoreEnv("DUSTCASTLE_CAPTURE_CARGO_OFFLINE", oldCaptureOffline);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("runs the pip loose resolve (uv pip compile) and surfaces the generated requirements.txt", () => {
@@ -134,3 +197,11 @@ describe("exportRequirements (the export front-end — ADR 0006 amendment)", () 
     expect(() => exportRequirements({ cwd: "/uvproj", packageManager: "uv", run })).toThrow(/front-end failed/i);
   });
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}

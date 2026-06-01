@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PACKAGE_MANAGERS, packageManagerDescriptor } from "../ecosystems/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 
@@ -41,7 +44,7 @@ export function lockOnlyResolve(packageManager: string): ResolveCommand {
   }
   throw new Error(
     `pin-then-pure: cannot resolve a loose manifest for ${packageManager} — no lockfile-only ` +
-      "resolve is supported (npm and pnpm are; ADR 0006c). Commit a lockfile to build pure.",
+      "resolve is supported for this manager (ADR 0006c). Commit a lockfile to build pure.",
   );
 }
 
@@ -143,7 +146,38 @@ export function exportRequirements(opts: ExportOptions): Exported | undefined {
 }
 
 function defaultResolve(command: string, args: readonly string[], cwd: string): ResolveResult {
-  const r = spawnSync(command, [...args], { cwd, encoding: "utf8" });
+  if (!isCargoGenerateLockfile(command, args)) {
+    return spawnResolve(command, args, cwd, process.env);
+  }
+
+  const cargoHome = mkdtempSync(join(tmpdir(), "dustcastle-cargo-home-"));
+  try {
+    return spawnResolve(command, args, cwd, cargoGenerateLockfileEnv(cargoHome));
+  } finally {
+    rmSync(cargoHome, { recursive: true, force: true });
+  }
+}
+
+function spawnResolve(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): ResolveResult {
+  const r = spawnSync(command, [...args], { cwd, encoding: "utf8", env });
   const stderr = r.stderr ?? (r.error instanceof Error ? r.error.message : "");
   return { status: r.status, stderr };
+}
+
+function isCargoGenerateLockfile(command: string, args: readonly string[]): boolean {
+  return command === "cargo" && args[0] === "generate-lockfile";
+}
+
+function cargoGenerateLockfileEnv(cargoHome: string): NodeJS.ProcessEnv {
+  // `cargo generate-lockfile` writes the sparse index cache under CARGO_HOME. Give
+  // it an isolated writable home and force the resolve online; the generated
+  // Cargo.lock is the only artifact dustcastle keeps before the pure vendor path.
+  const env: NodeJS.ProcessEnv = { ...process.env, CARGO_HOME: cargoHome };
+  delete env.CARGO_NET_OFFLINE;
+  return env;
 }

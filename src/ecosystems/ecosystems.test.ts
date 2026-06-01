@@ -221,10 +221,19 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       if (r?.kind === "gated") expect(r.reason).toMatch(/yarn/i);
     });
 
-    it.each(["bun", "go", "cargo"] as const)("%s has no lockOnlyResolve", (pm) => {
-      // bun is gated at provision; go/cargo lockfile-only resolve live outside
-      // this pure happy-path slice.
+    it.each(["bun", "go"] as const)("%s has no lockOnlyResolve", (pm) => {
+      // bun is gated at provision; go has no loose pin step.
       expect(packageManagerDescriptor(pm).lockOnlyResolve).toBeUndefined();
+    });
+
+    it("cargo resolves a loose Cargo.toml with `cargo generate-lockfile` (dustcastle-gy5.4)", () => {
+      const r = packageManagerDescriptor("cargo").lockOnlyResolve;
+      expect(r).toEqual({
+        kind: "command",
+        command: "cargo",
+        args: ["generate-lockfile"],
+        lockfile: "Cargo.lock",
+      });
     });
 
     it("pip resolves a loose manifest with `uv pip compile --generate-hashes` (laimk-hse.5)", () => {

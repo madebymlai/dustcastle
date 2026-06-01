@@ -71,6 +71,14 @@ serde = "1"
     expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io"]);
   });
 
+  it("allows only the crates.io sparse index for a cargo lock-only resolve", () => {
+    const decision = deriveEgress({ packageManager: "cargo", impure: false, buildPhase: "lockOnlyResolve" });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toEqual(["index.crates.io"]);
+    expect(decision.buildHosts).not.toContain("static.crates.io");
+    expect(decision.agentHosts).toEqual([]);
+  });
+
   it("is an allowlist, never unrestricted — no wildcard / catch-all host", () => {
     const decision = deriveEgress({ packageManager: "npm", impure: true, gitRemoteHost: "github.com" });
     const hosts = egressHosts(decision);

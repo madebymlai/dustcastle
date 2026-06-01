@@ -4,10 +4,10 @@
  * derived sources, kept distinct so a reader never mistakes "has an allowlist" for
  * "impure build":
  *
- *  - **Build Egress** — the registry the package manager names + the repo's git
- *    host, DERIVED from detection/manifest content (ADR 0005's "derived, not
- *    declared"). Present on impure installs and on explicit pre-Sandbox fetch
- *    phases (for example Cargo's vendor FOD); ordinary pure Sandbox builds stay
+ *  - **Build Egress** — the registry/index the package manager names + derived git
+ *    hosts, DERIVED from detection/manifest content (ADR 0005's "derived, not
+ *    declared"). Present on impure runtime installs and on explicit online pin or
+ *    pre-Sandbox fetch phases; a pure runtime build's deps are pre-assembled
  *    offline.
  *  - **Agent Egress** — the coding agent's own model-provider API host (ADR 0010).
  *    Present whenever an agent will run, REGARDLESS of build purity: the agent
@@ -21,11 +21,13 @@ export type EgressDecision =
   | { readonly kind: "none" }
   | {
       readonly kind: "allowlist";
-      /** Hosts the *build* needs (registry + git); impure-only (ADR 0005). */
+      /** Hosts the *build* needs (registry/index + git) for the scoped phase. */
       readonly buildHosts: readonly string[];
       /** The *agent's* model-provider API host(s) (ADR 0010). */
       readonly agentHosts: readonly string[];
     };
+
+export type BuildEgressPhase = "runtime" | "lockOnlyResolve" | "cargo-vendor";
 
 export interface EgressInput {
   /** The detected package manager (names its registry). */
@@ -33,12 +35,12 @@ export interface EgressInput {
   /** Whether this build runs impurely (untrusted install code with network). */
   readonly impure: boolean;
   /**
-   * Network-using build phase, when the build is pure from the Sandbox's point of
-   * view but a pre-Sandbox fetch step still needs scoped Build Egress. Cargo's
-   * vendor FOD is the first such phase: it fetches crates into the Store, then the
-   * Sandbox itself remains offline.
+   * Which build-side network phase is being scoped. The default runtime phase only
+   * opens Build Egress for impure installs; lockOnlyResolve is the one-time
+   * pin-then-pure resolve for loose manifests (online, but not an impure install);
+   * cargo-vendor fetches Cargo deps into the Store before the Sandbox stays offline.
    */
-  readonly buildPhase?: "cargo-vendor";
+  readonly buildPhase?: BuildEgressPhase;
   /** Cargo.toml contents used to derive git dependency hosts for Cargo Build Egress. */
   readonly cargoManifest?: string;
   /** The repo's git remote host, when known (for git-sourced deps). */
@@ -61,14 +63,24 @@ const REGISTRY_HOSTS: Readonly<Record<string, string>> = {
   pip: "pypi.org",
 };
 
+const LOCK_ONLY_RESOLVE_HOSTS: Readonly<Record<string, readonly string[]>> = {
+  npm: ["registry.npmjs.org"],
+  pnpm: ["registry.npmjs.org"],
+  pip: ["pypi.org"],
+  // `cargo generate-lockfile` reads package metadata/checksums from the sparse
+  // index, but downloads no crate tarballs, so static.crates.io is deliberately
+  // absent (dustcastle-gy5.4).
+  cargo: ["index.crates.io"],
+};
+
 const CARGO_VENDOR_HOSTS = ["index.crates.io", "static.crates.io"] as const;
 const SCP_STYLE_GIT_REMOTE = /^(?:[^@/]+@)?([^/:]+):/;
 const TOML_GIT_ATTRIBUTE = /\bgit\s*=\s*(["'])(.*?)\1/g;
 
 /**
  * Derive the egress decision (ADR 0005 / 0010) as the union of Build Egress and
- * Agent Egress. Build Egress is either the registry the impure manager already
- * uses plus the repo's git host, or an explicit pre-Sandbox fetch phase such as
+ * Agent Egress. Build Egress opens for impure runtime installs, for minimal
+ * lock-only resolve phases, or for explicit pre-Sandbox fetch phases such as
  * Cargo's vendor FOD (`index.crates.io` + `static.crates.io` + manifest git dep
  * hosts). Agent Egress is the model host, added whenever an agent will run
  * regardless of purity. Closed (`none`) only when neither source contributes a
@@ -76,7 +88,7 @@ const TOML_GIT_ATTRIBUTE = /\bgit\s*=\s*(["'])(.*?)\1/g;
  */
 export function deriveEgress(input: EgressInput): EgressDecision {
   const buildHosts = buildEgressHosts(input);
-  const agentHosts = (input.agentModelHosts ?? []).filter((h) => h.length > 0);
+  const agentHosts = (input.agentModelHosts ?? []).filter((host) => host.length > 0);
 
   if (buildHosts.length === 0 && agentHosts.length === 0) return { kind: "none" };
   return { kind: "allowlist", buildHosts, agentHosts };
@@ -87,13 +99,29 @@ function buildEgressHosts(input: EgressInput): string[] {
     return uniqueHosts([...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoManifest ?? "")]);
   }
 
-  if (!input.impure) return [];
+  const hosts = phaseBuildHosts(input);
+  if (hosts.length === 0) return hosts;
 
-  const hosts: string[] = [];
-  const registry = REGISTRY_HOSTS[input.packageManager];
-  if (registry !== undefined) hosts.push(registry);
-  if (input.gitRemoteHost !== undefined && input.gitRemoteHost.length > 0) hosts.push(input.gitRemoteHost);
+  const gitRemoteHost = input.gitRemoteHost;
+  if (gitRemoteHost !== undefined && gitRemoteHost.length > 0) hosts.push(gitRemoteHost);
   return uniqueHosts(hosts);
+}
+
+function phaseBuildHosts(input: EgressInput): string[] {
+  switch (input.buildPhase ?? "runtime") {
+    case "lockOnlyResolve":
+      return [...(LOCK_ONLY_RESOLVE_HOSTS[input.packageManager] ?? [])];
+    case "runtime":
+      return runtimeBuildHosts(input);
+    case "cargo-vendor":
+      return [...CARGO_VENDOR_HOSTS, ...cargoGitDependencyHosts(input.cargoManifest ?? "")];
+  }
+}
+
+function runtimeBuildHosts(input: EgressInput): string[] {
+  if (!input.impure) return [];
+  const registry = REGISTRY_HOSTS[input.packageManager];
+  return registry === undefined ? [] : [registry];
 }
 
 /**
