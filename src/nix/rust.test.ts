@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CARGO_HOME_BASENAME, generateRustBuild } from "./rust.js";
+import { CARGO_HOME_BASENAME, CARGO_VENDOR_DIR, generateRustBuild } from "./rust.js";
 
 // Rust's Cargo Importer (dustcastle-gy5.2): a fetchCargoVendor FOD discovers one
 // aggregate cargoHash, then the deps derivation rebases Cargo's shipped config to
@@ -23,7 +23,7 @@ describe("generateRustBuild (Cargo importer, dustcastle-gy5.2)", () => {
     expect(build.expression).toContain("fetchCargoVendor");
     expect(build.expression).toContain(`cargoHash = "${cargoHash}"`);
     expect(build.expression).toContain("hash = cargoHash");
-    expect(build.expression).toContain(`s|@vendor@|${CARGO_HOME_BASENAME}/vendor|g`);
+    expect(build.expression).toContain(`s|@vendor@|${CARGO_VENDOR_DIR}|g`);
   });
 
   it("runs cargo test fully offline against staged deps", () => {
