@@ -1,27 +1,33 @@
-# Cargo Project Deps via `cargoHash`/`fetchCargoVendor`, not `cargoLock`/`importCargoLock`
+# Cargo Project Deps use `cargoHash`/`fetchCargoVendor`, not `cargoLock`/`importCargoLock`
 
-For the Rust Ecosystem's Cargo Package Manager, dustcastle vendors Project Deps with nixpkgs' `rustPlatform.fetchCargoVendor` and pins that fixed-output derivation with one aggregate `cargoHash`. We deliberately do **not** use the `cargoLock` / `importCargoLock` path in our Importer, even though that is the common in-repo Rust-on-Nix recommendation.
+## Status
 
-This is an amendment in the [ADR 0004](0004-project-deps-pure-default-explicit-impurity.md) family: it decides how Cargo implements the same pure-by-default, hash-pinned Project Deps contract.
+accepted — amends [ADR 0004](0004-project-deps-pure-default-explicit-impurity.md) for Rust/Cargo Project Deps.
 
-## Why the aggregate hash is load-bearing
+## Decision
 
-The Store provisioner has one uniform two-pass flow for pure Project Deps:
+For the Rust [Ecosystem](../../CONTEXT.md), Cargo is the [Package Manager](../../CONTEXT.md). dustcastle vendors Cargo [Project Deps](../../CONTEXT.md) with nixpkgs' `rustPlatform.fetchCargoVendor` and pins that fixed-output derivation with one aggregate `cargoHash`.
+
+We deliberately do **not** use the `cargoLock` / `importCargoLock` path in the Cargo [Importer](../../CONTEXT.md), even though that is the common recommendation for hand-written Rust-on-Nix projects. Cargo must implement the same pure-by-default, hash-pinned Project Deps contract as the other Package Managers, and `fetchCargoVendor` fits dustcastle's existing Store provisioning flow.
+
+## Why the aggregate hash is required
+
+The Store provisioner has one uniform probe-then-build flow for pure Project Deps:
 
 1. emit the Importer's Nix expression with a fake hash;
 2. let the Nix fixed-output derivation fail;
 3. parse the `got: sha256-…` mismatch;
 4. rebuild with that discovered hash and record it as `depsHash`.
 
-Cargo must fit that flow. `fetchCargoVendor` does: the vendored Cargo dependency tree is one fixed-output derivation, and a wrong `cargoHash` produces the single discoverable `got: sha256-…` value the Store already knows how to pin.
+`fetchCargoVendor` fits this flow because the vendored Cargo dependency tree is one fixed-output derivation. A wrong `cargoHash` produces the single discoverable `got: sha256-…` value that the Store already knows how to pin.
 
-`cargoLock` / `importCargoLock` optimises for a different workflow. It avoids aggregate-hash churn when the lockfile changes, but it does so by decomposing the lock into per-crate fetches instead of one vendored fixed-output tree. That removes the single hash discovery point dustcastle's provisioner relies on. It also makes git dependencies a manual hash problem: git sources need explicit `outputHashes`, while `fetchCargoVendor` vendors crates.io and git dependencies under the same aggregate hash.
+`cargoLock` / `importCargoLock` optimizes for a different workflow. It avoids aggregate-hash churn when the lockfile changes by decomposing the lock into per-crate fetches instead of one vendored fixed-output tree. That removes the single hash discovery point dustcastle's provisioner relies on. It also makes git dependencies a manual hash problem: git sources need explicit `outputHashes`, while `fetchCargoVendor` vendors crates.io and git dependencies under the same aggregate hash.
 
 The trade-off is intentional: dustcastle chooses one discoverable aggregate hash and transparent git dependency vendoring over the no-aggregate-hash-churn ergonomics of `cargoLock`.
 
 ## Relocatable staging: why we diverge from `cargoSetupHook`
 
-`fetchCargoVendor` ships a `.cargo/config.toml` that points Cargo's sources at an `@vendor@` placeholder. nixpkgs' `cargoSetupHook` substitutes that placeholder with an absolute Nix store path. That is fine inside one derivation, but it is not the shape dustcastle needs: Project Deps are copied from the Store into a Sandbox-managed environment directory, so the config must remain relocatable after env-only staging.
+`fetchCargoVendor` ships a `.cargo/config.toml` that points Cargo's sources at an `@vendor@` placeholder. nixpkgs' `cargoSetupHook` substitutes that placeholder with an absolute Nix store path. That is fine inside one derivation, but it is not the shape dustcastle needs: Project Deps are copied from the Store into a Sandbox-managed environment directory, so Cargo config must stay relocatable after staging.
 
 The Rust spike found the surprising Cargo rule that makes this delicate: a config-relative `directory = "…"` source is resolved against the **grandparent** of the config file, not the config file's own directory. If dustcastle stages Project Deps as:
 
@@ -30,13 +36,15 @@ $CARGO_HOME/config.toml
 $CARGO_HOME/vendor/...
 ```
 
-then a naive `directory = "vendor"` resolves to `parent($CARGO_HOME)/vendor`, missing the staged vendor tree. The Importer therefore rebases `@vendor@` to a basename-anchored relative path, currently:
+then `directory = "vendor"` resolves to `parent($CARGO_HOME)/vendor`, missing the staged vendor tree.
+
+The Importer therefore rebases `@vendor@` to the agreed Cargo home basename:
 
 ```toml
 directory = "dustcastle-cargo-home/vendor"
 ```
 
-With `config.toml` living at `$CARGO_HOME/config.toml`, Cargo's grandparent rule resolves `parent($CARGO_HOME)/dustcastle-cargo-home/vendor` back to `$CARGO_HOME/vendor`. The `dustcastle-cargo-home` basename is a shared constant between the Rust Importer and the Sandbox stager; no new staging interface or absolute store path is introduced.
+With `config.toml` at `$CARGO_HOME/config.toml`, Cargo resolves that path as `parent($CARGO_HOME)/dustcastle-cargo-home/vendor`, which is `$CARGO_HOME/vendor` when `$CARGO_HOME` uses the shared `dustcastle-cargo-home` basename. The basename is a shared constant between the Rust Importer and the Sandbox stager; no new staging interface or absolute store path is introduced.
 
 ## Considered Options
 
