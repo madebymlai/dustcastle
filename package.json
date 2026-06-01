@@ -1,6 +1,6 @@
 {
   "name": "dustcastle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "A global toolchain manager for AI coding agent sandboxes — one shared, deduplicated Nix store instead of per-project image builds.",
   "license": "MIT",
