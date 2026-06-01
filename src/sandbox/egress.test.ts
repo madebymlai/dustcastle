@@ -37,6 +37,40 @@ describe("deriveEgress — Build Egress (ADR 0005 derived allowlist)", () => {
     expect(decision.buildHosts).toContain("github.com");
   });
 
+  it("derives Cargo vendor egress from sparse crates.io plus manifest git dependency hosts only", () => {
+    const decision = deriveEgress({
+      packageManager: "cargo",
+      impure: false,
+      buildPhase: "cargo-vendor",
+      cargoManifest: `
+[dependencies]
+itoa = { git = "https://github.com/dtolnay/itoa", tag = "1.0.15" }
+serde = "1"
+`,
+    });
+
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io", "github.com:443"]);
+    expect(decision.buildHosts).not.toContain("github.com/rust-lang/crates.io-index");
+    expect(decision.buildHosts).not.toContain("crates.io");
+  });
+
+  it("does not add any git host to Cargo vendor egress when the manifest has no git dependency", () => {
+    const decision = deriveEgress({
+      packageManager: "cargo",
+      impure: false,
+      buildPhase: "cargo-vendor",
+      cargoManifest: `
+[dependencies]
+serde = "1"
+# git = "https://github.com/commented/out"
+`,
+    });
+
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io"]);
+  });
+
   it("is an allowlist, never unrestricted — no wildcard / catch-all host", () => {
     const decision = deriveEgress({ packageManager: "npm", impure: true, gitRemoteHost: "github.com" });
     const hosts = egressHosts(decision);
