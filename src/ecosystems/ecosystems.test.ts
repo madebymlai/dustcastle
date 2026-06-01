@@ -244,6 +244,12 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
         command: "cargo",
         args: ["generate-lockfile"],
         lockfile: "Cargo.lock",
+        // The host-side resolve isolates CARGO_HOME and scopes env under the shared
+        // deny-by-default floor + the rustup vars (dustcastle-k4d / ADR 0005).
+        execution: {
+          isolatedHomeEnv: "CARGO_HOME",
+          extraEnv: ["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
+        },
       });
     });
 

@@ -161,6 +161,40 @@ describe("pinLooseManifest (the one-time online resolve — ADR 0006c)", () => {
     }
   });
 
+  it("scopes a NON-cargo (pnpm) resolve under the deny-by-default floor — no ambient secret leaks", () => {
+    // dustcastle-k4d: env scoping is now generic, not cargo-special. A pnpm loose
+    // pin (no execution policy ⇒ bare floor) must ALSO drop ambient host secrets,
+    // and gets NO isolated home. The fake pnpm writes what it sees to cwd-relative
+    // files (cwd == project dir), so the capture survives the scoped env.
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-pin-npm-env-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "pnpm"),
+      "#!/bin/sh\n" +
+        'printf "%s" "${DUSTCASTLE_PIN_SENTINEL-}" > sentinel.txt\n' +
+        'printf "%s" "${PATH-}" > path.txt\n',
+    );
+    chmodSync(join(bin, "pnpm"), 0o755);
+
+    const oldPath = process.env.PATH;
+    const oldSentinel = process.env.DUSTCASTLE_PIN_SENTINEL;
+    process.env.PATH = oldPath === undefined ? bin : `${bin}:${oldPath}`;
+    process.env.DUSTCASTLE_PIN_SENTINEL = "leak-me"; // stands in for a host secret
+
+    try {
+      pinLooseManifest({ cwd: dir, packageManager: "pnpm" });
+      // The ambient secret must NOT reach the resolve…
+      expect(readFileSync(join(dir, "sentinel.txt"), "utf8")).toBe("");
+      // …but the floor (PATH) the resolve genuinely needs IS present.
+      expect(readFileSync(join(dir, "path.txt"), "utf8")).toContain(bin);
+    } finally {
+      restoreEnv("PATH", oldPath);
+      restoreEnv("DUSTCASTLE_PIN_SENTINEL", oldSentinel);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("runs the pip loose resolve (uv pip compile) and surfaces the generated requirements.txt", () => {
     // The Python pin-then-pure path (laimk-hse.5): the one-time online resolve runs
     // `uv pip compile --generate-hashes`, producing the VISIBLE, committed lock.
@@ -225,6 +259,41 @@ describe("exportRequirements (the export front-end — ADR 0006 amendment)", () 
   it("throws an actionable error when the export fails (no un-materialised build proceeds)", () => {
     const run = (): ResolveResult => ({ status: 1, stderr: "error: No `uv.lock` found" });
     expect(() => exportRequirements({ cwd: "/uvproj", packageManager: "uv", run })).toThrow(/front-end failed/i);
+  });
+
+  it("scopes the uv export env under the deny-by-default floor — no ambient host secret leaks (dustcastle-8sm)", () => {
+    // The export front-end is the SECOND host-side subprocess (smell #2): like the
+    // loose-pin resolve, it is trusted + pre-Sandbox but must inherit NO ambient host
+    // secret. With no `execution` declared it runs under the bare floor. The fake uv
+    // writes what it sees to cwd-relative files (cwd == project dir), so the capture
+    // channel needs no env var of its own to survive the scoped env.
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-export-env-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "uv"),
+      "#!/bin/sh\n" +
+        'printf "%s" "${DUSTCASTLE_PIN_SENTINEL-}" > sentinel.txt\n' +
+        'printf "%s" "${PATH-}" > path.txt\n',
+    );
+    chmodSync(join(bin, "uv"), 0o755);
+
+    const oldPath = process.env.PATH;
+    const oldSentinel = process.env.DUSTCASTLE_PIN_SENTINEL;
+    process.env.PATH = oldPath === undefined ? bin : `${bin}:${oldPath}`;
+    process.env.DUSTCASTLE_PIN_SENTINEL = "leak-me"; // stands in for a host secret
+
+    try {
+      exportRequirements({ cwd: dir, packageManager: "uv" });
+      // The ambient secret must NOT reach the export…
+      expect(readFileSync(join(dir, "sentinel.txt"), "utf8")).toBe("");
+      // …but the floor (PATH) the export genuinely needs IS present.
+      expect(readFileSync(join(dir, "path.txt"), "utf8")).toContain(bin);
+    } finally {
+      restoreEnv("PATH", oldPath);
+      restoreEnv("DUSTCASTLE_PIN_SENTINEL", oldSentinel);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

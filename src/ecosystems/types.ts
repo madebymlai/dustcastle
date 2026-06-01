@@ -94,6 +94,30 @@ export interface ImpuritySignal {
 }
 
 /**
+ * How the host-side loose-pin resolve must execute (ADR 0005 decision 1 /
+ * dustcastle-4ky). The resolve is trusted + pre-Sandbox, but it must inherit NO
+ * ambient host secret: it runs under a shared deny-by-default floor, plus only the
+ * `extraEnv` this manager legitimately needs (cargo's rustup vars). When
+ * `isolatedHomeEnv` is set, the runner binds it to a throwaway temp dir so the
+ * resolve writes into an isolated, writable home (cargo's CARGO_HOME) rather than
+ * the host's. Absent ⇒ the resolve runs under the bare floor. This is descriptor
+ * DATA: the runner applies it mechanically with no Package-Manager name in sight.
+ */
+export interface HostResolveExecution {
+  /**
+   * An env var the runner binds to a throwaway temp dir — the manager's isolated,
+   * writable home (cargo's `CARGO_HOME`). Absent ⇒ no isolated home is created.
+   */
+  readonly isolatedHomeEnv?: string;
+  /**
+   * Extra ambient env vars to pass through on top of the shared floor — the vars
+   * THIS manager legitimately needs (cargo's `RUSTUP_HOME`/`RUSTUP_TOOLCHAIN` for a
+   * rustup-shimmed toolchain). Everything else ambient is stripped.
+   */
+  readonly extraEnv?: readonly string[];
+}
+
+/**
  * The pin-then-pure lock-only resolve state (ADR 0006c). Either a runnable
  * `command` that produces a lockfile WITHOUT installing node_modules, or a
  * `gated` state carrying its actionable reason (yarn classic has no clean
@@ -107,6 +131,11 @@ export type LockOnlyResolve =
       readonly args: readonly string[];
       /** The lockfile this resolve generates — the visible, committed artifact. */
       readonly lockfile: string;
+      /**
+       * How the host-side resolve must execute (env scoping + isolated home). Absent
+       * for managers (npm/pnpm) that need only the shared deny-by-default floor.
+       */
+      readonly execution?: HostResolveExecution;
     }
   | { readonly kind: "gated"; readonly reason: string };
 
@@ -136,6 +165,14 @@ export interface ExportFrontEnd {
   readonly args: readonly string[];
   /** The requirements file the export writes — the visible artifact the pip-FOD consumes. */
   readonly requirementsFile: string;
+  /**
+   * How the host-side export must execute (env scoping + isolated home). The export
+   * is the SECOND host-side subprocess: like the loose-pin resolve, it runs through
+   * the shared scoped runner, so it inherits only the deny-by-default floor — plus
+   * any per-manager `extraEnv`/isolated home it declares. Absent for uv/poetry, which
+   * need only the bare floor.
+   */
+  readonly execution?: HostResolveExecution;
 }
 
 /**

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PACKAGE_MANAGERS, packageManagerDescriptor } from "../ecosystems/index.js";
-import type { PackageManager } from "../ecosystems/index.js";
+import type { HostResolveExecution, PackageManager } from "../ecosystems/index.js";
 
 /**
  * Pin-then-pure (ADR 0006c). A loose manifest — a `package.json` with no
@@ -15,11 +15,13 @@ import type { PackageManager } from "../ecosystems/index.js";
  */
 
 /** The lock-only resolve invocation for a package manager (pure). */
-export interface ResolveCommand {
+export interface ResolveInvocation {
   readonly command: string;
   readonly args: readonly string[];
   /** The lockfile this resolve generates — the visible, committed artifact. */
   readonly lockfile: string;
+  /** How the host-side resolve must execute (env scoping + isolated home). Absent ⇒ bare floor. */
+  readonly execution?: HostResolveExecution;
 }
 
 /**
@@ -30,14 +32,20 @@ export interface ResolveCommand {
  * carries a `gated` state with its actionable reason (no clean lockfile-only
  * resolve — the bun-gate honesty pattern); a manager with no `lockOnlyResolve`
  * (bun, go — gated at provision or already locked) and anything unknown falls back
- * to the generic loose-manifest error.
+ * to the generic loose-manifest error. The optional `execution` policy rides along
+ * so the runner can scope env / isolate a home WITHOUT knowing the manager.
  */
-export function lockOnlyResolve(packageManager: string): ResolveCommand {
+export function lockOnlyResolve(packageManager: string): ResolveInvocation {
   const resolve = isPackageManager(packageManager)
     ? packageManagerDescriptor(packageManager).lockOnlyResolve
     : undefined;
   if (resolve?.kind === "command") {
-    return { command: resolve.command, args: resolve.args, lockfile: resolve.lockfile };
+    return {
+      command: resolve.command,
+      args: resolve.args,
+      lockfile: resolve.lockfile,
+      ...(resolve.execution !== undefined ? { execution: resolve.execution } : {}),
+    };
   }
   if (resolve?.kind === "gated") {
     throw new Error(resolve.reason);
@@ -59,8 +67,18 @@ export interface ResolveResult {
   readonly stderr: string;
 }
 
-/** Runs the lock-only resolve in a directory. Injected in tests; defaults to a real spawn. */
-export type ResolveRunner = (command: string, args: readonly string[], cwd: string) => ResolveResult;
+/**
+ * Runs the lock-only resolve in a directory. Injected in tests; defaults to a real
+ * spawn. The optional `execution` policy (ADR 0005 / dustcastle-4ky) tells the
+ * runner how to scope env and whether to bind an isolated home — applied
+ * mechanically, with no Package-Manager name in the runner.
+ */
+export type ResolveRunner = (
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  execution?: HostResolveExecution,
+) => ResolveResult;
 
 export interface PinOptions {
   /** The loose-manifest project directory to resolve in place. */
@@ -88,7 +106,7 @@ export function pinLooseManifest(opts: PinOptions): Pinned {
   const run = opts.run ?? defaultResolve;
   opts.onLine?.(`pin-then-pure: resolving loose manifest → ${resolve.lockfile} (${resolve.command})`);
 
-  const result = run(resolve.command, resolve.args, opts.cwd);
+  const result = run(resolve.command, resolve.args, opts.cwd, resolve.execution);
   if (result.status !== 0) {
     throw new Error(
       `pin-then-pure: lock-only resolve failed (exit ${result.status}) for ${opts.packageManager}:\n` +
@@ -123,6 +141,11 @@ export interface ExportOptions {
  * (e.g. bun) throws at provision — so this returns `undefined` and the run pipeline
  * skips it. Throws an actionable error if the export fails, so a project never
  * proceeds to a build whose requirements were never produced.
+ *
+ * The export is the SECOND host-side subprocess (dustcastle-8sm): it spawns through
+ * the SAME scoped runner as the pin path, forwarding the front-end's optional
+ * `execution` policy — so the export inherits only the shared deny-by-default floor
+ * (no full-`process.env`), closing the export-path secret leak.
  */
 export function exportRequirements(opts: ExportOptions): Exported | undefined {
   if (!isPackageManager(opts.packageManager)) return undefined;
@@ -134,7 +157,7 @@ export function exportRequirements(opts: ExportOptions): Exported | undefined {
 
   const run = opts.run ?? defaultResolve;
   opts.onLine?.(`export: producing ${frontEnd.requirementsFile} from the lockfile (${frontEnd.command})`);
-  const result = run(frontEnd.command, frontEnd.args, opts.cwd);
+  const result = run(frontEnd.command, frontEnd.args, opts.cwd, frontEnd.execution);
   if (result.status !== 0) {
     throw new Error(
       `export: ${opts.packageManager} front-end failed (exit ${result.status}) producing ` +
@@ -145,16 +168,28 @@ export function exportRequirements(opts: ExportOptions): Exported | undefined {
   return { requirementsFile: frontEnd.requirementsFile };
 }
 
-function defaultResolve(command: string, args: readonly string[], cwd: string): ResolveResult {
-  if (!isCargoGenerateLockfile(command, args)) {
-    return spawnResolve(command, args, cwd, process.env);
+/**
+ * The real resolve runner — MANAGER-BLIND (dustcastle-4ky). It always spawns under
+ * the scoped deny-by-default env ({@link scopedResolveEnv}); when the descriptor's
+ * `execution` asks for an isolated home, it mkdtemps a throwaway dir, binds it, and
+ * rmSyncs it in a `finally`. No `command === "cargo"` branch lives here: cargo's
+ * isolated CARGO_HOME + rustup vars are now descriptor DATA the runner just applies.
+ */
+function defaultResolve(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  execution?: HostResolveExecution,
+): ResolveResult {
+  if (execution?.isolatedHomeEnv === undefined) {
+    return spawnResolve(command, args, cwd, scopedResolveEnv(execution, process.env));
   }
 
-  const cargoHome = mkdtempSync(join(tmpdir(), "dustcastle-cargo-home-"));
+  const isolatedHome = mkdtempSync(join(tmpdir(), "dustcastle-cargo-home-"));
   try {
-    return spawnResolve(command, args, cwd, cargoGenerateLockfileEnv(cargoHome));
+    return spawnResolve(command, args, cwd, scopedResolveEnv(execution, process.env, isolatedHome));
   } finally {
-    rmSync(cargoHome, { recursive: true, force: true });
+    rmSync(isolatedHome, { recursive: true, force: true });
   }
 }
 
@@ -169,17 +204,14 @@ function spawnResolve(
   return { status: r.status, stderr };
 }
 
-function isCargoGenerateLockfile(command: string, args: readonly string[]): boolean {
-  return command === "cargo" && args[0] === "generate-lockfile";
-}
-
-// Deny-by-default env allowlist for the host-side loose-pin resolve (ADR 0005
-// decision 1 / dustcastle-4ky). `cargo generate-lockfile` is a trusted, pre-Sandbox
-// metadata-only resolve, but it must inherit NO ambient host secrets — pass only the
-// TLS/toolchain/locale/proxy vars cargo legitimately needs to read the sparse index
-// online. CARGO_HOME is set explicitly (isolated writable home); CARGO_NET_OFFLINE is
-// intentionally absent so the one-time resolve runs online.
-const CARGO_RESOLVE_ENV_ALLOWLIST = [
+// The shared deny-by-default env floor for EVERY host-side resolve AND export (ADR
+// 0005 decision 1 / dustcastle-4ky). Both are trusted, pre-Sandbox metadata-only
+// steps, but they must inherit NO ambient host secrets — pass only the
+// benign plumbing any resolve legitimately needs (PATH/HOME/locale, TLS trust
+// roots to reach a registry over HTTPS, outbound proxy config). Manager-specific
+// vars (cargo's rustup vars) are NOT here — they ride on the descriptor's
+// `execution.extraEnv`, so the floor stays manager-blind.
+export const HOST_RESOLVE_ENV_FLOOR = [
   "HOME",
   "PATH",
   "USER",
@@ -189,14 +221,11 @@ const CARGO_RESOLVE_ENV_ALLOWLIST = [
   "LC_ALL",
   "LC_CTYPE",
   "TERM",
-  // TLS trust roots — without these cargo can't establish HTTPS to the sparse index.
+  // TLS trust roots — without these a resolve can't establish HTTPS to a registry.
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "NIX_SSL_CERT_FILE",
   "CURL_CA_BUNDLE",
-  // rustup-managed hosts: a `cargo` shim resolves the toolchain through these.
-  "RUSTUP_HOME",
-  "RUSTUP_TOOLCHAIN",
   // Outbound proxy config (corporate hosts) — network plumbing, not a host secret.
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -206,11 +235,27 @@ const CARGO_RESOLVE_ENV_ALLOWLIST = [
   "no_proxy",
 ] as const;
 
-function cargoGenerateLockfileEnv(cargoHome: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { CARGO_HOME: cargoHome };
-  for (const name of CARGO_RESOLVE_ENV_ALLOWLIST) {
-    const value = process.env[name];
+/**
+ * The PURE deny-by-default resolve env (ADR 0005 decision 1 / dustcastle-4ky):
+ * given a manager's optional execution policy and the ambient env, return the env
+ * the resolve runs under — the shared {@link HOST_RESOLVE_ENV_FLOOR} unioned with
+ * the policy's `extraEnv`, every other ambient var stripped. When the policy has an
+ * `isolatedHomeEnv`, it's bound to the supplied `isolatedHome` directory (the
+ * runner owns the temp-dir lifecycle; no I/O lives here). Absent policy ⇒ just the
+ * floor, so npm/pnpm get deny-by-default too.
+ */
+export function scopedResolveEnv(
+  execution: HostResolveExecution | undefined,
+  ambientEnv: NodeJS.ProcessEnv,
+  isolatedHome?: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of [...HOST_RESOLVE_ENV_FLOOR, ...(execution?.extraEnv ?? [])]) {
+    const value = ambientEnv[name];
     if (value !== undefined) env[name] = value;
+  }
+  if (execution?.isolatedHomeEnv !== undefined && isolatedHome !== undefined) {
+    env[execution.isolatedHomeEnv] = isolatedHome;
   }
   return env;
 }

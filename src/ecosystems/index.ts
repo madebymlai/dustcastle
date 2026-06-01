@@ -10,6 +10,7 @@ export type {
   Ecosystem,
   EcosystemDescriptor,
   ExportFrontEnd,
+  HostResolveExecution,
   ImpuritySignal,
   LockOnlyResolve,
   LooseManifestInput,

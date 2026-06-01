@@ -24,6 +24,14 @@ const cargo: PackageManagerDescriptor = {
     command: "cargo",
     args: ["generate-lockfile"],
     lockfile: "Cargo.lock",
+    // The host-side resolve runs deny-by-default (ADR 0005 / dustcastle-4ky): it
+    // gets an isolated, throwaway CARGO_HOME and the shared env floor, PLUS the
+    // rustup vars a `cargo` shim needs to resolve the toolchain. CARGO_NET_OFFLINE
+    // is deliberately NOT passed through, so the one-time resolve runs online.
+    execution: {
+      isolatedHomeEnv: "CARGO_HOME",
+      extraEnv: ["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
+    },
   },
   // No impuritySignal / impureInstall: Cargo builds pure unconditionally in v1.
 };
