@@ -164,6 +164,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
       const planned = await sandcastle.run({
         sandbox: provider,
         agent,
+        name: "Planner",
         promptFile: orchestrationPromptPath("plan"),
         maxIterations: phaseConfig("plan").maxIterations,
         output: planOutput,
@@ -196,6 +197,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
       await sandcastle.run({
         sandbox: provider,
         agent,
+        name: "Merger",
         promptFile: orchestrationPromptPath("merge"),
         promptArgs: mergeArgs(completed),
         maxIterations: phaseConfig("merge").maxIterations,
@@ -232,6 +234,7 @@ async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
   try {
     const impl = await sandbox.run({
       agent,
+      name: "Worker",
       promptFile: orchestrationPromptPath("implement"),
       promptArgs: implementArgs(issue),
       maxIterations: phaseConfig("implement").maxIterations,
@@ -241,6 +244,7 @@ async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
     }
     const review = await sandbox.run({
       agent,
+      name: "Reviewer",
       promptFile: orchestrationPromptPath("review"),
       promptArgs: reviewArgs(issue, targetBranch),
       maxIterations: phaseConfig("review").maxIterations,
