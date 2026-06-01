@@ -1,4 +1,5 @@
 import { CARGO_HOME_BASENAME, generateRustBuild } from "../nix/rust.js";
+import { readRustToolchainVersion } from "./rust-version.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
@@ -28,6 +29,7 @@ export const RUST_ECOSYSTEM: EcosystemDescriptor = {
   manifests: ["Cargo.toml", "Cargo.lock"],
   managers: ["cargo"],
   defaultManager: "cargo",
+  readToolchainVersion: readRustToolchainVersion,
   // Generic loose detection covers Cargo.toml without Cargo.lock; the lock-only
   // resolve command lands in the later loose-Cargo slice (dustcastle-gy5.4).
   sandbox: {
