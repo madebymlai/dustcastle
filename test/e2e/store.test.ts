@@ -80,7 +80,7 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
 
     // On a MISS the plan installs in-Sandbox (`npm ci`) and schedules a populate;
     // nothing is restored on the host.
-    const missPlan = planSandbox({ provisioned: toolchainOnly(), detection, cache: miss });
+    const missPlan = planSandbox({ provisioned: toolchainOnly(), detection, cacheDir, cache: miss });
     expect(missPlan.setupCommands.join("\n")).toContain("npm ci");
     expect(missPlan.hostWorktreeReady).toEqual([]);
     expect(missPlan.populate).toHaveLength(1);
@@ -93,7 +93,7 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
 
     // On a HIT the plan restores from the cache on the host (host.onWorktreeReady),
     // runs no install (`npm ci` absent — just the git-exclude), and schedules no populate.
-    const hitPlan = planSandbox({ provisioned: toolchainOnly(), detection, cache: hit });
+    const hitPlan = planSandbox({ provisioned: toolchainOnly(), detection, cacheDir, cache: hit });
     expect(hitPlan.hostWorktreeReady.join("\n")).toContain(join(cacheDir, hit.lockfileHash!));
     expect(hitPlan.setupCommands.join("\n")).not.toContain("npm ci");
     expect(hitPlan.populate).toEqual([]);

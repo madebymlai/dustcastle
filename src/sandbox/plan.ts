@@ -2,35 +2,13 @@ import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { AGENT_SPEC } from "./image.js";
 import type { Detection } from "../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../ecosystems/index.js";
-import { restoreCommand } from "../store/depscache/index.js";
+import { restoreCommand, type DepsCacheDecision, type DepsCachePopulate } from "../store/depscache/index.js";
 import type { Provisioned } from "../store/index.js";
 import { EGRESS_NETWORK, productionProxyUrl, proxyEnv } from "./confine.js";
 import { deriveEgress, type EgressDecision } from "./egress.js";
 
 /** sandcastle's podman() options — typed from the factory so it stays in sync. */
 export type PodmanOptions = NonNullable<Parameters<typeof podman>[0]>;
-
-/**
- * The host-side deps-cache decision for ONE ecosystem (ADR 0012, dustcastle-8od).
- * dustcastle decides hit/miss host-side, keyed by that ecosystem's lockfile hash, and
- * the plan emits the right hooks from it. A loose / no-lockfile ecosystem has no
- * stable key (`lockfileHash` undefined) ⇒ it is never cached (always installs).
- */
-export interface DepsCacheDecision {
-  /**
-   * The ecosystem's lockfile hash — the cache key. Undefined for a loose / no-lockfile
-   * ecosystem, which has no stable key, so it is never cached (always installs in-Sandbox).
-   */
-  readonly lockfileHash: string | undefined;
-  /**
-   * Whether the cache holds an assembled entry for this lockfile hash. A HIT restores
-   * via `host.onWorktreeReady` and runs no install; a MISS installs in-Sandbox, then
-   * populates the cache entry after the run.
-   */
-  readonly hit: boolean;
-  /** The deps-cache root (under the dustcastle home) the entry lives under. */
-  readonly cacheDir: string;
-}
 
 /** One detected Ecosystem paired with its provisioned Toolchain (ADR 0012). */
 export interface EcosystemPlan {
@@ -43,25 +21,14 @@ export interface EcosystemPlan {
   readonly cache?: DepsCacheDecision;
 }
 
-/**
- * One ecosystem's cache entry to POPULATE after the run completes (ADR 0012). On a
- * cache miss, the host copies the worktree's assembled stage dir into the lockfile-hash
- * entry dir once the in-Sandbox install has run. Populating after `run()` returns is
- * the unambiguous timing: sandcastle runs `host.onSandboxReady` CONCURRENTLY with the
- * in-Sandbox install, so it cannot be relied on to land after the deps are assembled.
- */
-export interface DepsCachePopulate {
-  /** The lockfile hash keying this ecosystem's cache entry. */
-  readonly lockfileHash: string;
-  /** The worktree-relative stage dir the in-Sandbox install assembled (`node_modules`/`site`/`vendor`). */
-  readonly stageDir: string;
-  /** The deps-cache root holding the lockfile-hash-keyed entry dirs. */
-  readonly cacheDir: string;
-}
-
 export interface SandboxPlanSpec {
   readonly provisioned: Provisioned;
   readonly detection: Detection;
+  /**
+   * The deps-cache root (under the dustcastle home) shared by every ecosystem in this
+   * run. Required when any cache decision with a stable lockfile hash is supplied.
+   */
+  readonly cacheDir?: string;
   /**
    * The primary ecosystem's deps-cache decision (ADR 0012, dustcastle-8od). Absent
    * for a caller that does not cache (the prior always-install behavior).
@@ -192,19 +159,27 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     if (cache !== undefined && lockfileHash !== undefined && cache.hit) {
       // HIT: restore from the cache on the host; the in-Sandbox setup is just the
       // git-exclude (no install, no registry traffic).
-      hostWorktreeReady.push(restoreCommand({ cacheDir: cache.cacheDir, lockfileHash, stageDir }));
+      hostWorktreeReady.push(restoreCommand({ cacheDir: requireCacheDir(spec), lockfileHash, stageDir }));
       setupCommands.push(gitExclude(stageDir));
     } else {
       // MISS / uncacheable: install in-Sandbox (git-exclude first, then the install).
       setupCommands.push(...setupFor(e.detection));
       if (cache !== undefined && lockfileHash !== undefined) {
         // A real miss (stable key, no entry yet): populate the cache after the run.
-        populate.push({ cacheDir: cache.cacheDir, lockfileHash, stageDir });
+        requireCacheDir(spec);
+        populate.push({ lockfileHash, stageDir });
       }
     }
   }
 
   return { podmanOptions, setupCommands, hostWorktreeReady, populate, egress };
+}
+
+function requireCacheDir(spec: SandboxPlanSpec): string {
+  if (spec.cacheDir === undefined) {
+    throw new Error("cacheDir is required when a deps-cache decision has a lockfile hash");
+  }
+  return spec.cacheDir;
 }
 
 /**

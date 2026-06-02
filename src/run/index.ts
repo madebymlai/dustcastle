@@ -5,7 +5,7 @@ import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
 import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtime.js";
 import { deriveEgress, gitRemoteHost, type EgressDecision } from "../sandbox/egress.js";
-import { planSandbox, type DepsCachePopulate, type EcosystemPlan, type SandboxPlan } from "../sandbox/plan.js";
+import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore, type Provisioned } from "../store/index.js";
 import {
@@ -23,6 +23,7 @@ import {
   populateCommand,
   defaultDepsCacheDir,
   depsCachePool,
+  type DepsCachePopulate,
 } from "../store/depscache/index.js";
 import { spawnAutoGc } from "../cli/autogc.js";
 import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
@@ -149,6 +150,7 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
     plan: planSandbox({
       provisioned: primary.provisioned,
       detection: primary.detection,
+      cacheDir,
       ...(primary.cache !== undefined ? { cache: primary.cache } : {}),
       ...(ecosystems.length > 1 ? { additionalEcosystems: ecosystems.slice(1) } : {}),
       egress,
@@ -396,7 +398,7 @@ export async function withProvisionedSandbox<T>(
     // so it cannot be relied on to land once the deps are assembled. Copies each
     // worktree stage dir into its lockfile-hash entry. Best-effort: a failed populate
     // only risks a later cache miss, never the run.
-    populateDepsCache(opts.cwd, prepared.plan.populate, opts.onLine);
+    populateDepsCache(opts.cwd, cacheDir, prepared.plan.populate, opts.onLine);
 
     return result;
   } finally {
@@ -492,12 +494,13 @@ function withSetupHooks(
  */
 function populateDepsCache(
   cwd: string,
+  cacheDir: string,
   populate: readonly DepsCachePopulate[],
   onLine?: (line: string) => void,
 ): void {
   for (const entry of populate) {
     try {
-      const result = spawnSync("sh", ["-c", populateCommand(entry)], { cwd, encoding: "utf8" });
+      const result = spawnSync("sh", ["-c", populateCommand({ cacheDir, ...entry })], { cwd, encoding: "utf8" });
       if (result.status === 0) {
         onLine?.(`deps-cache: populated ${entry.lockfileHash} from ${entry.stageDir}`);
       } else {

@@ -350,7 +350,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     const plan = planSandbox({
       provisioned: nodeProvisioned,
       detection: nodeDetection,
-      cache: { lockfileHash: "abc123", hit: true, cacheDir: "/home/u/.dustcastle/deps-cache" },
+      cacheDir: "/home/u/.dustcastle/deps-cache",
+      cache: { lockfileHash: "abc123", hit: true },
     });
 
     // Restore copies the assembled deps from the cache entry into the worktree's
@@ -374,7 +375,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     const plan = planSandbox({
       provisioned: nodeProvisioned,
       detection: nodeDetection,
-      cache: { lockfileHash: "abc123", hit: true, cacheDir: "/home/u/.dustcastle/deps-cache" },
+      cacheDir: "/home/u/.dustcastle/deps-cache",
+      cache: { lockfileHash: "abc123", hit: true },
     });
 
     // The GC pool reads each entry's recency from the ENTRY dir's mtime, but `cp -RL`
@@ -388,7 +390,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     const plan = planSandbox({
       provisioned: nodeProvisioned,
       detection: nodeDetection,
-      cache: { lockfileHash: "def456", hit: false, cacheDir: "/home/u/.dustcastle/deps-cache" },
+      cacheDir: "/home/u/.dustcastle/deps-cache",
+      cache: { lockfileHash: "def456", hit: false },
     });
 
     // No restore copy on a miss.
@@ -402,7 +405,6 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     // lockfile-hash entry dir.
     expect(plan.populate).toEqual([
       {
-        cacheDir: "/home/u/.dustcastle/deps-cache",
         lockfileHash: "def456",
         stageDir: "node_modules",
       },
@@ -414,7 +416,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
       provisioned: nodeProvisioned,
       detection: { ...nodeDetection, loose: true },
       // No lockfile hash ⇒ no stable key ⇒ not cacheable.
-      cache: { lockfileHash: undefined, hit: false, cacheDir: "/home/u/.dustcastle/deps-cache" },
+      cacheDir: "/home/u/.dustcastle/deps-cache",
+      cache: { lockfileHash: undefined, hit: false },
     });
 
     expect(plan.hostWorktreeReady).toEqual([]);
@@ -444,12 +447,13 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     const plan = planSandbox({
       provisioned: nodeProvisioned,
       detection: nodeDetection,
-      cache: { lockfileHash: "nodehash", hit: true, cacheDir: "/c" },
+      cacheDir: "/c",
+      cache: { lockfileHash: "nodehash", hit: true },
       additionalEcosystems: [
         {
           provisioned: pythonProvisioned,
           detection: { ecosystem: "python", packageManager: "pip" },
-          cache: { lockfileHash: "pyhash", hit: false, cacheDir: "/c" },
+          cache: { lockfileHash: "pyhash", hit: false },
         },
       ],
     });
@@ -465,7 +469,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     expect(restore).not.toContain("/c/pyhash");
     // Only Python is populated after the run.
     expect(plan.populate).toEqual([
-      { cacheDir: "/c", lockfileHash: "pyhash", stageDir: "site" },
+      { lockfileHash: "pyhash", stageDir: "site" },
     ]);
   });
 
@@ -473,7 +477,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     const plan = planSandbox({
       provisioned: nodeProvisioned,
       detection: nodeDetection,
-      cache: { lockfileHash: "abc", hit: true, cacheDir: "/c" },
+      cacheDir: "/c",
+      cache: { lockfileHash: "abc", hit: true },
     });
     expect(plan.hostWorktreeReady.join("\n")).toContain("chmod");
   });

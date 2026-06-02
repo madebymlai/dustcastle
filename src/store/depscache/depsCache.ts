@@ -1,8 +1,40 @@
 import { existsSync } from "node:fs";
 import type { Detection } from "../../detect/index.js";
-import type { DepsCacheDecision } from "../../sandbox/plan.js";
 import { depsCacheKey } from "./depsCacheKey.js";
 import { contentPath, entryDir } from "./layout.js";
+
+/**
+ * The host-side deps-cache decision for ONE ecosystem (ADR 0012, dustcastle-8od).
+ * The decision is only the query result: the ecosystem's stable cache key plus
+ * whether that key is already present. The cache root is run-level configuration
+ * supplied once to the Sandbox plan / command builders, not repeated here.
+ */
+export interface DepsCacheDecision {
+  /**
+   * The ecosystem's lockfile hash — the cache key. Undefined for a loose / no-lockfile
+   * ecosystem, which has no stable key, so it is never cached (always installs in-Sandbox).
+   */
+  readonly lockfileHash: string | undefined;
+  /**
+   * Whether the cache holds an assembled entry for this lockfile hash. A HIT restores
+   * via `host.onWorktreeReady` and runs no install; a MISS installs in-Sandbox, then
+   * populates the cache entry after the run.
+   */
+  readonly hit: boolean;
+}
+
+/**
+ * One ecosystem's cache entry to POPULATE after the run completes (ADR 0012). On a
+ * cache miss, the host copies the worktree's assembled stage dir into the lockfile-hash
+ * entry dir once the in-Sandbox install has run. The cache root is supplied once by
+ * the run-level caller and combined with this descriptor by the cache module's layout owner.
+ */
+export interface DepsCachePopulate {
+  /** The lockfile hash keying this ecosystem's cache entry. */
+  readonly lockfileHash: string;
+  /** The worktree-relative stage dir the in-Sandbox install assembled (`node_modules`/`site`/`vendor`). */
+  readonly stageDir: string;
+}
 
 /**
  * The host-side deps-cache hit/miss decision for one ecosystem (ADR 0012,
@@ -28,18 +60,13 @@ export function depsCacheDecision(
   return {
     lockfileHash,
     hit: existsSync(entryDir(cacheDir, lockfileHash)),
-    cacheDir,
   };
 }
 
 /** The path inputs shared by the pure deps-cache shell command builders. */
-export interface DepsCacheCommandInput {
+export interface DepsCacheCommandInput extends DepsCachePopulate {
   /** The deps-cache root holding lockfile-hash-keyed entry dirs. */
   readonly cacheDir: string;
-  /** The lockfile hash keying this ecosystem's cache entry. */
-  readonly lockfileHash: string;
-  /** The worktree-relative stage dir (`node_modules`/`site`/`vendor`). */
-  readonly stageDir: string;
 }
 
 /**

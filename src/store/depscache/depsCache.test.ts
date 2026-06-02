@@ -10,6 +10,7 @@ import { depsCacheDecision, populateCommand, restoreCommand } from "./index.js";
 //   - a lockfile present + a cache entry on disk ⇒ HIT (restore, no install);
 //   - a lockfile present + no entry yet ⇒ MISS (install, then populate);
 //   - a loose / no-lockfile ecosystem ⇒ no key ⇒ never cached (always installs).
+// The cache root is run-level config, so decisions do not carry cacheDir.
 
 const dirs: string[] = [];
 function tmp(): string {
@@ -34,9 +35,10 @@ describe("depsCacheDecision (host-side hit/miss — ADR 0012, dustcastle-8od)", 
 
     const decision = depsCacheDecision(project, npm, cacheDir);
     expect(decision).toBeDefined();
-    expect(decision!.hit).toBe(true);
-    expect(decision!.lockfileHash).toBe(decisionMiss!.lockfileHash);
-    expect(decision!.cacheDir).toBe(cacheDir);
+    expect(decision).toEqual({
+      hit: true,
+      lockfileHash: decisionMiss!.lockfileHash,
+    });
   });
 
   it("MISS: a present lockfile with no entry yet is a miss", () => {
