@@ -70,6 +70,6 @@ describe("populateCacheCommand (copy the assembled deps into the cache — ADR 0
     expect(cmd).toContain("node_modules");
     expect(cmd).toContain("/c/abc");
     // Only when the stage dir actually exists (a failed install leaves nothing to cache).
-    expect(cmd).toContain("node_modules");
+    expect(cmd).toContain("if [ -d 'node_modules' ]; then");
   });
 });

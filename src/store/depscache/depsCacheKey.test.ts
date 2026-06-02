@@ -21,6 +21,7 @@ afterEach(() => {
 });
 
 const npm: Detection = { ecosystem: "node", packageManager: "npm" };
+const go: Detection = { ecosystem: "go", packageManager: "go" };
 
 describe("depsCacheKey (the lockfile hash — ADR 0012, dustcastle-8od)", () => {
   it("is a stable hash of the manager's lockfile contents", () => {
@@ -40,6 +41,17 @@ describe("depsCacheKey (the lockfile hash — ADR 0012, dustcastle-8od)", () => 
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3,"name":"x"}');
     const after = depsCacheKey(dir, npm);
     expect(after).not.toBe(before);
+  });
+
+  it("includes every present lockfile for managers with companion lockfiles", () => {
+    const dir = projectDir();
+    writeFileSync(join(dir, "go.mod"), "module example.com/app\n");
+    writeFileSync(join(dir, "go.sum"), "example.com/dep v1 h1:abc\n");
+    const before = depsCacheKey(dir, go);
+
+    writeFileSync(join(dir, "go.sum"), "example.com/dep v1 h1:def\n");
+
+    expect(depsCacheKey(dir, go)).not.toBe(before);
   });
 
   it("is undefined for a loose / no-lockfile ecosystem (no stable key ⇒ not cached)", () => {

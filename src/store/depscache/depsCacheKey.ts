@@ -16,8 +16,9 @@ import { packageManagerDescriptor } from "../../ecosystems/index.js";
  * therefore this returns `undefined` and that ecosystem always installs in-Sandbox.
  *
  * The lockfile names come from the dispatch grain (the Package Manager descriptor's
- * `lockfiles`, in precedence order); the FIRST present one is hashed, matching the
- * lockfile detection already used to pick the manager (ADR 0006d).
+ * `lockfiles`, in precedence order); every present lockfile for the selected manager
+ * is hashed in that order, so companion lockfiles (for example `go.sum` + `go.mod`)
+ * both contribute to the cache key.
  */
 export function depsCacheKey(projectDir: string, detection: Detection): string | undefined {
   // A loose manifest has no committed lockfile to pin the install — never cached.
