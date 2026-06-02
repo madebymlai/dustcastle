@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -11,6 +11,8 @@ import {
   registerScopedRoots,
 } from "../../src/store/gc.js";
 import { autoGc } from "../../src/store/autogc.js";
+import { collectPool } from "../../src/store/pool.js";
+import { depsCacheEntryDir, depsCachePool } from "../../src/store/depsCachePool.js";
 import { upsertRecency } from "../../src/store/recency.js";
 
 // 3b GATE (DESTRUCTIVE, ADR 0007): prove a REAL `nix-store --gc` frees unrooted
@@ -179,5 +181,49 @@ describe("autoGc destructive (ADR 0007 — real optimise-first → conditional g
       if (prevNpLocation === undefined) delete process.env.NP_LOCATION;
       else process.env.NP_LOCATION = prevNpLocation;
     }
+  });
+});
+
+// The deps-cache analogue of the destructive Store sweeps above (ADR 0012,
+// dustcastle-8od): the SAME pool brain (`collectPool`) drives the second pool — the
+// lockfile-hash-keyed deps cache. Pure filesystem (no nix/podman), so it runs in the
+// bare suite too; it proves the unified GC interface evicts the cache's cold byte-LRU
+// tail while the warm tail (and any pinned live-run entry) survives.
+describe("deps-cache pool under the unified GC brain (ADR 0012 — collectPool over the cache)", () => {
+  function seedTwoEntries(prefix: string): string {
+    const cacheDir = mkdtempSync(join(tmpdir(), prefix));
+    tmps.push(cacheDir);
+    // Two assembled entries (~1KB each): 'warm' recently used, 'cold' used long ago.
+    for (const hash of ["warm", "cold"]) {
+      const dir = depsCacheEntryDir(cacheDir, hash);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "node_modules.bin"), "x".repeat(1024));
+    }
+    return cacheDir;
+  }
+
+  it("evicts the cold lockfile-hash entry while the warm byte-budget tail survives", () => {
+    const cacheDir = seedTwoEntries("dustcastle-depscache-gc-");
+    const pool = depsCachePool({ cacheDir, lastUsedAt: { warm: 1000, cold: 1 } });
+
+    // A budget that fits exactly one ~1KB entry → the LRU tail keeps 'warm', drops 'cold'.
+    const report = collectPool(pool, { budgetBytes: 1500 });
+
+    expect(report.entriesEvicted).toBe(1);
+    expect(report.bytesFreed).toBeGreaterThan(0);
+    expect(existsSync(depsCacheEntryDir(cacheDir, "warm"))).toBe(true);
+    expect(existsSync(depsCacheEntryDir(cacheDir, "cold"))).toBe(false);
+  });
+
+  it("never evicts a pinned (live-run) entry, even when it is the cold one", () => {
+    const cacheDir = seedTwoEntries("dustcastle-depscache-pin-");
+    const pool = depsCachePool({ cacheDir, lastUsedAt: { warm: 1000, cold: 1 } });
+    pool.pin("cold"); // a live run depends on the cold entry — it must not be collected
+
+    const report = collectPool(pool, { budgetBytes: 1500 });
+
+    expect(report.entriesEvicted).toBe(0);
+    expect(existsSync(depsCacheEntryDir(cacheDir, "cold"))).toBe(true);
+    expect(existsSync(depsCacheEntryDir(cacheDir, "warm"))).toBe(true);
   });
 });

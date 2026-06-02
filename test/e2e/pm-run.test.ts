@@ -1,46 +1,22 @@
-import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { EGRESS_NETWORK } from "../../src/sandbox/confine.js";
+import { egressHosts } from "../../src/sandbox/egress.js";
 import { prepareRun } from "../../src/run/index.js";
-import { PNPM_SAMPLE, YARN_SAMPLE, stageFixtureProject } from "./fixture.js";
+import { PNPM_SAMPLE, YARN_SAMPLE, runInSandbox, stageFixtureProject } from "./fixture.js";
 
-// SLICE 2b RED→GREEN GATE (the pnpm + yarn ecosystem paths):
-//   a pnpm/yarn project → dustcastle provisions it → `node --test` runs GREEN
-//   inside a sandcastle podman container, with the nodejs toolchain + the
-//   node_modules coming entirely from the read-only bind-mounted /nix/store, and
-//   the container fully OFFLINE.
+// SLICE 2b GATE — the pnpm + yarn ecosystem paths under ADR 0012:
+//   a pnpm/yarn project → dustcastle provisions the Node Toolchain (only) → `node
+//   --test` runs GREEN inside a podman container, with node_modules installed
+//   IN-SANDBOX by a real `pnpm install --frozen-lockfile` / `yarn install
+//   --frozen-lockfile` routed through the standing egress proxy (each manager's
+//   registry is on the allowlist), NOT mounted offline from a deps FOD.
 //
-// This is the pnpm/yarn analogue of the slice-2 npm gate. It proves the new
-// importers (src/nix/pnpm.ts, src/nix/yarn.ts) realize a real node_modules
-// offline: pnpm via fetchPnpmDeps + an `--ignore-scripts` `pnpm install`, yarn
-// via fetchYarnDeps + a `yarnConfigHook` install. As with npm, safety holds
-// because (a) provisioning never runs untrusted lifecycle scripts, and (b) the
-// container's egress is closed ("none") for these pure projects.
-//
-// Unlike the npm gate this supplies NO known deps hash, so dustcastle discovers
-// it via the placeholder probe build (ADR 0004) — self-contained on any host with
-// a working nix-portable + network. Gated by DUSTCASTLE_E2E=1; it self-skips
-// otherwise (and on hosts without a warm pnpm/yarn store it is the only proof).
+// (Pre-ADR-0012 this was a pure, offline build with `network: none`; that model is
+// gone — see ADR 0012 and dustcastle-61j.) Gated by DUSTCASTLE_E2E=1.
 const e2e = process.env.DUSTCASTLE_E2E ? it : it.skip;
-
-interface BindMountHandle {
-  readonly worktreePath: string;
-  exec(
-    command: string,
-    options?: { cwd?: string; onLine?: (line: string) => void },
-  ): Promise<{ exitCode: number; stdout: string; stderr: string }>;
-  close(): Promise<void>;
-}
-interface CreatableProvider {
-  create(options: {
-    worktreePath: string;
-    hostRepoPath: string;
-    mounts: Array<{ hostPath: string; sandboxPath: string; readonly?: boolean }>;
-    env: Record<string, string>;
-  }): Promise<BindMountHandle>;
-}
 
 const tmps: string[] = [];
 afterAll(() => {
@@ -48,65 +24,34 @@ afterAll(() => {
 });
 
 const CASES = [
-  { manager: "pnpm", fixture: PNPM_SAMPLE },
-  { manager: "yarn", fixture: YARN_SAMPLE },
+  { manager: "pnpm", fixture: PNPM_SAMPLE, registry: "registry.npmjs.org", install: "pnpm install" },
+  { manager: "yarn", fixture: YARN_SAMPLE, registry: "registry.yarnpkg.com", install: "yarn install" },
 ] as const;
 
-describe("dustcastle run (slice 2b: pnpm/yarn pure path, ADR 0002/0003/0004/0005/0008)", () => {
-  for (const { manager, fixture } of CASES) {
+describe("dustcastle run (slice 2b: pnpm/yarn in-Sandbox install, ADR 0002/0005/0008/0012)", () => {
+  for (const { manager, fixture, registry, install } of CASES) {
     e2e(
-      `runs \`node --test\` green for a ${manager} project, offline, deps from the RO Store`,
+      `installs node_modules in-Sandbox via the egress proxy for a ${manager} project, then runs \`node --test\` green`,
       async () => {
         const root = mkdtempSync(join(tmpdir(), `dustcastle-${manager}-run-`));
         tmps.push(root);
         const projectDir = stageFixtureProject(fixture, root);
 
-        // dustcastle's real pipeline: detect → resolve impurity → realize the Store
-        // → plan the Sandbox. The fixture has no install scripts, so it's pure. No
-        // known hash supplied → the store discovers it via the placeholder probe.
         const prepared = prepareRun({ cwd: projectDir });
         expect(prepared.detection.ecosystem).toBe("node");
         expect(prepared.detection.packageManager).toBe(manager);
-        expect(prepared.impurity.kind).toBe("pure");
-        expect(prepared.plan.podmanOptions.network).toBe("none");
+        expect(prepared.provisioned.depsStorePath).toBe(""); // toolchain-only Store (ADR 0012)
+        expect(prepared.plan.egress.kind).toBe("allowlist");
+        expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
+        expect(egressHosts(prepared.plan.egress)).toContain(registry);
+        expect(prepared.plan.setupCommands.join("\n")).toContain(install);
 
-        const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
-        const handle = await provider.create({
-          worktreePath: projectDir,
-          hostRepoPath: projectDir,
-          mounts: [{ hostPath: projectDir, sandboxPath: "/home/agent/workspace", readonly: false }],
-          env: prepared.plan.podmanOptions.env ?? {},
+        await runInSandbox({
+          prepared,
+          projectDir,
+          container: `dustcastle-${manager}-run-e2e`,
+          test: { command: "node --test", expect: /pass 1|# pass 1/ },
         });
-
-        try {
-          const cwd = "/home/agent/workspace";
-          const log = (line: string) => process.stderr.write(`   | ${line}\n`);
-
-          // The toolchain resolves from the read-only Store mount.
-          const which = await handle.exec("command -v node && node --version", { cwd, onLine: log });
-          expect(which.exitCode).toBe(0);
-          expect(which.stdout).toContain("/nix/store/");
-
-          // Truly offline: a DNS lookup of the registry must fail inside the container.
-          const net = await handle.exec("getent hosts registry.npmjs.org || echo OFFLINE_OK", {
-            cwd,
-            onLine: log,
-          });
-          expect(net.stdout).toContain("OFFLINE_OK");
-
-          // dustcastle's per-project staging: node_modules copied from the RO Store.
-          for (const command of prepared.plan.setupCommands) {
-            const setup = await handle.exec(command, { cwd, onLine: log });
-            expect(setup.exitCode).toBe(0);
-          }
-
-          // THE GATE: the project's tests pass, offline, from the shared Store.
-          const test = await handle.exec("node --test", { cwd, onLine: log });
-          expect(test.exitCode).toBe(0);
-          expect(test.stdout).toMatch(/pass 1|# pass 1/);
-        } finally {
-          await handle.close();
-        }
       },
     );
   }

@@ -1,15 +1,18 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { detect } from "../../src/detect/index.js";
-import { physPath, provisionStore } from "../../src/store/index.js";
-import { KNOWN_VENDOR_HASH, stageSampleProject } from "./fixture.js";
+import { physPath, provisionStore, type Provisioned } from "../../src/store/index.js";
+import { depsCacheDecision } from "../../src/store/depsCache.js";
+import { depsCacheEntryDir } from "../../src/store/depsCachePool.js";
+import { planSandbox } from "../../src/sandbox/plan.js";
+import { stageSampleProject } from "./fixture.js";
 
 // Integration: realize a real Go project into the rootless Store via nix-portable
-// (ADR 0004/0008). Gated behind DUSTCASTLE_E2E=1 — the bare unit suite stays fast.
-// Reuses the proven spike fixture + its known vendorHash for a warm-store cache
-// hit; the `app` build runs `go test` offline in the Nix sandbox (first green gate).
+// (ADR 0008/0012). Under ADR 0012 the Store realizes ONLY the Toolchain — Project
+// Deps install in-Sandbox via the sandcastle hook, so there is no deps FOD here.
+// Gated behind DUSTCASTLE_E2E=1 — the bare unit suite stays fast.
 const e2e = process.env.DUSTCASTLE_E2E ? it : it.skip;
 
 const tmps: string[] = [];
@@ -17,8 +20,8 @@ afterAll(() => {
   while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
 });
 
-describe("provisionStore (rootless Store, ADR 0004/0008)", () => {
-  e2e("realizes the Go toolchain + deps; offline `go test` passes during the build", () => {
+describe("provisionStore (toolchain-only rootless Store, ADR 0008/0012)", () => {
+  e2e("realizes ONLY the Go Toolchain — no deps FOD in the Store", () => {
     const root = mkdtempSync(join(tmpdir(), "dustcastle-e2e-"));
     tmps.push(root);
     const projectDir = stageSampleProject(root);
@@ -26,23 +29,74 @@ describe("provisionStore (rootless Store, ADR 0004/0008)", () => {
     const detection = detect(projectDir)[0];
     expect(detection?.packageManager).toBe("go");
 
-    const provisioned = provisionStore({
-      projectDir,
-      detection: detection!,
-      depsHash: KNOWN_VENDOR_HASH,
-    });
+    const provisioned = provisionStore({ projectDir, detection: detection! });
 
-    // The Toolchain and Project Deps land as distinct content-addressed paths.
+    // The Toolchain lands as a content-addressed path.
     expect(provisioned.toolchainStorePath).toMatch(/^\/nix\/store\/.+-go-\d/);
-    expect(provisioned.depsStorePath).toMatch(/go-modules$/);
-    expect(provisioned.depsHash).toBe(KNOWN_VENDOR_HASH);
+    // ADR 0012: the Store holds ONLY the Toolchain — deps install in-Sandbox, so there
+    // is no deps FOD path and no deps hash.
+    expect(provisioned.depsStorePath).toBe("");
+    expect(provisioned.depsHash).toBe("");
 
-    // The active rootless runtime is surfaced (ADR 0008), and the canonical
-    // store paths resolve to real files under the physical store root.
+    // The active rootless runtime is surfaced (ADR 0008), and the Toolchain path
+    // resolves to real files under the physical store root.
     expect(provisioned.mode).toBe("bwrap");
-    expect(existsSync(physPath(provisioned.physStoreRoot, provisioned.toolchainStorePath))).toBe(
-      true,
-    );
-    expect(existsSync(physPath(provisioned.physStoreRoot, provisioned.depsStorePath))).toBe(true);
+    expect(existsSync(physPath(provisioned.physStoreRoot, provisioned.toolchainStorePath))).toBe(true);
+  });
+});
+
+// A toolchain-only provisioned stub (deps install in-Sandbox), for the pure plan
+// assertions below — no nix/podman needed.
+function toolchainOnly(): Provisioned {
+  return {
+    mode: "bwrap",
+    physStoreRoot: "/phys",
+    toolchainStorePath: "/nix/store/aaaa-node",
+    depsStorePath: "",
+    appStorePath: "/nix/store/aaaa-node",
+    depsHash: "",
+  };
+}
+
+describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () => {
+  // A pure exercise of the host-side cache decision + the plan hooks it drives: no
+  // Store/Sandbox needed, so it runs in the bare suite too. The heavy in-Sandbox
+  // restore/install is exercised by the run-tests above (node-run et al.).
+  it("misses (installs + populates) until the lockfile-hash entry exists, then hits (restores)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-depscache-"));
+    tmps.push(dir);
+    const cacheDir = join(dir, "cache");
+    const projectDir = join(dir, "proj");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, "package.json"), JSON.stringify({ name: "p", version: "1.0.0" }));
+    writeFileSync(join(projectDir, "package-lock.json"), JSON.stringify({ name: "p", lockfileVersion: 3 }));
+
+    const detection = detect(projectDir)[0]!;
+    expect(detection.ecosystem).toBe("node");
+
+    // MISS: a lockfile is present (stable key) but no assembled entry on disk yet.
+    const miss = depsCacheDecision(projectDir, detection, cacheDir)!;
+    expect(miss.lockfileHash).toBeTruthy();
+    expect(miss.hit).toBe(false);
+
+    // On a MISS the plan installs in-Sandbox (`npm ci`) and schedules a populate;
+    // nothing is restored on the host.
+    const missPlan = planSandbox({ provisioned: toolchainOnly(), detection, cache: miss });
+    expect(missPlan.setupCommands.join("\n")).toContain("npm ci");
+    expect(missPlan.hostWorktreeReady).toEqual([]);
+    expect(missPlan.populate).toHaveLength(1);
+    expect(missPlan.populate[0]!.lockfileHash).toBe(miss.lockfileHash);
+
+    // Populate the lockfile-hash entry → the decision flips to a HIT.
+    mkdirSync(depsCacheEntryDir(cacheDir, miss.lockfileHash!), { recursive: true });
+    const hit = depsCacheDecision(projectDir, detection, cacheDir)!;
+    expect(hit.hit).toBe(true);
+
+    // On a HIT the plan restores from the cache on the host (host.onWorktreeReady),
+    // runs no install (`npm ci` absent — just the git-exclude), and schedules no populate.
+    const hitPlan = planSandbox({ provisioned: toolchainOnly(), detection, cache: hit });
+    expect(hitPlan.hostWorktreeReady.join("\n")).toContain(depsCacheEntryDir(cacheDir, hit.lockfileHash!));
+    expect(hitPlan.setupCommands.join("\n")).not.toContain("npm ci");
+    expect(hitPlan.populate).toEqual([]);
   });
 });

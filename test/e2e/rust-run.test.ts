@@ -1,95 +1,70 @@
-import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME } from "../../src/ecosystems/rust.js";
+import { EGRESS_NETWORK } from "../../src/sandbox/confine.js";
+import { egressHosts } from "../../src/sandbox/egress.js";
 import { prepareRun } from "../../src/run/index.js";
-import { stageRustCrateProject, stageRustGitProject, stageRustProject } from "./fixture.js";
+import { runInSandbox, stageRustCrateProject, stageRustGitProject, stageRustProject } from "./fixture.js";
 
-// Rust happy-path (dustcastle-gy5.2): a committed Cargo.lock provisions pure,
-// stages deps into CARGO_HOME with the existing cp -RL path, and cargo test runs
-// offline in the real sandcastle podman container. Gated behind DUSTCASTLE_E2E=1.
+// Rust path under ADR 0012 (dustcastle-gy5.2/kzw): a Cargo crate → dustcastle
+// provisions the Rust Toolchain (only) → `cargo fetch` populates the per-project
+// CARGO_HOME IN-SANDBOX, routed through the standing egress proxy (the crates index
+// is on the allowlist), then `cargo test --offline` runs green against the fetched
+// cache — NOT a Store-vendored offline build.
+//
+// (Pre-ADR-0012 deps were Nix-vendored into CARGO_HOME and `network: none`; that
+// model is gone — see ADR 0012 and dustcastle-61j.) Gated by DUSTCASTLE_E2E=1.
 const e2e = process.env.DUSTCASTLE_E2E ? it : it.skip;
-
-interface BindMountHandle {
-  readonly worktreePath: string;
-  exec(
-    command: string,
-    options?: { cwd?: string; onLine?: (line: string) => void },
-  ): Promise<{ exitCode: number; stdout: string; stderr: string }>;
-  close(): Promise<void>;
-}
-interface CreatableProvider {
-  create(options: {
-    worktreePath: string;
-    hostRepoPath: string;
-    mounts: Array<{ hostPath: string; sandboxPath: string; readonly?: boolean }>;
-    env: Record<string, string>;
-  }): Promise<BindMountHandle>;
-}
 
 const tmps: string[] = [];
 afterAll(() => {
   while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
 });
 
-async function expectRustFixtureOffline(stage: (root: string) => string, tmpPrefix: string): Promise<void> {
+async function expectRustFixture(
+  stage: (root: string) => string,
+  tmpPrefix: string,
+  container: string,
+): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), tmpPrefix));
   tmps.push(root);
   const projectDir = stage(root);
 
   const prepared = prepareRun({ cwd: projectDir });
   expect(prepared.detection).toMatchObject({ ecosystem: "rust", packageManager: "cargo" });
-  expect(prepared.plan.podmanOptions.network).toBe("none");
+  expect(prepared.provisioned.depsStorePath).toBe(""); // toolchain-only Store (ADR 0012)
+  expect(prepared.plan.egress.kind).toBe("allowlist");
+  expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
+  expect(egressHosts(prepared.plan.egress)).toContain("index.crates.io");
+  // `cargo fetch` installs in-Sandbox into the per-project CARGO_HOME (the stage dir).
+  expect(prepared.plan.setupCommands.join("\n")).toContain("cargo fetch");
+  expect(prepared.plan.setupCommands.join("\n")).toContain(CARGO_HOME_BASENAME);
 
-  const provider = podman(prepared.plan.podmanOptions) as unknown as CreatableProvider;
-  const handle = await provider.create({
-    worktreePath: projectDir,
-    hostRepoPath: projectDir,
-    mounts: [{ hostPath: projectDir, sandboxPath: "/home/agent/workspace", readonly: false }],
-    env: prepared.plan.podmanOptions.env ?? {},
+  await runInSandbox({
+    prepared,
+    projectDir,
+    container,
+    // `cargo fetch` populated CARGO_HOME; the per-project CARGO_HOME dir now exists.
+    afterSetup: async (exec) => {
+      const cargoHome = await exec('test -d "$CARGO_HOME" && printf CARGO_HOME_OK');
+      expect(cargoHome.out).toContain("CARGO_HOME_OK");
+    },
+    test: { command: "cargo test --offline", expect: /test result: ok/ },
   });
-
-  try {
-    const cwd = "/home/agent/workspace";
-    const log = (line: string) => process.stderr.write(`   | ${line}\n`);
-
-    const which = await handle.exec("command -v cargo && cargo --version", { cwd, onLine: log });
-    expect(which.exitCode).toBe(0);
-    expect(which.stdout).toContain("/nix/store/");
-
-    const net = await handle.exec("getent hosts static.crates.io || echo OFFLINE_OK", { cwd, onLine: log });
-    expect(net.stdout).toContain("OFFLINE_OK");
-
-    for (const command of prepared.plan.setupCommands) {
-      const setup = await handle.exec(command, { cwd, onLine: log });
-      expect(setup.exitCode).toBe(0);
-    }
-    const cargoHome = await handle.exec("test -d \"$CARGO_HOME/vendor\" && printf CARGO_HOME_OK", { cwd });
-    expect(cargoHome.stdout).toContain("CARGO_HOME_OK");
-    expect(prepared.plan.setupCommands.join("\n")).toContain(CARGO_HOME_BASENAME);
-
-    const test = await handle.exec("cargo test --offline --frozen", { cwd, onLine: log });
-    expect(test.exitCode).toBe(0);
-    expect(test.stdout).toContain("test result: ok");
-  } finally {
-    await handle.close();
-  }
 }
 
-describe("dustcastle run — Rust pure path (dustcastle-gy5.2)", () => {
-  e2e("runs cargo test green inside a sandcastle container, fully offline", async () => {
-    await expectRustFixtureOffline(stageRustProject, "dustcastle-rust-run-");
+describe("dustcastle run — Rust in-Sandbox install (dustcastle-gy5.2/kzw, ADR 0012)", () => {
+  e2e("fetches deps in-Sandbox and runs cargo test green (zero-dependency crate)", async () => {
+    await expectRustFixture(stageRustProject, "dustcastle-rust-run-", "dustcastle-rust-run-e2e");
   });
 
-  e2e("vendors a Cargo git dependency under the aggregate hash and resolves it offline", async () => {
-    await expectRustFixtureOffline(stageRustGitProject, "dustcastle-rust-git-run-");
+  e2e("fetches a Cargo git dependency in-Sandbox via the proxy and runs cargo test green", async () => {
+    await expectRustFixture(stageRustGitProject, "dustcastle-rust-git-run-", "dustcastle-rust-git-run-e2e");
   });
 
-  e2e("vendors a real crates.io dependency under the aggregate hash and resolves it offline", async () => {
-    // The gy5.2 happy path is zero-dependency; this proves a non-empty crates.io
-    // fetch builds+tests offline in-Sandbox (dustcastle-kzw).
-    await expectRustFixtureOffline(stageRustCrateProject, "dustcastle-rust-crate-run-");
+  e2e("fetches a real crates.io dependency in-Sandbox via the proxy and runs cargo test green", async () => {
+    await expectRustFixture(stageRustCrateProject, "dustcastle-rust-crate-run-", "dustcastle-rust-crate-run-e2e");
   });
 });

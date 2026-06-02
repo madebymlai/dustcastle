@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { confineRouteScript } from "../../src/sandbox/confine.js";
+import { egressHosts } from "../../src/sandbox/egress.js";
 import { startEgressProxy, type EgressProxyHandle } from "../../src/sandbox/proxy.js";
 import { prepareRun } from "../../src/run/index.js";
 import { stageNodeImpureProject } from "./fixture.js";
@@ -17,7 +18,7 @@ import { stageNodeImpureProject } from "./fixture.js";
 // dustcastle's real outputs drive the test: prepareRun (impure `allow`) derives
 // the allowlist, picks the egress network, and routes the container's tooling at
 // the egress proxy; the proxy is dustcastle's real `startEgressProxy`, enforcing
-// exactly `plan.egress.hosts`. The only test-supplied piece is the *confinement*
+// exactly the standing allowlist (`egressHosts(plan.egress)`). The only test-supplied piece is the *confinement*
 // backend: production uses a podman-native internal network (unprovable on this
 // privilege-stripped host — no bridge module/root), so here the sandbox is
 // confined with the pasta route-strip fallback (`confineRouteScript`), making the
@@ -69,29 +70,28 @@ describe("dustcastle run (slice 3: impure-allow egress enforcement, ADR 0004/000
       const projectDir = stageNodeImpureProject(root);
       const log = (line: string) => process.stderr.write(`   | ${line}\n`);
 
-      // dustcastle's real pipeline in impure `allow` mode: detect → resolve
-      // impurity (the lockfile's hasInstallScript trips it) → realize only the
-      // nodejs Toolchain → plan the Sandbox with the derived egress + proxy env.
+      // dustcastle's real pipeline (ADR 0012, always-impure): detect → realize only
+      // the nodejs Toolchain → plan the Sandbox with the STANDING egress + proxy env.
+      // There is no purity decision; the install runs in-Sandbox under the allowlist,
+      // and this fixture's postinstall is the untrusted lifecycle code being confined.
       const prepared = prepareRun({
         cwd: projectDir,
-        impurityMode: "allow",
         proxyUrl: PROXY_URL,
         onLine: log,
       });
       expect(prepared.detection.ecosystem).toBe("node");
-      expect(prepared.impurity.kind).toBe("impure");
       expect(prepared.plan.egress.kind).toBe("allowlist");
-      if (prepared.plan.egress.kind !== "allowlist") throw new Error("unreachable");
-      // The derived allowlist: the npm registry (no git remote on a temp fixture).
-      expect(prepared.plan.egress.hosts).toContain("registry.npmjs.org");
+      // The standing allowlist the proxy enforces: the npm registry (no git remote on
+      // a temp fixture). `egressHosts` is the flat union the proxy consumes.
+      const allowlist = egressHosts(prepared.plan.egress);
+      expect(allowlist).toContain("registry.npmjs.org");
       expect(prepared.plan.podmanOptions.network).toBe("dustcastle-egress");
       expect(prepared.plan.podmanOptions.env?.HTTPS_PROXY).toBe(PROXY_URL);
       expect(prepared.plan.setupCommands.join("\n")).toContain("npm ci");
 
-      // Start dustcastle's REAL filtering proxy, enforcing exactly the derived
+      // Start dustcastle's REAL filtering proxy, enforcing exactly the standing
       // allowlist. This is the production security brain; only its confinement
       // (below) is the privilege-stripped fallback rather than the internal net.
-      const allowlist = prepared.plan.egress.hosts;
       let proxy: EgressProxyHandle | undefined;
       proxy = await startEgressProxy({
         allowlist,

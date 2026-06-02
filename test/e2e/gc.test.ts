@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { detect } from "../../src/detect/index.js";
 import { gcQueryArgs, nixPortableRunner, registerScopedRoots } from "../../src/store/gc.js";
 import { provisionStore } from "../../src/store/index.js";
-import { KNOWN_NPM_DEPS_HASH, stageNodeProject } from "./fixture.js";
+import { stageNodeProject } from "./fixture.js";
 
 // 3b GATE (store lifecycle, ADR 0007): prove scoped GC roots protect a live run's
 // closure, LIVE, through nix-portable. Deliberately NON-DESTRUCTIVE: it uses the
@@ -32,22 +32,24 @@ describe("scoped GC roots (ADR 0007 — protect an in-flight run's closure)", ()
     const gcrootsDir = join(root, "gcroots");
 
     const detection = detect(projectDir)[0]!;
-    const provisioned = provisionStore({ projectDir, detection, depsHash: KNOWN_NPM_DEPS_HASH });
+    const provisioned = provisionStore({ projectDir, detection });
     expect(provisioned.toolchainStorePath).toContain("/nix/store/");
-    expect(provisioned.depsStorePath).toContain("/nix/store/");
+    // ADR 0012: the Store holds only the Toolchain — no deps FOD path.
+    expect(provisioned.depsStorePath).toBe("");
 
     const run = nixPortableRunner();
 
     const handle = registerScopedRoots({
       provisioned,
       gcrootsDir,
-      projectKey: `npm-${KNOWN_NPM_DEPS_HASH}`,
+      projectKey: "npm-toolchain",
       run,
     });
 
     try {
-      // The scoped roots exist as symlinks pointing into the realized closure.
-      expect(handle.links).toHaveLength(2);
+      // ADR 0012: the closure is toolchain-only, so there is exactly ONE scoped root
+      // (the toolchain) — the deps root is gone with the deps FOD.
+      expect(handle.links).toHaveLength(1);
       for (const link of handle.links) {
         expect(existsSync(link)).toBe(true);
         expect(readlinkSync(link)).toContain("/nix/store/");

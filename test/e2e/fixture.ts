@@ -1,5 +1,173 @@
+import { execFileSync, spawn } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { expect } from "vitest";
+import { proxyEnv } from "../../src/sandbox/confine.js";
+import { egressHosts } from "../../src/sandbox/egress.js";
+import { startEgressProxy, type EgressProxyHandle } from "../../src/sandbox/proxy.js";
+import type { PreparedRun } from "../../src/run/index.js";
+
+/**
+ * Commit a staged fixture tree (ADR 0009 / ADR 0012): dustcastle builds the project's
+ * COMMITTED source (`git archive HEAD`), so an e2e fixture — copied into a throwaway
+ * temp dir — must be a real git repo with a commit, exactly as a user's repo is. The
+ * identity is local + throwaway, so the commit is hermetic and leaves no global config.
+ */
+export function commitFixtureTree(dir: string): void {
+  const git = (...args: string[]): void => {
+    execFileSync("git", ["-C", dir, ...args], { stdio: "ignore" });
+  };
+  git("init", "-q");
+  git("add", "-A");
+  git("-c", "user.email=e2e@dustcastle.local", "-c", "user.name=dustcastle-e2e", "commit", "-q", "-m", "fixture");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// The shared ADR 0012 run harness (dustcastle-61j)
+//
+// Under ADR 0012 a project's deps are no longer FOD-built into the Store and mounted
+// read-only for an OFFLINE run — the Store holds only the Toolchain, and the deps
+// install IN-SANDBOX via the `sandbox.onSandboxReady` hook (`npm ci` / `uv sync` /
+// `cargo fetch` / `go mod download`), through the standing egress proxy under the
+// `{registry, git, model}` allowlist (ADR 0005/0010/0012). So every run-test now
+// shares one flow: stand up the live proxy, run a podman container with the Store
+// mounted RO + the project writable, install deps in-Sandbox routed at the proxy,
+// then run the project's tests.
+//
+// This is the FUNCTION half of the egress-proxy proof: deps install through the proxy
+// and the tests pass. The ENFORCEMENT half (a malicious dep is BLOCKED off-allowlist
+// via the NET_ADMIN route-strip) stays in egress.test.ts, which keeps its full inline
+// confinement. Here the container reaches the host-side proxy via pasta's host-loopback
+// mapping; we do NOT strip its default route, so this exercises install-through-proxy
+// without re-proving enforcement.
+// ────────────────────────────────────────────────────────────────────────────
+
+// The container reaches the host-side proxy at this link-local address (pasta maps
+// the host loopback to it); the port is the proxy's ephemeral host port, so parallel
+// e2e files never collide on a fixed port.
+const PROXY_MAP_ADDR = "169.254.7.7";
+
+// A glibc base image that ships git: the in-Sandbox install's git-exclude step shells
+// `git`, and the Nix Toolchain closure (mounted RO at /nix/store) is glibc, so a musl
+// (alpine) base would break its dynamic loader. The language Toolchain itself always
+// comes from the Store mount — this image only supplies sh + git + a working libc.
+const DEFAULT_BASE_IMAGE = "docker.io/library/node:20";
+
+interface ExecResult {
+  readonly code: number;
+  readonly out: string;
+  readonly err: string;
+}
+
+// Async podman spawn so the in-process egress proxy keeps serving while podman runs —
+// a synchronous spawn would freeze this process's event loop and the container could
+// never reach the proxy.
+function podmanSpawn(args: string[]): Promise<ExecResult> {
+  return new Promise((resolve) => {
+    const child = spawn("podman", args);
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += String(d)));
+    child.stderr.on("data", (d) => (err += String(d)));
+    child.on("close", (code) => resolve({ code: code ?? -1, out, err }));
+    child.on("error", (e) => resolve({ code: -1, out, err: String(e) }));
+  });
+}
+
+export interface SandboxRunSpec {
+  /** dustcastle's prepared pipeline output (detect → provision Toolchain → plan). */
+  readonly prepared: PreparedRun;
+  /** The staged, committed project dir (bind-mounted writable at /work). */
+  readonly projectDir: string;
+  /** A container name unique to the calling test (parallel e2e files coexist). */
+  readonly container: string;
+  /** The project's test command + the stdout it must produce to count as green. */
+  readonly test: { readonly command: string; readonly expect: RegExp };
+  /** Base image override (default: a glibc image with git). */
+  readonly image?: string;
+  /** Container working directory (default `/work`). */
+  readonly cwd?: string;
+  /** Extra in-container assertions after the install, before the test (e.g. cargo's CARGO_HOME). */
+  readonly afterSetup?: (exec: (cmd: string) => Promise<ExecResult>) => Promise<void>;
+  /** Stream progress (default: stderr). */
+  readonly onLine?: (line: string) => void;
+}
+
+/**
+ * Run a prepared project through the ADR 0012 in-Sandbox install + test flow against
+ * the live egress proxy (dustcastle-61j). Starts the real `startEgressProxy` enforcing
+ * the prepared plan's standing allowlist, runs the container with the Store mounted RO,
+ * executes `plan.setupCommands` (the in-Sandbox install, routed at the proxy), then runs
+ * the project's test command — asserting each step green. Tears the container + proxy
+ * down whatever the outcome.
+ */
+export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
+  const log = spec.onLine ?? ((line: string) => process.stderr.write(`   | ${line}\n`));
+  const cwd = spec.cwd ?? "/work";
+  const image = spec.image ?? DEFAULT_BASE_IMAGE;
+
+  // dustcastle's REAL filtering proxy, enforcing exactly the standing allowlist the
+  // plan derived ({registry, git, model}). Ephemeral host port → no cross-file clash.
+  const allowlist = egressHosts(spec.prepared.plan.egress);
+  const proxy: EgressProxyHandle = await startEgressProxy({
+    allowlist,
+    host: "127.0.0.1",
+    port: 0,
+    onDecision: (h, allowed) => log(`proxy ${allowed ? "ALLOW" : "DENY "} ${h}`),
+  });
+  const proxyUrl = `http://${PROXY_MAP_ADDR}:${proxy.port}`;
+
+  const storeRoot = spec.prepared.provisioned.physStoreRoot;
+  // The plan env carries the Toolchain on PATH + writable cache vars; override the
+  // proxy env to the LIVE ephemeral proxy (the plan baked the production proxy URL).
+  const env = {
+    ...spec.prepared.plan.podmanOptions.env,
+    ...proxyEnv(proxyUrl),
+    HOME: "/root",
+  };
+  const envFlags = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+  const exec = (cmd: string): Promise<ExecResult> =>
+    podmanSpawn(["exec", "-w", cwd, ...envFlags, spec.container, "sh", "-c", cmd]);
+
+  await podmanSpawn(["rm", "-f", spec.container]);
+  try {
+    const up = await podmanSpawn([
+      "run",
+      "-d",
+      "--name",
+      spec.container,
+      // pasta maps the host loopback to PROXY_MAP_ADDR so the container reaches the
+      // host-side proxy the build's tooling is pointed at via HTTPS_PROXY.
+      "--network",
+      `pasta:--map-host-loopback,${PROXY_MAP_ADDR}`,
+      "-v",
+      `${storeRoot}:/nix/store:ro`,
+      "-v",
+      `${spec.projectDir}:/work`,
+      image,
+      "sleep",
+      "600",
+    ]);
+    expect(up.code, `podman run failed: ${up.err}`).toBe(0);
+
+    // dustcastle's in-Sandbox install (ADR 0012): the git-exclude + the real Package
+    // Manager's frozen/immutable install, routed through the egress proxy.
+    for (const command of spec.prepared.plan.setupCommands) {
+      const setup = await exec(command);
+      expect(setup.code, `setup '${command}' failed: ${setup.err}`).toBe(0);
+    }
+
+    await spec.afterSetup?.(exec);
+
+    // THE GATE: the project's tests pass with the deps installed in-Sandbox.
+    const test = await exec(spec.test.command);
+    expect(test.code, test.err).toBe(0);
+    expect(test.out).toMatch(spec.test.expect);
+  } finally {
+    await podmanSpawn(["rm", "-f", spec.container]);
+    await proxy.close();
+  }
+}
 
 // Shared e2e fixtures, committed under test/fixtures/ — v1 now owns its own
 // samples (the kickoff side-quest, finished). The rootless nix-portable binary
@@ -11,10 +179,6 @@ import { join, resolve } from "node:path";
 // test/fixtures/ alongside the Node samples.
 export const GO_SAMPLE = resolve(process.cwd(), "test/fixtures/go-sample");
 
-// The known vendor hash for the sample's deps (rsc.io/quote …). Supplying it
-// gives a warm-Store cache hit and skips the discovery build (ADR 0004).
-export const KNOWN_VENDOR_HASH = "sha256-3rWfWAVcCVj1RN1gAlwRThZe9M2mBNTViE6z3OVPs90=";
-
 /**
  * Stage the sample under a directory named "sample" inside `root` so the build's
  * pname matches the warm Store. Returns the staged project directory.
@@ -23,6 +187,7 @@ export function stageSampleProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(GO_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -31,15 +196,12 @@ export function stageSampleProject(root: string): string {
 // test/fixtures/ — the start of v1 owning its own fixtures (the kickoff side-quest).
 export const NODE_SAMPLE = resolve(process.cwd(), "test/fixtures/node-sample");
 
-// The known depsHash for the Node sample's deps. Supplying it skips the
-// discovery build and hits the warm Store (same role as KNOWN_VENDOR_HASH).
-export const KNOWN_NPM_DEPS_HASH = "sha256-oFyV3fMNa6lKWWuX7MPWxvQJWCbLZ46hSPQSq2BaRTQ=";
-
-/** Stage the Node sample under a "sample"-named dir (pname matches the warm Store). */
+/** Stage the Node sample under a "sample"-named dir. */
 export function stageNodeProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(NODE_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -56,6 +218,7 @@ export function stageFixtureProject(fixtureDir: string, root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(fixtureDir, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -70,6 +233,7 @@ export function stageNodeLooseProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(NODE_LOOSE_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -91,6 +255,10 @@ export function stageWorkspaceProject(root: string): { root: string; members: st
     cpSync(NODE_SAMPLE, dir, { recursive: true });
     return dir;
   });
+  // Commit the WHOLE workspace tree as one repo (ADR 0009/0012): each member is a
+  // subdir of this committed repo, so provisionStore's `git archive HEAD` (run per
+  // member dir) finds a committed tree to stage the member's Toolchain build from.
+  commitFixtureTree(wsRoot);
   return { root: wsRoot, members };
 }
 
@@ -104,6 +272,7 @@ export function stageRustProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(RUST_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -117,6 +286,7 @@ export function stageRustGitProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(RUST_GIT_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -131,6 +301,7 @@ export function stageRustCrateProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(RUST_CRATE_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -146,6 +317,7 @@ export function stagePythonProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(PYTHON_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -163,6 +335,7 @@ export function stagePythonUvProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(PYTHON_UV_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -183,6 +356,7 @@ export function stagePythonPoetryProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(PYTHON_POETRY_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
 
@@ -212,5 +386,6 @@ export function stageNodeImpureProject(root: string): string {
   const projectDir = join(root, "sample");
   mkdirSync(projectDir);
   cpSync(NODE_IMPURE_SAMPLE, projectDir, { recursive: true });
+  commitFixtureTree(projectDir);
   return projectDir;
 }
