@@ -99,9 +99,9 @@ export interface SandboxPlanSpec {
 
 /**
  * What dustcastle hands sandcastle: the podman() provider options (the ADR 0002
- * `mounts` seam + the Toolchain env) and the per-project setup commands that
- * stage Project Deps from the read-only Store. `egress` is surfaced so the CLI
- * can print the network posture — never silent (ADR 0005).
+ * `mounts` seam + the Toolchain env), plus the host/sandbox hooks that restore or
+ * install Project Deps. `egress` is surfaced so the CLI can print the network
+ * posture — never silent (ADR 0005).
  */
 export interface SandboxPlan {
   readonly podmanOptions: PodmanOptions;
@@ -185,24 +185,21 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   const populate: DepsCachePopulate[] = [];
   for (const e of ecosystems) {
     const { sandbox } = ecosystemFor(e.detection.ecosystem);
-    const cached = e.cache !== undefined && e.cache.lockfileHash !== undefined;
-    if (cached && e.cache!.hit) {
+    const stageDir = sandbox.stageDir;
+    const cache = e.cache;
+    const lockfileHash = cache?.lockfileHash;
+
+    if (cache !== undefined && lockfileHash !== undefined && cache.hit) {
       // HIT: restore from the cache on the host; the in-Sandbox setup is just the
       // git-exclude (no install, no registry traffic).
-      hostWorktreeReady.push(
-        restoreCommand({ cacheDir: e.cache!.cacheDir, lockfileHash: e.cache!.lockfileHash!, stageDir: sandbox.stageDir }),
-      );
-      setupCommands.push(gitExclude(sandbox.stageDir));
+      hostWorktreeReady.push(restoreCommand({ cacheDir: cache.cacheDir, lockfileHash, stageDir }));
+      setupCommands.push(gitExclude(stageDir));
     } else {
       // MISS / uncacheable: install in-Sandbox (git-exclude first, then the install).
       setupCommands.push(...setupFor(e.detection));
-      if (cached) {
+      if (cache !== undefined && lockfileHash !== undefined) {
         // A real miss (stable key, no entry yet): populate the cache after the run.
-        populate.push({
-          cacheDir: e.cache!.cacheDir,
-          lockfileHash: e.cache!.lockfileHash!,
-          stageDir: sandbox.stageDir,
-        });
+        populate.push({ cacheDir: cache.cacheDir, lockfileHash, stageDir });
       }
     }
   }

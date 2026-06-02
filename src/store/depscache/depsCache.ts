@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { Detection } from "../../detect/index.js";
-import type { DepsCacheDecision, DepsCachePopulate } from "../../sandbox/plan.js";
+import type { DepsCacheDecision } from "../../sandbox/plan.js";
 import { depsCacheKey } from "./depsCacheKey.js";
 import { contentPath, entryDir } from "./layout.js";
 
@@ -67,7 +67,7 @@ export function restoreCommand(restore: DepsCacheCommandInput): string {
  * — the unambiguous timing, since sandcastle runs `host.onSandboxReady` concurrently
  * with the in-Sandbox install, not after it.
  */
-export function populateCommand(populate: DepsCachePopulate): string {
+export function populateCommand(populate: DepsCacheCommandInput): string {
   const cacheEntryDir = entryDir(populate.cacheDir, populate.lockfileHash);
   const dest = contentPath(populate.cacheDir, populate.lockfileHash, populate.stageDir);
   return (
