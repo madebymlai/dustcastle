@@ -99,7 +99,7 @@ describe("isStageableSource (the staged-build-source filter)", () => {
   });
 });
 
-describe("stageSource (stages the committed tree so the deps hash is reproducible)", () => {
+describe("stageSource (stages the committed tree for reproducible Store inputs)", () => {
   const git = (dir: string, ...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
 
   // A git project with one commit, so HEAD has a tree to stage. stageSource reads
@@ -141,7 +141,7 @@ describe("stageSource (stages the committed tree so the deps hash is reproducibl
 
   it("stages committed content, not uncommitted edits to tracked files", () => {
     // The (b) tradeoff: editing a tracked file on disk without committing must not
-    // change the build — the deps hash tracks commits, not the dirty work tree.
+    // change the build input — Store provisioning tracks commits, not the dirty work tree.
     const dir = gitProject();
     writeFileSync(join(dir, "index.js"), "export const x = 999; // uncommitted edit\n");
     const src = destDir();

@@ -110,13 +110,13 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
   };
 }
 
-// Rebuild artifacts that never belong in the deps build even if a project commits
-// them: VCS metadata, nix build outputs, and per-ecosystem dependency/cache dirs
-// rebuilt purely from the lockfile (node's `node_modules`/Go's `vendor`, Python's
-// `.venv` + dev caches — often hundreds of MB). The committed tree already excludes
-// untracked junk; this is the "rebuilt, so excluded from the hermetic build" set,
+// Rebuild artifacts that never belong in the Toolchain build input even if a project
+// commits them: VCS metadata, nix build outputs, and per-ecosystem dependency/cache
+// dirs rebuilt from the lockfile in-Sandbox (node's `node_modules`/Go's `vendor`,
+// Python's `.venv` + dev caches — often hundreds of MB). The committed tree already
+// excludes untracked junk; this is the "rebuilt, so excluded from the Nix input" set,
 // pruned from the checkout so a project that mistakenly *tracks* node_modules can't
-// bloat / churn the deps hash.
+// bloat the staged build input.
 const STAGE_SKIP: ReadonlySet<string> = new Set([
   ".git",
   "vendor",
@@ -130,22 +130,22 @@ const STAGE_SKIP: ReadonlySet<string> = new Set([
   ".pytest_cache",
 ]);
 
-/** Whether a single path segment is a rebuild artifact (false ⇒ excluded). */
+/** Whether a single path segment should remain in the staged source. */
 export function isStageableSource(path: string): boolean {
   const name = basename(path);
   return !STAGE_SKIP.has(name) && !name.startsWith("result-");
 }
 
 /**
- * Stage the project's COMMITTED source into the build dir so the deps derivation's
- * `src` is exactly what git tracks at HEAD — reproducible from commits, never the
- * dirty working tree. Materializes the committed tree with `git archive HEAD` (the
- * same checkout model as sandcastle's `git worktree add`), then drops rebuild
- * artifacts the commit may carry.
+ * Stage the project's COMMITTED source into the build dir so Store provisioning reads
+ * a deterministic project snapshot — reproducible from commits, never the dirty
+ * working tree. Materializes the committed tree with `git archive HEAD` (the same
+ * checkout model as sandcastle's `git worktree add`), then drops rebuild artifacts
+ * the commit may carry.
  *
  * Tracked-only by design, mirroring sandcastle: untracked / gitignored files (.beads
  * DBs, scratch, build logs) are simply not in the committed tree, so they can never
- * churn the FOD hash — and the few untracked paths an agent genuinely needs are
+ * churn the Nix build input — and the few untracked paths an agent genuinely needs are
  * opted in elsewhere by name via `copyToWorktree`/`worktreeCopies`, never staged
  * wholesale here. Reading committed blobs instead of the work tree also makes
  * index/work-tree skew — a tracked file deleted from disk without staging the
@@ -202,7 +202,7 @@ function archiveCommittedTree(projectDir: string, dest: string): void {
 /**
  * Recursively delete rebuild artifacts from the staged tree by basename — the
  * `isStageableSource` set (node_modules, vendor, result*, Python caches), at any
- * depth. Drops a whole tracked `node_modules` so it can't bloat / churn the deps hash.
+ * depth. Drops a whole tracked `node_modules` so it can't bloat the staged build input.
  */
 function pruneRebuildArtifacts(dir: string): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

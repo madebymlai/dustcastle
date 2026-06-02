@@ -92,8 +92,11 @@ export function storePool(opts: StorePoolOptions): Pool {
       // Prune the cold recency roots so their closures become collectable; the warm
       // tail (the keys NOT passed here) stays rooted and survives the gc. Scoped
       // (pinned) roots are untouched, so a live run's closure is never collected.
-      const keep = new Set(loadRecency(opts.dir).map((r) => r.projectKey).filter((k) => !keys.includes(k)));
-      pruneRecencyRoots({ recencyRootsDir: opts.recencyRootsDir, keepKeys: [...keep], onLine: log });
+      const cold = new Set(keys);
+      const keep = loadRecency(opts.dir)
+        .map((r) => r.projectKey)
+        .filter((key) => !cold.has(key));
+      pruneRecencyRoots({ recencyRootsDir: opts.recencyRootsDir, keepKeys: keep, onLine: log });
       const gcRes = opts.run(collectGarbageArgs());
       const gc = parseGcReport(gcRes.stdout + gcRes.stderr);
       log(`gc: collected ${gc.pathsDeleted} unrooted path(s), freed ${gc.bytesFreed} bytes`);

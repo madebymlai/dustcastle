@@ -109,10 +109,10 @@ function sanitizeKey(projectKey: string): string {
 }
 
 /**
- * The GC-root link path for a project's closure path, keyed by project (the
- * project key + kind. The key is sanitized so it is a single filesystem-safe link
- * name. Used for both the scoped (in-flight) roots and the persistent recency roots,
- * each in their own dir.
+ * The GC-root link path for a project's closure path, keyed by project key + kind.
+ * The key is sanitized so it is a single filesystem-safe link name. Used for both
+ * the scoped (in-flight) roots and the persistent recency roots, each in their own
+ * dir.
  */
 export function gcRootLink(gcrootsDir: string, projectKey: string, kind: RootPath["kind"]): string {
   return join(gcrootsDir, `${sanitizeKey(projectKey)}-${kind}`);

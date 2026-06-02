@@ -23,7 +23,7 @@ import { recencyTailKeys, type GcReport, type OptimiseReport } from "./gc.js";
 
 /** One pool entry's recency record — the warm-set input (ADR 0012's `{key, lastUsedAt, bytes}`). */
 export interface PoolEntry {
-  /** The entry's stable key (Store: the project's `<manager>-<deps-hash>`). */
+  /** The entry's stable key within its pool (Store: the Toolchain closure key). */
   readonly key: string;
   /** When this entry was last used by a run (epoch ms) — the LRU order. */
   readonly lastUsedAt: number;
