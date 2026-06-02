@@ -237,13 +237,18 @@ export interface RunOptions extends ProvisionOptions {
   readonly handoff: SandcastleHandoff;
 }
 
+export interface GcProjectKeyInput {
+  readonly detection: Pick<Detection, "packageManager">;
+  readonly provisioned: Pick<Provisioned, "toolchainStorePath">;
+}
+
 /**
  * A stable key for the realized Toolchain closure this run pins (ADR 0007/0012).
  * The Store realizes only Toolchains now, so the key names the physical closure by
  * package manager plus the Toolchain store hash. Projects sharing one Toolchain
  * share one recency/root record; different Toolchains no longer collide.
  */
-export function gcProjectKey(prepared: PreparedRun): string {
+export function gcProjectKey(prepared: GcProjectKeyInput): string {
   return `${prepared.detection.packageManager}-${storeHashOf(prepared.provisioned.toolchainStorePath)}`;
 }
 
