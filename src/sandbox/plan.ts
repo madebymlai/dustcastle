@@ -2,6 +2,7 @@ import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { AGENT_SPEC } from "./image.js";
 import type { Detection } from "../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../ecosystems/index.js";
+import { restoreCommand } from "../store/depscache/index.js";
 import type { Provisioned } from "../store/index.js";
 import { EGRESS_NETWORK, productionProxyUrl, proxyEnv } from "./confine.js";
 import { deriveEgress, type EgressDecision } from "./egress.js";
@@ -54,8 +55,8 @@ export interface DepsCachePopulate {
   readonly lockfileHash: string;
   /** The worktree-relative stage dir the in-Sandbox install assembled (`node_modules`/`site`/`vendor`). */
   readonly stageDir: string;
-  /** The cache entry dir to copy the assembled stage dir into (`<cacheDir>/<lockfileHash>`). */
-  readonly cacheEntryDir: string;
+  /** The deps-cache root holding the lockfile-hash-keyed entry dirs. */
+  readonly cacheDir: string;
 }
 
 export interface SandboxPlanSpec {
@@ -188,7 +189,9 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     if (cached && e.cache!.hit) {
       // HIT: restore from the cache on the host; the in-Sandbox setup is just the
       // git-exclude (no install, no registry traffic).
-      hostWorktreeReady.push(restoreFromCache(e.cache!.cacheDir, e.cache!.lockfileHash!, sandbox.stageDir));
+      hostWorktreeReady.push(
+        restoreCommand({ cacheDir: e.cache!.cacheDir, lockfileHash: e.cache!.lockfileHash!, stageDir: sandbox.stageDir }),
+      );
       setupCommands.push(gitExclude(sandbox.stageDir));
     } else {
       // MISS / uncacheable: install in-Sandbox (git-exclude first, then the install).
@@ -196,38 +199,15 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
       if (cached) {
         // A real miss (stable key, no entry yet): populate the cache after the run.
         populate.push({
+          cacheDir: e.cache!.cacheDir,
           lockfileHash: e.cache!.lockfileHash!,
           stageDir: sandbox.stageDir,
-          cacheEntryDir: `${e.cache!.cacheDir}/${e.cache!.lockfileHash!}`,
         });
       }
     }
   }
 
   return { podmanOptions, setupCommands, hostWorktreeReady, populate, egress };
-}
-
-/**
- * The host-side deps-cache RESTORE for one ecosystem (ADR 0012, dustcastle-8od). Copies
- * the assembled deps from `<cacheDir>/<lockfileHash>/<stageDir>` into the worktree's
- * `<stageDir>` before the Sandbox starts — `cp -RL` (dereference the read-only Store's
- * symlinks into real files) then a `chmod` self-heal (the same shape the old Store
- * staging used, so the in-Sandbox toolchain can read/execute the restored files). The
- * source is the cache, not the Store, so this never touches the network.
- *
- * On a hit it also `touch`es the entry dir: the GC pool reads each entry's recency from
- * its dir mtime, but `cp -RL` only READS the source — so without this a hot-but-old entry
- * would look stale and the byte-LRU could evict it despite active use (ADR 0012). The
- * touch makes "recently used" track actual use, the same role the Store's recency index plays.
- */
-function restoreFromCache(cacheDir: string, lockfileHash: string, stageDir: string): string {
-  const entryDir = `${cacheDir}/${lockfileHash}`;
-  const src = `${entryDir}/${stageDir}`;
-  return (
-    `if [ -d '${src}' ]; then ` +
-    `rm -rf '${stageDir}' && cp -RL '${src}' '${stageDir}' && chmod -R u+rwX '${stageDir}' && touch '${entryDir}'; ` +
-    `fi`
-  );
 }
 
 /**

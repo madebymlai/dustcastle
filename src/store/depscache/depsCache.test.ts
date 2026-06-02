@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Detection } from "../../detect/index.js";
-import { depsCacheDecision, depsCacheEntryDir, populateCacheCommand } from "./index.js";
+import { depsCacheDecision, populateCommand, restoreCommand } from "./index.js";
 
 // The host-side deps-cache hit/miss decision + populate (ADR 0012, dustcastle-8od).
 // dustcastle decides hit/miss host-side per ecosystem, keyed by the lockfile hash:
@@ -30,7 +30,7 @@ describe("depsCacheDecision (host-side hit/miss — ADR 0012, dustcastle-8od)", 
     writeFileSync(join(project, "package-lock.json"), "{}");
     // Seed the cache entry for this lockfile hash so it is a hit.
     const decisionMiss = depsCacheDecision(project, npm, cacheDir);
-    mkdirSync(depsCacheEntryDir(cacheDir, decisionMiss!.lockfileHash!), { recursive: true });
+    mkdirSync(join(cacheDir, decisionMiss!.lockfileHash!), { recursive: true });
 
     const decision = depsCacheDecision(project, npm, cacheDir);
     expect(decision).toBeDefined();
@@ -58,18 +58,32 @@ describe("depsCacheDecision (host-side hit/miss — ADR 0012, dustcastle-8od)", 
   });
 });
 
-describe("populateCacheCommand (copy the assembled deps into the cache — ADR 0012)", () => {
-  it("copies the worktree's stage dir into the lockfile-hash entry (atomic-ish, idempotent)", () => {
-    const cmd = populateCacheCommand({
+describe("deps-cache shell command builders (copy assembled deps — ADR 0012)", () => {
+  it("restores a hit from the cache content path and touches the entry dir for recency", () => {
+    const cmd = restoreCommand({
+      cacheDir: "/c",
       lockfileHash: "abc",
       stageDir: "node_modules",
-      cacheEntryDir: "/c/abc",
     });
-    // Copies the stage dir into the entry, dereferencing symlinks like the restore.
-    expect(cmd).toContain("cp -RL");
-    expect(cmd).toContain("node_modules");
-    expect(cmd).toContain("/c/abc");
-    // Only when the stage dir actually exists (a failed install leaves nothing to cache).
-    expect(cmd).toContain("if [ -d 'node_modules' ]; then");
+
+    expect(cmd).toBe(
+      "if [ -d '/c/abc/node_modules' ]; then " +
+        "rm -rf 'node_modules' && cp -RL '/c/abc/node_modules' 'node_modules' && chmod -R u+rwX 'node_modules' && touch '/c/abc'; " +
+        "fi",
+    );
+  });
+
+  it("populates the cache content path from the worktree's assembled stage dir", () => {
+    const cmd = populateCommand({
+      cacheDir: "/c",
+      lockfileHash: "abc",
+      stageDir: "node_modules",
+    });
+
+    expect(cmd).toBe(
+      "if [ -d 'node_modules' ]; then " +
+        "mkdir -p '/c/abc' && rm -rf '/c/abc/node_modules' && cp -RL 'node_modules' '/c/abc/node_modules'; " +
+        "fi",
+    );
   });
 });

@@ -12,7 +12,7 @@ import {
 import { autoGc } from "../../src/store/autogc.js";
 import { collectPool } from "../../src/store/pool.js";
 import { storePool } from "../../src/store/storePool.js";
-import { depsCacheEntryDir, depsCachePool } from "../../src/store/depscache/index.js";
+import { depsCachePool } from "../../src/store/depscache/index.js";
 import { upsertRecency } from "../../src/store/recency.js";
 
 // 3b GATE (DESTRUCTIVE, ADR 0007): prove a REAL `nix-store --gc` frees unrooted
@@ -199,7 +199,7 @@ describe("deps-cache pool under the unified GC brain (ADR 0012 — collectPool o
     tmps.push(cacheDir);
     // Two assembled entries (~1KB each): 'warm' recently used, 'cold' used long ago.
     for (const hash of ["warm", "cold"]) {
-      const dir = depsCacheEntryDir(cacheDir, hash);
+      const dir = join(cacheDir, hash);
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, "node_modules.bin"), "x".repeat(1024));
     }
@@ -215,8 +215,8 @@ describe("deps-cache pool under the unified GC brain (ADR 0012 — collectPool o
 
     expect(report.entriesEvicted).toBe(1);
     expect(report.bytesFreed).toBeGreaterThan(0);
-    expect(existsSync(depsCacheEntryDir(cacheDir, "warm"))).toBe(true);
-    expect(existsSync(depsCacheEntryDir(cacheDir, "cold"))).toBe(false);
+    expect(existsSync(join(cacheDir, "warm"))).toBe(true);
+    expect(existsSync(join(cacheDir, "cold"))).toBe(false);
   });
 
   it("never evicts a pinned (live-run) entry, even when it is the cold one", () => {
@@ -227,7 +227,7 @@ describe("deps-cache pool under the unified GC brain (ADR 0012 — collectPool o
     const report = collectPool(pool, { budgetBytes: 1500 });
 
     expect(report.entriesEvicted).toBe(0);
-    expect(existsSync(depsCacheEntryDir(cacheDir, "cold"))).toBe(true);
-    expect(existsSync(depsCacheEntryDir(cacheDir, "warm"))).toBe(true);
+    expect(existsSync(join(cacheDir, "cold"))).toBe(true);
+    expect(existsSync(join(cacheDir, "warm"))).toBe(true);
   });
 });

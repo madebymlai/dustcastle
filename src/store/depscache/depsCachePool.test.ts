@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectPool } from "../pool.js";
-import { depsCacheEntryDir, depsCachePool } from "./index.js";
+import { depsCachePool } from "./index.js";
 
 // The deps-cache pool (ADR 0012, dustcastle-8od): the SECOND pool behind the reusable
 // GC interface. Its mechanism is lockfile-hash-keyed directories under the dustcastle
@@ -25,7 +25,7 @@ afterEach(() => {
 
 /** Seed a cache entry `<root>/<hash>/<stageDir>` with one file, so it has a size on disk. */
 function seedEntry(root: string, hash: string, stageDir: string, bytes: number): void {
-  const dir = join(depsCacheEntryDir(root, hash), stageDir);
+  const dir = join(root, hash, stageDir);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "pkg"), "x".repeat(bytes));
 }
@@ -62,7 +62,7 @@ describe("depsCachePool (the deps cache behind the reusable pool interface — A
 
     expect(report.entriesEvicted).toBe(1);
     expect(report.bytesFreed).toBeGreaterThanOrEqual(100);
-    expect(existsSync(depsCacheEntryDir(root, "cold"))).toBe(false);
+    expect(existsSync(join(root, "cold"))).toBe(false);
   });
 
   it("never evicts a pinned (active) entry, even when asked to", () => {
@@ -74,11 +74,11 @@ describe("depsCachePool (the deps cache behind the reusable pool interface — A
     const report = pool.evict(["live"]);
 
     expect(report.entriesEvicted).toBe(0);
-    expect(existsSync(depsCacheEntryDir(root, "live"))).toBe(true);
+    expect(existsSync(join(root, "live"))).toBe(true);
     // Released → collectable again.
     pool.release("live");
     pool.evict(["live"]);
-    expect(existsSync(depsCacheEntryDir(root, "live"))).toBe(false);
+    expect(existsSync(join(root, "live"))).toBe(false);
   });
 
   it("has no optimise lever (no file-level dedup across lockfiles — out of scope)", () => {
@@ -103,8 +103,8 @@ describe("depsCachePool (the deps cache behind the reusable pool interface — A
     // Budget keeps only the newest entry; mid + old are cold, but old is pinned.
     collectPool(pool, { budgetBytes: pool.entries().find((e) => e.key === "new")!.bytes });
 
-    expect(existsSync(depsCacheEntryDir(root, "new"))).toBe(true);
-    expect(existsSync(depsCacheEntryDir(root, "mid"))).toBe(false); // cold → evicted
-    expect(existsSync(depsCacheEntryDir(root, "old"))).toBe(true); // cold BUT pinned
+    expect(existsSync(join(root, "new"))).toBe(true);
+    expect(existsSync(join(root, "mid"))).toBe(false); // cold → evicted
+    expect(existsSync(join(root, "old"))).toBe(true); // cold BUT pinned
   });
 });

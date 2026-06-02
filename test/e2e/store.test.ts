@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { detect } from "../../src/detect/index.js";
 import { physPath, provisionStore, type Provisioned } from "../../src/store/index.js";
-import { depsCacheDecision, depsCacheEntryDir } from "../../src/store/depscache/index.js";
+import { depsCacheDecision } from "../../src/store/depscache/index.js";
 import { planSandbox } from "../../src/sandbox/plan.js";
 import { stageSampleProject } from "./fixture.js";
 
@@ -87,14 +87,14 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
     expect(missPlan.populate[0]!.lockfileHash).toBe(miss.lockfileHash);
 
     // Populate the lockfile-hash entry → the decision flips to a HIT.
-    mkdirSync(depsCacheEntryDir(cacheDir, miss.lockfileHash!), { recursive: true });
+    mkdirSync(join(cacheDir, miss.lockfileHash!), { recursive: true });
     const hit = depsCacheDecision(projectDir, detection, cacheDir)!;
     expect(hit.hit).toBe(true);
 
     // On a HIT the plan restores from the cache on the host (host.onWorktreeReady),
     // runs no install (`npm ci` absent — just the git-exclude), and schedules no populate.
     const hitPlan = planSandbox({ provisioned: toolchainOnly(), detection, cache: hit });
-    expect(hitPlan.hostWorktreeReady.join("\n")).toContain(depsCacheEntryDir(cacheDir, hit.lockfileHash!));
+    expect(hitPlan.hostWorktreeReady.join("\n")).toContain(join(cacheDir, hit.lockfileHash!));
     expect(hitPlan.setupCommands.join("\n")).not.toContain("npm ci");
     expect(hitPlan.populate).toEqual([]);
   });

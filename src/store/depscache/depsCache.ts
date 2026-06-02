@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import type { Detection } from "../../detect/index.js";
 import type { DepsCacheDecision, DepsCachePopulate } from "../../sandbox/plan.js";
 import { depsCacheKey } from "./depsCacheKey.js";
-import { depsCacheEntryDir } from "./depsCachePool.js";
+import { contentPath, entryDir } from "./layout.js";
 
 /**
  * The host-side deps-cache hit/miss decision for one ecosystem (ADR 0012,
@@ -27,9 +27,35 @@ export function depsCacheDecision(
   if (lockfileHash === undefined) return undefined; // loose / no lockfile → never cached
   return {
     lockfileHash,
-    hit: existsSync(depsCacheEntryDir(cacheDir, lockfileHash)),
+    hit: existsSync(entryDir(cacheDir, lockfileHash)),
     cacheDir,
   };
+}
+
+/** The path inputs shared by the pure deps-cache shell command builders. */
+export interface DepsCacheCommandInput {
+  /** The deps-cache root holding lockfile-hash-keyed entry dirs. */
+  readonly cacheDir: string;
+  /** The lockfile hash keying this ecosystem's cache entry. */
+  readonly lockfileHash: string;
+  /** The worktree-relative stage dir (`node_modules`/`site`/`vendor`). */
+  readonly stageDir: string;
+}
+
+/**
+ * The host-side deps-cache RESTORE for one ecosystem (ADR 0012, dustcastle-8od).
+ * Copies the assembled deps from `<cacheDir>/<lockfileHash>/<stageDir>` into the
+ * worktree's `<stageDir>` before the Sandbox starts. On a hit it also touches the
+ * entry dir so the GC pool's mtime-based recency tracks actual use.
+ */
+export function restoreCommand(restore: DepsCacheCommandInput): string {
+  const cacheEntryDir = entryDir(restore.cacheDir, restore.lockfileHash);
+  const src = contentPath(restore.cacheDir, restore.lockfileHash, restore.stageDir);
+  return (
+    `if [ -d '${src}' ]; then ` +
+    `rm -rf '${restore.stageDir}' && cp -RL '${src}' '${restore.stageDir}' && chmod -R u+rwX '${restore.stageDir}' && touch '${cacheEntryDir}'; ` +
+    `fi`
+  );
 }
 
 /**
@@ -41,11 +67,12 @@ export function depsCacheDecision(
  * — the unambiguous timing, since sandcastle runs `host.onSandboxReady` concurrently
  * with the in-Sandbox install, not after it.
  */
-export function populateCacheCommand(populate: DepsCachePopulate): string {
-  const dest = `${populate.cacheEntryDir}/${populate.stageDir}`;
+export function populateCommand(populate: DepsCachePopulate): string {
+  const cacheEntryDir = entryDir(populate.cacheDir, populate.lockfileHash);
+  const dest = contentPath(populate.cacheDir, populate.lockfileHash, populate.stageDir);
   return (
     `if [ -d '${populate.stageDir}' ]; then ` +
-    `mkdir -p '${populate.cacheEntryDir}' && rm -rf '${dest}' && cp -RL '${populate.stageDir}' '${dest}'; ` +
+    `mkdir -p '${cacheEntryDir}' && rm -rf '${dest}' && cp -RL '${populate.stageDir}' '${dest}'; ` +
     `fi`
   );
 }

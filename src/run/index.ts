@@ -20,7 +20,7 @@ import { closureSizeBytes } from "../store/ceiling.js";
 import { upsertRecency } from "../store/recency.js";
 import {
   depsCacheDecision,
-  populateCacheCommand,
+  populateCommand,
   defaultDepsCacheDir,
   depsCachePool,
 } from "../store/depscache/index.js";
@@ -497,7 +497,7 @@ function populateDepsCache(
 ): void {
   for (const entry of populate) {
     try {
-      const result = spawnSync("sh", ["-c", populateCacheCommand(entry)], { cwd, encoding: "utf8" });
+      const result = spawnSync("sh", ["-c", populateCommand(entry)], { cwd, encoding: "utf8" });
       if (result.status === 0) {
         onLine?.(`deps-cache: populated ${entry.lockfileHash} from ${entry.stageDir}`);
       } else {

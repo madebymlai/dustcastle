@@ -402,9 +402,9 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     // lockfile-hash entry dir.
     expect(plan.populate).toEqual([
       {
+        cacheDir: "/home/u/.dustcastle/deps-cache",
         lockfileHash: "def456",
         stageDir: "node_modules",
-        cacheEntryDir: "/home/u/.dustcastle/deps-cache/def456",
       },
     ]);
   });
@@ -465,7 +465,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     expect(restore).not.toContain("/c/pyhash");
     // Only Python is populated after the run.
     expect(plan.populate).toEqual([
-      { lockfileHash: "pyhash", stageDir: "site", cacheEntryDir: "/c/pyhash" },
+      { cacheDir: "/c", lockfileHash: "pyhash", stageDir: "site" },
     ]);
   });
 

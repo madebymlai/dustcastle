@@ -2,6 +2,7 @@ import { readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Pool, PoolEntry, PoolEvictReport } from "../pool.js";
+import { entryDir } from "./layout.js";
 
 /**
  * The deps-cache pool (ADR 0012, dustcastle-8od) — the SECOND pool behind the reusable
@@ -25,11 +26,6 @@ import type { Pool, PoolEntry, PoolEvictReport } from "../pool.js";
 /** The default deps-cache root under the dustcastle home (a sibling of recency.json). */
 export function defaultDepsCacheDir(): string {
   return join(homedir(), ".dustcastle", "deps-cache");
-}
-
-/** The on-disk directory holding one ecosystem's assembled deps, keyed by its lockfile hash. */
-export function depsCacheEntryDir(cacheDir: string, lockfileHash: string): string {
-  return join(cacheDir, lockfileHash);
 }
 
 export interface DepsCachePoolOptions {
@@ -62,11 +58,11 @@ export function depsCachePool(opts: DepsCachePoolOptions): Pool {
   };
 
   return {
-    measure: (): number => listHashDirs().reduce((sum, hash) => sum + dirBytes(depsCacheEntryDir(opts.cacheDir, hash)), 0),
+    measure: (): number => listHashDirs().reduce((sum, hash) => sum + dirBytes(entryDir(opts.cacheDir, hash)), 0),
 
     entries: (): PoolEntry[] =>
       listHashDirs().map((hash) => {
-        const dir = depsCacheEntryDir(opts.cacheDir, hash);
+        const dir = entryDir(opts.cacheDir, hash);
         return {
           key: hash,
           lastUsedAt: opts.lastUsedAt?.[hash] ?? dirMtime(dir),
@@ -87,7 +83,7 @@ export function depsCachePool(opts: DepsCachePoolOptions): Pool {
       let bytesFreed = 0;
       for (const key of keys) {
         if (pinned.has(key)) continue; // a live run's entry is never evicted
-        const dir = depsCacheEntryDir(opts.cacheDir, key);
+        const dir = entryDir(opts.cacheDir, key);
         const bytes = dirBytes(dir);
         if (bytes === 0 && !dirExists(dir)) continue; // already gone
         try {
