@@ -37,8 +37,6 @@ describe("dustcastle run (slice 2: Node in-Sandbox install, ADR 0002/0005/0008/0
       const prepared = prepareRun({ cwd: projectDir });
       expect(prepared.detection.ecosystem).toBe("node");
       // Toolchain-only Store (ADR 0012): no deps FOD realized.
-      expect(prepared.provisioned.depsStorePath).toBe("");
-      // Standing allowlist egress, not an offline `none` build: the npm registry is open.
       expect(prepared.plan.egress.kind).toBe("allowlist");
       expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
       expect(egressHosts(prepared.plan.egress)).toContain("registry.npmjs.org");

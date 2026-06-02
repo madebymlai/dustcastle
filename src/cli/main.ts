@@ -20,8 +20,8 @@ Usage:
                         paths). Active runs stay protected by their scoped roots.
 
   dustcastle run takes no arguments: it detects the ecosystem, realizes the
-  toolchain + deps into the shared Store, provisions the Sandbox from it, and
-  drives the plan → execute+review → merge loop (ADR 0002).`;
+  Toolchain into the shared Store, provisions the Sandbox from it, and drives
+  the plan → execute+review → merge loop (ADR 0002).`;
 
 async function main(argv: string[]): Promise<number> {
   const command = argv[0] ?? "run";

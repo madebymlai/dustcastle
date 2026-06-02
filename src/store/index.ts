@@ -17,11 +17,6 @@ export interface ProvisionSpec {
   readonly projectDir: string;
   /** What detection concluded (ADR 0006) — selects the Toolchain expression. */
   readonly detection: Detection;
-  /**
-   * Known deps hash to skip discovery. Retained for API compatibility; unused now
-   * that the Store realizes only Toolchains (ADR 0012 — deps install in-Sandbox).
-   */
-  readonly depsHash?: string;
   /** Path to the nix-portable binary (defaults to the dustcastle-owned copy). */
   readonly nixPortable?: string;
   /** Physical rootless store root (defaults to ~/.nix-portable/nix/store). */
@@ -30,7 +25,7 @@ export interface ProvisionSpec {
   readonly onLine?: (line: string) => void;
 }
 
-/** The realized Store paths for a project (ADR 0001/0008). */
+/** The realized Toolchain Store path for a project (ADR 0001/0008/0012). */
 export interface Provisioned {
   /** The active rootless runtime, surfaced — never silent (ADR 0008). */
   readonly mode: RuntimeMode;
@@ -38,12 +33,6 @@ export interface Provisioned {
   readonly physStoreRoot: string;
   /** Canonical /nix/store path of the language Toolchain. */
   readonly toolchainStorePath: string;
-  /** Canonical /nix/store path of the Project Deps (vendored modules). */
-  readonly depsStorePath: string;
-  /** Canonical /nix/store path of the built app (its build ran the offline test). */
-  readonly appStorePath: string;
-  /** The deps hash used (discovered or supplied). `""` for impure / toolchain-only provisions. */
-  readonly depsHash: string;
 }
 
 /**
@@ -93,8 +82,7 @@ interface BuildContext {
  * Provision one project's Toolchain from its Package Manager descriptor (ADR 0012,
  * always-impure). The descriptor's `generateToolchain` emits a Toolchain-ONLY Nix
  * expression (no deps FOD — Project Deps install in-Sandbox via the sandcastle hook),
- * and the store realizes its single attr. `depsStorePath`/`depsHash` stay empty
- * because the Store holds only the Toolchain now.
+ * and the store realizes its single Toolchain attr.
  */
 function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Provisioned {
   const build = descriptor.generateToolchain({
@@ -119,9 +107,6 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
     mode: ctx.mode,
     physStoreRoot: ctx.physStoreRoot,
     toolchainStorePath,
-    depsStorePath: "", // deps install in-Sandbox (ADR 0012); not realized in the Store
-    appStorePath: toolchainStorePath,
-    depsHash: "",
   };
 }
 

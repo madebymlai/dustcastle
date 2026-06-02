@@ -19,9 +19,6 @@ const provisioned: Provisioned = {
   mode: "bwrap",
   physStoreRoot: "/home/agent/.nix-portable/nix/store",
   toolchainStorePath: "/nix/store/33fw-go-1.26.3",
-  depsStorePath: "",
-  appStorePath: "/nix/store/33fw-go-1.26.3",
-  depsHash: "",
 };
 const detection: Detection = {
   ecosystem: "go",
@@ -81,15 +78,12 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
 });
 
 // Node provisioning: the Toolchain is nodejs and deps install in-Sandbox via the
-// detected manager (always-impure). depsStorePath is "" — only the Toolchain is
-// in the Store (store/index.ts).
+// detected manager (always-impure). Only the Toolchain is in the Store
+// (store/index.ts).
 const nodeProvisioned: Provisioned = {
   mode: "bwrap",
   physStoreRoot: "/home/agent/.nix-portable/nix/store",
   toolchainStorePath: "/nix/store/nnnn-nodejs-22.11.0",
-  depsStorePath: "",
-  appStorePath: "/nix/store/nnnn-nodejs-22.11.0",
-  depsHash: "",
 };
 const nodeDetection: Detection = {
   ecosystem: "node",
@@ -101,9 +95,6 @@ const rustProvisioned: Provisioned = {
   mode: "bwrap",
   physStoreRoot: "/home/agent/.nix-portable/nix/store",
   toolchainStorePath: "/nix/store/rrrr-rust-toolchain",
-  depsStorePath: "",
-  appStorePath: "/nix/store/rrrr-rust-toolchain",
-  depsHash: "",
 };
 const rustDetection: Detection = { ecosystem: "rust", packageManager: "cargo" };
 
@@ -252,9 +243,6 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
     mode: "bwrap",
     physStoreRoot: nodeProvisioned.physStoreRoot,
     toolchainStorePath: "/nix/store/pppp-python3-3.12",
-    depsStorePath: "",
-    appStorePath: "/nix/store/pppp-python3-3.12",
-    depsHash: "",
   };
 
   const setup = (packageManager: PackageManager) =>
@@ -302,9 +290,6 @@ describe("planSandbox — polyglot Node + Python (ADR 0012 multi-ecosystem)", ()
     mode: "bwrap",
     physStoreRoot: nodeProvisioned.physStoreRoot,
     toolchainStorePath: "/nix/store/pppp-python3-3.12",
-    depsStorePath: "",
-    appStorePath: "/nix/store/pppp-python3-3.12",
-    depsHash: "",
   };
 
   const plan = planSandbox({
@@ -449,9 +434,6 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
       mode: "bwrap",
       physStoreRoot: nodeProvisioned.physStoreRoot,
       toolchainStorePath: "/nix/store/pppp-python3-3.12",
-      depsStorePath: "",
-      appStorePath: "/nix/store/pppp-python3-3.12",
-      depsHash: "",
     };
     // Node HITS its cache; Python MISSES its.
     const plan = planSandbox({

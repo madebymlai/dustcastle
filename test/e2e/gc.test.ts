@@ -35,7 +35,6 @@ describe("scoped GC roots (ADR 0007 — protect an in-flight run's closure)", ()
     const provisioned = provisionStore({ projectDir, detection });
     expect(provisioned.toolchainStorePath).toContain("/nix/store/");
     // ADR 0012: the Store holds only the Toolchain — no deps FOD path.
-    expect(provisioned.depsStorePath).toBe("");
 
     const run = nixPortableRunner();
 

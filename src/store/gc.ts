@@ -10,7 +10,7 @@ import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from
  * Store lifecycle management (ADR 0007). Nix never garbage-collects by default, so
  * the shared rootless /nix/store grows unbounded across provisions. dustcastle owns
  * the lifecycle with three mechanisms: (1) scoped GC roots — one per active project,
- * pinning its toolchain + deps closure so an in-flight run is never collected out
+ * pinning its toolchain closure so an in-flight run is never collected out
  * from under it, released on completion; (2) `nix-store --gc` on a policy, deleting
  * only unrooted paths; (3) `nix-store --optimise`, file-level hard-link dedup.
  *
@@ -22,34 +22,21 @@ import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from
 
 /** A store path a provision realizes, tagged by its role in the closure. */
 export interface RootPath {
-  readonly kind: "toolchain" | "deps";
+  readonly kind: "toolchain";
   readonly path: string;
 }
 
 /**
- * Which paths a provision pins as GC roots (ADR 0007): its toolchain + deps
- * closure. Empties are skipped (the impure path installs deps in the container, not
- * the Store) and duplicates collapse (a JS app path equals its deps path).
+ * Which paths a provision pins as GC roots (ADR 0007/0012): the Store realizes only
+ * the Toolchain, so each provision contributes exactly one toolchain root.
  */
-export function rootStorePaths(provisioned: {
-  readonly toolchainStorePath: string;
-  readonly depsStorePath: string;
-}): RootPath[] {
-  const roots: RootPath[] = [];
-  const seen = new Set<string>();
-  const add = (kind: RootPath["kind"], path: string): void => {
-    if (path.length === 0 || seen.has(path)) return;
-    seen.add(path);
-    roots.push({ kind, path });
-  };
-  add("toolchain", provisioned.toolchainStorePath);
-  add("deps", provisioned.depsStorePath);
-  return roots;
+export function rootStorePaths(provisioned: { readonly toolchainStorePath: string }): RootPath[] {
+  return [{ kind: "toolchain", path: provisioned.toolchainStorePath }];
 }
 
 /** A project's last-use timestamp + closure size, the input to the recency tail (ADR 0007). */
 export interface RecencyRecord {
-  /** The project's GC key — its `<manager>-<deps-hash>` (mirrors `gcProjectKey`). */
+  /** The project's GC key (mirrors `gcProjectKey`). */
   readonly projectKey: string;
   /** When this project's closure was last used by a run (epoch ms). */
   readonly lastUsedAt: number;
@@ -123,9 +110,9 @@ function sanitizeKey(projectKey: string): string {
 
 /**
  * The GC-root link path for a project's closure path, keyed by project (the
- * lockfile hash) + kind (ADR 0007 — roots keyed by lockfile hash). The hash is
- * sanitized so it is a single filesystem-safe link name. Used for both the scoped
- * (in-flight) roots and the persistent recency roots, each in their own dir.
+ * project key + kind. The key is sanitized so it is a single filesystem-safe link
+ * name. Used for both the scoped (in-flight) roots and the persistent recency roots,
+ * each in their own dir.
  */
 export function gcRootLink(gcrootsDir: string, projectKey: string, kind: RootPath["kind"]): string {
   return join(gcrootsDir, `${sanitizeKey(projectKey)}-${kind}`);
@@ -175,10 +162,10 @@ export interface ScopedRootsHandle {
 }
 
 export interface RegisterScopedRootsOptions {
-  readonly provisioned: { readonly toolchainStorePath: string; readonly depsStorePath: string };
+  readonly provisioned: { readonly toolchainStorePath: string };
   /** Directory the scoped-root link symlinks live in (dustcastle-owned). */
   readonly gcrootsDir: string;
-  /** Identifies the project's deps state — the lockfile hash (ADR 0007). */
+  /** Identifies the Store root entry (temporary manager-toolchain key in this slice). */
   readonly projectKey: string;
   /** Inject a nix runner (tests); defaults to a real nix-portable spawn. */
   readonly run?: NixRunner;
@@ -220,7 +207,7 @@ export function registerScopedRoots(opts: RegisterScopedRootsOptions): ScopedRoo
  * roots; the only difference is the directory and the lifecycle around it.
  */
 function addClosureRoots(opts: {
-  readonly provisioned: { readonly toolchainStorePath: string; readonly depsStorePath: string };
+  readonly provisioned: { readonly toolchainStorePath: string };
   readonly rootsDir: string;
   readonly projectKey: string;
   readonly run: NixRunner;
@@ -242,10 +229,10 @@ function addClosureRoots(opts: {
 }
 
 export interface RegisterRecencyRootOptions {
-  readonly provisioned: { readonly toolchainStorePath: string; readonly depsStorePath: string };
+  readonly provisioned: { readonly toolchainStorePath: string };
   /** Directory the persistent recency-root symlinks live in (separate from scoped roots). */
   readonly recencyRootsDir: string;
-  /** Identifies the project's deps state — the same key as the scoped root (ADR 0007). */
+  /** Identifies the Store root entry — the same key as the scoped root. */
   readonly projectKey: string;
   readonly run?: NixRunner;
   readonly onLine?: (line: string) => void;
@@ -294,7 +281,7 @@ export function pruneRecencyRoots(opts: {
   }
   let pruned = 0;
   for (const file of files) {
-    const key = file.replace(/-(?:toolchain|deps)$/, "");
+    const key = file.replace(/-toolchain$/, "");
     if (keep.has(key)) continue;
     try {
       rmSync(join(opts.recencyRootsDir, file), { force: true });

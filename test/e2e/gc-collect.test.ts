@@ -74,7 +74,7 @@ describe("manual gc destructive (ADR 0012 — real --gc via the Store pool on a 
 
       // Use dustcastle's real scoped-root machinery to pin the survivor.
       const handle = registerScopedRoots({
-        provisioned: { toolchainStorePath: survivor!, depsStorePath: "" },
+        provisioned: { toolchainStorePath: survivor! },
         gcrootsDir: join(scratch, "gcroots"),
         projectKey: "gc-collect-e2e",
         run,
@@ -135,7 +135,7 @@ describe("autoGc destructive (ADR 0007 — real optimise-first → conditional g
 
       // Pin the scoped survivor (released at the end, like a live run).
       const scoped = registerScopedRoots({
-        provisioned: { toolchainStorePath: scopedPath!, depsStorePath: "" },
+        provisioned: { toolchainStorePath: scopedPath! },
         gcrootsDir: join(scratch, "gcroots"),
         projectKey: "autogc-scoped",
         run,
@@ -143,7 +143,7 @@ describe("autoGc destructive (ADR 0007 — real optimise-first → conditional g
       // Pin the recency survivor + record it warm, so the byte-budget tail keeps it.
       const recencyRootsDir = join(scratch, "recency-roots");
       registerRecencyRoot({
-        provisioned: { toolchainStorePath: recencyPath!, depsStorePath: "" },
+        provisioned: { toolchainStorePath: recencyPath! },
         recencyRootsDir,
         projectKey: "autogc-recency",
         run,

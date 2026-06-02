@@ -58,7 +58,7 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
     const dir = home();
     const calls: string[][] = [];
     const closures = new Map<string, StoreClosure>([
-      ["npm-live", { toolchainStorePath: "/nix/store/aaa-node", depsStorePath: "/nix/store/bbb-deps" }],
+      ["npm-live", { toolchainStorePath: "/nix/store/aaa-node" }],
     ]);
     const pool = storePool({
       run: runner(calls),
@@ -85,7 +85,7 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
     upsertRecency(dir, { projectKey: "npm-live", lastUsedAt: 300, closureBytes: 40 });
     upsertRecency(dir, { projectKey: "npm-cold", lastUsedAt: 100, closureBytes: 40 });
     const closures = new Map<string, StoreClosure>([
-      ["npm-live", { toolchainStorePath: "/nix/store/live-tc", depsStorePath: "" }],
+      ["npm-live", { toolchainStorePath: "/nix/store/live-tc" }],
     ]);
     const pool = storePool({ run: runner(calls), dir, recencyRootsDir, gcrootsDir, closures });
 

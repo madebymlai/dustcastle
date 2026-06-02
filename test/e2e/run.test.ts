@@ -34,7 +34,6 @@ describe("dustcastle run (slice 1: Go in-Sandbox install, ADR 0002/0005/0008/001
       // dustcastle's real pipeline: detect → provision the Toolchain → plan the Sandbox.
       const prepared = prepareRun({ cwd: projectDir });
       expect(prepared.detection.ecosystem).toBe("go");
-      expect(prepared.provisioned.depsStorePath).toBe(""); // toolchain-only Store (ADR 0012)
       expect(prepared.plan.egress.kind).toBe("allowlist");
       expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
       expect(egressHosts(prepared.plan.egress)).toContain("proxy.golang.org");

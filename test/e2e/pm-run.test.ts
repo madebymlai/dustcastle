@@ -40,7 +40,6 @@ describe("dustcastle run (slice 2b: pnpm/yarn in-Sandbox install, ADR 0002/0005/
         const prepared = prepareRun({ cwd: projectDir });
         expect(prepared.detection.ecosystem).toBe("node");
         expect(prepared.detection.packageManager).toBe(manager);
-        expect(prepared.provisioned.depsStorePath).toBe(""); // toolchain-only Store (ADR 0012)
         expect(prepared.plan.egress.kind).toBe("allowlist");
         expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
         expect(egressHosts(prepared.plan.egress)).toContain(registry);

@@ -35,8 +35,6 @@ export interface PrepareOptions {
   readonly nixPortable?: string;
   /** Override the physical rootless store root. */
   readonly physStoreRoot?: string;
-  /** Supply a known deps hash to skip discovery (the single hash for any ecosystem). */
-  readonly depsHash?: string;
   /** Stream provisioning output (progress surfacing). */
   readonly onLine?: (line: string) => void;
   /**
@@ -240,13 +238,12 @@ export interface RunOptions extends ProvisionOptions {
 }
 
 /**
- * A stable key for a project's realized closure (ADR 0007 — roots keyed by deps
- * state). The deps hash IS the lockfile-derived FOD hash; pairing it with the
- * manager uniquely identifies this project's roots so they replace cleanly when the
- * lockfile changes and never collide with another project's.
+ * A stable key for a project's realized Store closure (ADR 0007/0012). During the
+ * toolchain-only Store narrowing, entries remain keyed by manager + `toolchain`;
+ * the follow-up re-keys this on the concrete Toolchain identity.
  */
 function gcProjectKey(prepared: PreparedRun): string {
-  return `${prepared.detection.packageManager}-${prepared.provisioned.depsHash || "toolchain"}`;
+  return `${prepared.detection.packageManager}-toolchain`;
 }
 
 /**
@@ -342,7 +339,7 @@ export async function withProvisionedSandbox<T>(
     // pre-run prepareRun, so the run provisions exactly once and stays fail-fast).
     opts.onPrepared?.(prepared);
 
-    // Pin this run's toolchain + deps closure with scoped GC roots (ADR 0007), so a
+    // Pin this run's Toolchain closure with scoped GC roots (ADR 0007/0012), so a
     // concurrent collect-garbage never deletes paths the live run still needs. Roots
     // are released on completion (below), scoping them to the active run.
     roots = registerScopedRoots({
@@ -428,9 +425,7 @@ function updateRecency(opts: ProvisionOptions, prepared: PreparedRun): void {
     const recencyRootsDir = opts.autoGc?.recencyRootsDir ?? defaultRecencyRootsDir();
     const runner = opts.autoGc?.run ?? opts.gcRoots?.run ?? nixPortableRunner();
     const projectKey = gcProjectKey(prepared);
-    // The deps closure (when present) is the superset that references the toolchain;
-    // on the impure path (no deps in the Store) fall back to the toolchain closure.
-    const closurePath = prepared.provisioned.depsStorePath || prepared.provisioned.toolchainStorePath;
+    const closurePath = prepared.provisioned.toolchainStorePath;
     const closureBytes = closurePath.length > 0 ? closureSizeBytes(runner, closurePath) : 0;
     upsertRecency(dir, { projectKey, lastUsedAt: Date.now(), closureBytes });
     registerRecencyRoot({

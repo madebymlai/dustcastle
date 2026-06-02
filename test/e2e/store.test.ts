@@ -33,12 +33,8 @@ describe("provisionStore (toolchain-only rootless Store, ADR 0008/0012)", () => 
     // The Toolchain lands as a content-addressed path.
     expect(provisioned.toolchainStorePath).toMatch(/^\/nix\/store\/.+-go-\d/);
     // ADR 0012: the Store holds ONLY the Toolchain — deps install in-Sandbox, so there
-    // is no deps FOD path and no deps hash.
-    expect(provisioned.depsStorePath).toBe("");
-    expect(provisioned.depsHash).toBe("");
-
-    // The active rootless runtime is surfaced (ADR 0008), and the Toolchain path
-    // resolves to real files under the physical store root.
+    // is no deps FOD path. The active rootless runtime is surfaced (ADR 0008), and
+    // the Toolchain path resolves to real files under the physical store root.
     expect(provisioned.mode).toBe("bwrap");
     expect(existsSync(physPath(provisioned.physStoreRoot, provisioned.toolchainStorePath))).toBe(true);
   });
@@ -51,9 +47,6 @@ function toolchainOnly(): Provisioned {
     mode: "bwrap",
     physStoreRoot: "/phys",
     toolchainStorePath: "/nix/store/aaaa-node",
-    depsStorePath: "",
-    appStorePath: "/nix/store/aaaa-node",
-    depsHash: "",
   };
 }
 

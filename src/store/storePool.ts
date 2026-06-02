@@ -14,24 +14,21 @@ import type { Pool, PoolEntry, PoolEvictReport } from "./pool.js";
 
 /**
  * The Store pool (ADR 0012) — the Toolchain Store expressed through the reusable GC
- * pool interface, with NO behavior change. Its mechanism is today's code (ADR 0007):
+ * pool interface. Its mechanism is today's code (ADR 0007):
  *   - `measure`  → `nix path-info` size accounting (`measureStoreBytes`);
  *   - `entries`  → the recency index (`loadRecency`, mapped to the generic record);
- *   - `pin`      → register scoped GC roots for a closure (released on completion);
+ *   - `pin`      → register scoped GC roots for the Toolchain closure (released on completion);
  *   - `release`  → drop those scoped roots (closure becomes collectable);
  *   - `evict`    → prune the cold recency roots, then `nix-store --gc` (unrooted only);
  *   - `optimise` → `nix store optimise` (file-level hard-link dedup).
  *
- * The Store keys an entry by its `projectKey` (the lockfile hash, ADR 0007). Because
- * a scoped root pins by closure PATHS, `pin` resolves the key→closure via the
- * `closures` map the caller supplies for the active run; an unknown key is a no-op
- * (best-effort, mirroring the per-root tolerance the roots layer already has). This
- * is the sole pool in this slice; the brain (`collectPool`) drives it pool-agnostically.
+ * Because a scoped root pins by closure PATHS, `pin` resolves the key→closure via
+ * the `closures` map the caller supplies for the active run; an unknown key is a
+ * no-op (best-effort, mirroring the per-root tolerance the roots layer already has).
  */
 
 export interface StoreClosure {
   readonly toolchainStorePath: string;
-  readonly depsStorePath: string;
 }
 
 export interface StorePoolOptions {

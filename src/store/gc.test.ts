@@ -20,7 +20,7 @@ import {
 
 // Store lifecycle (ADR 0007). The shared rootless /nix/store grows unbounded; 3b
 // keeps it lean WITHOUT collecting paths a live run still needs: scoped GC roots
-// (per-run, released on completion) pin the toolchain + deps closure, then a
+// (per-run, released on completion) pin the Toolchain closure, then a
 // policy-driven optimise + collect-garbage frees the rest. The pure decisions
 // (which paths root, command construction, report parsing) are unit-tested here;
 // the live `nix-store --gc` is gated against a scratch store root.
@@ -28,17 +28,8 @@ import {
 const OK = (stdout = "", stderr = ""): NixResult => ({ status: 0, stdout, stderr });
 
 describe("rootStorePaths (which paths a provision pins — ADR 0007)", () => {
-  it("roots the toolchain + deps closure, skipping empties and deduping", () => {
-    expect(
-      rootStorePaths({ toolchainStorePath: "/nix/store/aaa-node", depsStorePath: "/nix/store/bbb-deps" }),
-    ).toEqual([
-      { kind: "toolchain", path: "/nix/store/aaa-node" },
-      { kind: "deps", path: "/nix/store/bbb-deps" },
-    ]);
-  });
-
-  it("omits the deps root on the impure path (deps install in the container, not the Store)", () => {
-    expect(rootStorePaths({ toolchainStorePath: "/nix/store/aaa-node", depsStorePath: "" })).toEqual([
+  it("roots the toolchain closure only", () => {
+    expect(rootStorePaths({ toolchainStorePath: "/nix/store/aaa-node" })).toEqual([
       { kind: "toolchain", path: "/nix/store/aaa-node" },
     ]);
   });
@@ -65,11 +56,11 @@ describe("command construction (driven through nix-portable — ADR 0007)", () =
     expect(gcQueryArgs("live")).toEqual(["nix-store", "--gc", "--print-live"]);
   });
 
-  it("keys the scoped-root link by project + kind (lockfile-hash scoped — ADR 0007)", () => {
-    const link = gcRootLink("/roots", "sha256-AbC/d+e=", "deps");
+  it("keys the scoped-root link by project + toolchain kind (ADR 0007)", () => {
+    const link = gcRootLink("/roots", "sha256-AbC/d+e=", "toolchain");
     expect(link.startsWith("/roots/")).toBe(true);
-    expect(link.endsWith("-deps")).toBe(true);
-    // The link name is filesystem-safe (no slashes from the hash leak through).
+    expect(link.endsWith("-toolchain")).toBe(true);
+    // The link name is filesystem-safe (no slashes from the key leak through).
     expect(link.slice("/roots/".length)).not.toContain("/");
   });
 });
@@ -97,7 +88,7 @@ afterEach(() => {
 });
 
 describe("registerScopedRoots (per-run roots, released on completion — ADR 0007)", () => {
-  it("adds a root per closure path and releases them by removing the link symlinks", () => {
+  it("adds a toolchain root and releases it by removing the link symlink", () => {
     const gcrootsDir = mkdtempSync(join(tmpdir(), "dustcastle-gcroots-"));
     tmps.push(gcrootsDir);
     const calls: string[][] = [];
@@ -109,20 +100,20 @@ describe("registerScopedRoots (per-run roots, released on completion — ADR 000
     };
 
     const handle = registerScopedRoots({
-      provisioned: { toolchainStorePath: "/nix/store/aaa-node", depsStorePath: "/nix/store/bbb-deps" },
+      provisioned: { toolchainStorePath: "/nix/store/aaa-node" },
       gcrootsDir,
       projectKey: "sha256-deadbeef=",
       run,
     });
 
-    // One add-root per rooted path, each realising the right store path.
+    // One add-root for the Toolchain path.
     const addRoots = calls.filter((c) => c[1] === "--add-root");
-    expect(addRoots).toHaveLength(2);
-    expect(addRoots.map((c) => c[4])).toEqual(["/nix/store/aaa-node", "/nix/store/bbb-deps"]);
-    expect(handle.links).toHaveLength(2);
+    expect(addRoots).toHaveLength(1);
+    expect(addRoots.map((c) => c[4])).toEqual(["/nix/store/aaa-node"]);
+    expect(handle.links).toHaveLength(1);
     expect(handle.links.every((l) => existsSync(l))).toBe(true);
 
-    // Releasing the scoped roots removes the link symlinks (closure becomes collectable).
+    // Releasing the scoped root removes the link symlink (closure becomes collectable).
     handle.release();
     expect(handle.links.some((l) => existsSync(l))).toBe(false);
   });
@@ -155,7 +146,7 @@ describe("recencyTailKeys (the byte-budget LRU warm set — ADR 0007)", () => {
 });
 
 describe("registerRecencyRoot / pruneRecencyRoots (the persistent warm roots — ADR 0007)", () => {
-  it("registers a persistent root per closure path (not released with the run)", () => {
+  it("registers a persistent toolchain root (not released with the run)", () => {
     const recencyRootsDir = mkdtempSync(join(tmpdir(), "dustcastle-recency-roots-"));
     tmps.push(recencyRootsDir);
     const run = (args: readonly string[]): NixResult => {
@@ -164,13 +155,13 @@ describe("registerRecencyRoot / pruneRecencyRoots (the persistent warm roots —
     };
 
     const { links } = registerRecencyRoot({
-      provisioned: { toolchainStorePath: "/nix/store/aaa-node", depsStorePath: "/nix/store/bbb-deps" },
+      provisioned: { toolchainStorePath: "/nix/store/aaa-node" },
       recencyRootsDir,
       projectKey: "npm-deadbeef=",
       run,
     });
 
-    expect(links).toHaveLength(2);
+    expect(links).toHaveLength(1);
     expect(links.every((l) => existsSync(l))).toBe(true);
   });
 
@@ -183,7 +174,7 @@ describe("registerRecencyRoot / pruneRecencyRoots (the persistent warm roots —
     };
     for (const key of ["npm-warm=", "npm-cold="]) {
       registerRecencyRoot({
-        provisioned: { toolchainStorePath: `/nix/store/${key}-tc`, depsStorePath: "" },
+        provisioned: { toolchainStorePath: `/nix/store/${key}-tc` },
         recencyRootsDir,
         projectKey: key,
         run,
