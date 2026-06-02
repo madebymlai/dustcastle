@@ -7,7 +7,7 @@ import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtim
 import { deriveEgress, gitRemoteHost, type EgressDecision } from "../sandbox/egress.js";
 import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
-import { provisionStore, type Provisioned } from "../store/index.js";
+import { provisionStore, storeHashOf, type Provisioned } from "../store/index.js";
 import {
   defaultGcRootsDir,
   defaultRecencyRootsDir,
@@ -238,12 +238,13 @@ export interface RunOptions extends ProvisionOptions {
 }
 
 /**
- * A stable key for a project's realized Store closure (ADR 0007/0012). During the
- * toolchain-only Store narrowing, entries remain keyed by manager + `toolchain`;
- * the follow-up re-keys this on the concrete Toolchain identity.
+ * A stable key for the realized Toolchain closure this run pins (ADR 0007/0012).
+ * The Store realizes only Toolchains now, so the key names the physical closure by
+ * package manager plus the Toolchain store hash. Projects sharing one Toolchain
+ * share one recency/root record; different Toolchains no longer collide.
  */
-function gcProjectKey(prepared: PreparedRun): string {
-  return `${prepared.detection.packageManager}-toolchain`;
+export function gcProjectKey(prepared: PreparedRun): string {
+  return `${prepared.detection.packageManager}-${storeHashOf(prepared.provisioned.toolchainStorePath)}`;
 }
 
 /**

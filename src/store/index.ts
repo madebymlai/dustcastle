@@ -9,7 +9,7 @@ import { parseStorePath } from "./parse.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
 
 export { physPath } from "./paths.js";
-export { parseStorePath } from "./parse.js";
+export { parseStorePath, storeHashOf } from "./parse.js";
 export { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
 
 export interface ProvisionSpec {

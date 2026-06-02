@@ -12,3 +12,20 @@ export function parseStorePath(stdout: string): string {
   if (last === undefined) throw new Error(`no /nix/store path in nix-build output: ${JSON.stringify(stdout)}`);
   return last;
 }
+
+/** Return the leading nix hash segment of a canonical `/nix/store/<hash>-<name>` path. */
+export function storeHashOf(path: string): string {
+  const prefix = "/nix/store/";
+  if (!path.startsWith(prefix)) throw new Error(`not a /nix/store path: ${path}`);
+
+  const storeName = path.slice(prefix.length);
+  if (storeName.length === 0 || storeName.includes("/")) {
+    throw new Error(`not a canonical /nix/store path: ${path}`);
+  }
+
+  const separator = storeName.indexOf("-");
+  if (separator <= 0 || separator === storeName.length - 1) {
+    throw new Error(`store path basename lacks <hash>-<name>: ${path}`);
+  }
+  return storeName.slice(0, separator);
+}
