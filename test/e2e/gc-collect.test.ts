@@ -12,7 +12,7 @@ import {
 import { autoGc } from "../../src/store/autogc.js";
 import { collectPool } from "../../src/store/pool.js";
 import { storePool } from "../../src/store/storePool.js";
-import { depsCacheEntryDir, depsCachePool } from "../../src/store/depsCachePool.js";
+import { depsCacheEntryDir, depsCachePool } from "../../src/store/depscache/index.js";
 import { upsertRecency } from "../../src/store/recency.js";
 
 // 3b GATE (DESTRUCTIVE, ADR 0007): prove a REAL `nix-store --gc` frees unrooted

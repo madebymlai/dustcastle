@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { overCeiling, recencyBudgetBytes, type CeilingReason, type NixRunner } from "./ceiling.js";
 import type { GcReport, OptimiseReport } from "./gc.js";
 import { collectPool } from "./pool.js";
-import { depsCachePool } from "./depsCachePool.js";
+import { depsCachePool } from "./depscache/index.js";
 import { storePool } from "./storePool.js";
 
 /**

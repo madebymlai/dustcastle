@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Detection } from "../detect/index.js";
-import { depsCacheKey } from "./depsCacheKey.js";
+import type { Detection } from "../../detect/index.js";
+import { depsCacheKey } from "./index.js";
 
 // The deps-cache key (ADR 0012, dustcastle-8od) is that ecosystem's LOCKFILE HASH —
 // the stable key the cache entry is stored under, so a repeat Sandbox on the same

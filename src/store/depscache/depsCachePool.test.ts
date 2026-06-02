@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectPool } from "./pool.js";
-import { depsCachePool, depsCacheEntryDir } from "./depsCachePool.js";
+import { collectPool } from "../pool.js";
+import { depsCachePool, depsCacheEntryDir } from "./index.js";
 
 // The deps-cache pool (ADR 0012, dustcastle-8od): the SECOND pool behind the reusable
 // GC interface. Its mechanism is lockfile-hash-keyed directories under the dustcastle

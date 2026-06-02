@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Detection } from "../detect/index.js";
-import { packageManagerDescriptor } from "../ecosystems/index.js";
+import type { Detection } from "../../detect/index.js";
+import { packageManagerDescriptor } from "../../ecosystems/index.js";
 
 /**
  * The deps-cache key for one ecosystem (ADR 0012, dustcastle-8od): a hash of that

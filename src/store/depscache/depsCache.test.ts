@@ -2,9 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Detection } from "../detect/index.js";
-import { depsCacheDecision, populateCacheCommand } from "./depsCache.js";
-import { depsCacheEntryDir } from "./depsCachePool.js";
+import type { Detection } from "../../detect/index.js";
+import { depsCacheDecision, depsCacheEntryDir, populateCacheCommand } from "./index.js";
 
 // The host-side deps-cache hit/miss decision + populate (ADR 0012, dustcastle-8od).
 // dustcastle decides hit/miss host-side per ecosystem, keyed by the lockfile hash:

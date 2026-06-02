@@ -4,8 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { detect } from "../../src/detect/index.js";
 import { physPath, provisionStore, type Provisioned } from "../../src/store/index.js";
-import { depsCacheDecision } from "../../src/store/depsCache.js";
-import { depsCacheEntryDir } from "../../src/store/depsCachePool.js";
+import { depsCacheDecision, depsCacheEntryDir } from "../../src/store/depscache/index.js";
 import { planSandbox } from "../../src/sandbox/plan.js";
 import { stageSampleProject } from "./fixture.js";
 

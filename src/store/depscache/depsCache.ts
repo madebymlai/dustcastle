@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import type { Detection } from "../detect/index.js";
-import type { DepsCacheDecision, DepsCachePopulate } from "../sandbox/plan.js";
+import type { Detection } from "../../detect/index.js";
+import type { DepsCacheDecision, DepsCachePopulate } from "../../sandbox/plan.js";
 import { depsCacheKey } from "./depsCacheKey.js";
 import { depsCacheEntryDir } from "./depsCachePool.js";
 

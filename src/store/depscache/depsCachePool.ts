@@ -1,7 +1,7 @@
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Pool, PoolEntry, PoolEvictReport } from "./pool.js";
+import type { Pool, PoolEntry, PoolEvictReport } from "../pool.js";
 
 /**
  * The deps-cache pool (ADR 0012, dustcastle-8od) — the SECOND pool behind the reusable

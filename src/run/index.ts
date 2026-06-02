@@ -18,8 +18,12 @@ import {
 } from "../store/gc.js";
 import { closureSizeBytes } from "../store/ceiling.js";
 import { upsertRecency } from "../store/recency.js";
-import { depsCacheDecision, populateCacheCommand } from "../store/depsCache.js";
-import { defaultDepsCacheDir, depsCachePool } from "../store/depsCachePool.js";
+import {
+  depsCacheDecision,
+  populateCacheCommand,
+  defaultDepsCacheDir,
+  depsCachePool,
+} from "../store/depscache/index.js";
 import { spawnAutoGc } from "../cli/autogc.js";
 import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
 

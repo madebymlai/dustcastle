@@ -1,6 +1,6 @@
 import { DUSTCASTLE_HOME } from "../config/global.js";
 import { collectPools } from "../store/pool.js";
-import { defaultDepsCacheDir, depsCachePool } from "../store/depsCachePool.js";
+import { defaultDepsCacheDir, depsCachePool } from "../store/depscache/index.js";
 import { defaultRecencyRootsDir, nixPortableRunner, type NixRunner } from "../store/gc.js";
 import { storePool } from "../store/storePool.js";
 
