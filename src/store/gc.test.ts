@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   addRootArgs,
-  collectGarbage,
   collectGarbageArgs,
   gcQueryArgs,
   gcRootLink,
@@ -202,35 +201,5 @@ describe("registerRecencyRoot / pruneRecencyRoots (the persistent warm roots —
     expect(pruneRecencyRoots({ recencyRootsDir: join(tmpdir(), "dustcastle-no-such-dir-xyz"), keepKeys: [] })).toEqual({
       pruned: 0,
     });
-  });
-});
-
-describe("collectGarbage (the policy-driven sweep — ADR 0007)", () => {
-  it("optimises then collects, returning the surfaced reports", () => {
-    const calls: string[][] = [];
-    const run = (args: readonly string[]): NixResult => {
-      calls.push([...args]);
-      if (args.includes("--optimise")) return OK("", "100 bytes (0.00 MiB) freed by hard-linking 3 files;\n");
-      return OK('deleting "/nix/store/old"\n50 bytes freed (0.00 MiB)\n');
-    };
-
-    const report = collectGarbage({ run, optimise: true });
-
-    expect(calls.map((c) => c[1])).toEqual(["--optimise", "--gc"]); // optimise BEFORE gc
-    expect(report.optimise).toEqual({ bytesFreed: 100, filesLinked: 3 });
-    expect(report.gc).toEqual({ pathsDeleted: 1, bytesFreed: 50 });
-  });
-
-  it("skips optimise when not requested", () => {
-    const calls: string[][] = [];
-    const run = (args: readonly string[]): NixResult => {
-      calls.push([...args]);
-      return OK("0 bytes freed (0.00 MiB)\n");
-    };
-
-    const report = collectGarbage({ run });
-
-    expect(calls.map((c) => c[1])).toEqual(["--gc"]);
-    expect(report.optimise).toBeUndefined();
   });
 });

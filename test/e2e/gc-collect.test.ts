@@ -4,7 +4,6 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  collectGarbage,
   gcQueryArgs,
   nixPortableRunner,
   registerRecencyRoot,
@@ -12,6 +11,7 @@ import {
 } from "../../src/store/gc.js";
 import { autoGc } from "../../src/store/autogc.js";
 import { collectPool } from "../../src/store/pool.js";
+import { storePool } from "../../src/store/storePool.js";
 import { depsCacheEntryDir, depsCachePool } from "../../src/store/depsCachePool.js";
 import { upsertRecency } from "../../src/store/recency.js";
 
@@ -43,7 +43,7 @@ afterAll(() => {
   }
 });
 
-describe("collectGarbage destructive (ADR 0007 — real --gc on a dedicated scratch store)", () => {
+describe("manual gc destructive (ADR 0012 — real --gc via the Store pool on a dedicated scratch store)", () => {
   e2e("frees unrooted paths while a scoped-rooted path survives a real collect", () => {
     const scratch = mkdtempSync(join(tmpdir(), "dustcastle-gc-scratch-"));
     tmps.push(scratch);
@@ -82,10 +82,14 @@ describe("collectGarbage destructive (ADR 0007 — real --gc on a dedicated scra
       expect(handle.links).toHaveLength(1);
 
       try {
-        // The real, destructive sweep: deletes the store's remaining unrooted paths
-        // while the scoped-rooted survivor is kept.
-        const report = collectGarbage({ run });
-        expect(report.gc.pathsDeleted).toBeGreaterThan(0); // really freed unrooted paths
+        // The real, destructive sweep — through the Store pool the manual `dustcastle
+        // gc` drives (ADR 0012): budget 0 ⇒ collect every unrooted path while the
+        // scoped-rooted survivor is kept.
+        const report = collectPool(
+          storePool({ run, dir: scratch, recencyRootsDir: join(scratch, "recency-roots") }),
+          { budgetBytes: 0 },
+        );
+        expect(report.entriesEvicted).toBeGreaterThan(0); // really freed unrooted paths
 
         // The scoped-rooted path SURVIVED a real collect: still live, not dead.
         const live = run(gcQueryArgs("live"));

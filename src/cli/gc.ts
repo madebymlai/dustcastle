@@ -1,33 +1,66 @@
-import { collectGarbage, type NixRunner } from "../store/gc.js";
+import { DUSTCASTLE_HOME } from "../config/global.js";
+import { collectPools } from "../store/pool.js";
+import { defaultDepsCacheDir, depsCachePool } from "../store/depsCachePool.js";
+import { defaultRecencyRootsDir, nixPortableRunner, type NixRunner } from "../store/gc.js";
+import { storePool } from "../store/storePool.js";
 
 /**
- * `dustcastle gc`: the manual, user-invoked store sweep (ADR 0007). Runs
- * `nix store optimise` (file-level dedup) then `nix-store --gc` (delete unrooted
- * paths), surfacing what it freed — never silent. No threshold and no recency tail
- * here: the user asked explicitly, so it always sweeps; an in-flight `dustcastle
- * run` stays safe because its closure is pinned by live scoped roots for the
- * duration of the run (released only on completion). The automatic, policy-driven
- * trigger (disk ceiling + recency tail) is a separate, gated path.
+ * `dustcastle gc`: the manual, user-invoked store sweep (ADR 0007/0012). Drives the
+ * SAME unified pool brain as the auto sweep (`collectPools` over the Store pool and
+ * the deps-cache pool) with a ZERO byte budget — so it reclaims everything not pinned.
+ * It runs `nix store optimise` (file-level dedup) first (the cache has none), then the
+ * per-pool eviction, surfacing what it freed — never silent. Unlike the automatic
+ * trigger, there is no disk-ceiling threshold and no recency tail: the user asked
+ * explicitly, so it always sweeps.
  *
- * The nix runner is injectable for tests; production uses a real nix-portable spawn.
+ * Concurrent-run safety is ASYMMETRIC across the two pools, because their pins differ:
+ *   - Store — protected cross-process. A live run's closure is pinned by ON-DISK scoped
+ *     roots (`gcroots/`), and `nix-store --gc` honours every root on disk regardless of
+ *     which process wrote it. This separate gc process therefore never collects an
+ *     in-flight run's toolchain closure.
+ *   - Deps cache — NOT protected cross-process. The pool's pins are an in-memory `Set`
+ *     on the pool instance (a live run pins its hashes in ITS OWN process); this gc
+ *     process builds a fresh pool whose pinned set is empty, so a budget-0 sweep evicts
+ *     EVERY cache entry — including ones a concurrent run just restored. That is safe
+ *     for correctness — restore copies the deps into the worktree's stageDir before the
+ *     sandbox starts, so the running sandbox uses its own copy, not the cache dir — but
+ *     it costs that run a re-install/re-populate next time. Acceptable for an explicit
+ *     "sweep everything"; surfaced in the output below so it is never a silent surprise.
+ *
+ * The nix runner and the pool dirs are injectable for tests; production uses a real
+ * nix-portable spawn and the dustcastle-owned home + recency-root + deps-cache dirs.
  * Returns a process exit code.
  */
 export async function runGcCommand(opts: {
   readonly run?: NixRunner;
+  readonly dir?: string;
+  readonly recencyRootsDir?: string;
+  readonly depsCacheDir?: string;
   readonly onLine?: (line: string) => void;
 } = {}): Promise<number> {
   const log = opts.onLine ?? ((l: string) => process.stderr.write(`${l}\n`));
-  log("dustcastle: sweeping the shared Nix Store (optimise → collect-garbage)…");
+  log("dustcastle: sweeping the shared Nix Store + deps cache (optimise → collect-garbage)…");
 
-  const report = collectGarbage({
-    optimise: true,
-    ...(opts.run !== undefined ? { run: opts.run } : {}),
+  const run = opts.run ?? nixPortableRunner();
+  const store = storePool({
+    run,
+    dir: opts.dir ?? DUSTCASTLE_HOME,
+    recencyRootsDir: opts.recencyRootsDir ?? defaultRecencyRootsDir(),
     onLine: log,
   });
+  const cache = depsCachePool({ cacheDir: opts.depsCacheDir ?? defaultDepsCacheDir(), onLine: log });
 
-  const freed = report.gc.bytesFreed + (report.optimise?.bytesFreed ?? 0);
+  // The deps cache is swept whole: its pins are in-memory, so this separate process
+  // can't see a concurrent run's pins (the Store's on-disk roots ARE seen). Flag it
+  // up front so a re-install on a running sandbox's next start is never a surprise.
+  log("dustcastle: the deps cache is reclaimed in full; a concurrent run will re-install its deps next time.");
+
+  // Budget 0 ⇒ an empty warm tail ⇒ every (unpinned) entry is cold in both pools.
+  const report = collectPools([store, cache], { budgetBytes: 0, optimise: true });
+
+  const freed = report.bytesFreed + (report.optimise?.bytesFreed ?? 0);
   log(
-    `dustcastle: gc done — collected ${report.gc.pathsDeleted} unrooted path(s)` +
+    `dustcastle: gc done — collected ${report.entriesEvicted} unrooted path(s)/entry(ies)` +
       (report.optimise ? `, hard-linked ${report.optimise.filesLinked} file(s)` : "") +
       `, freed ${freed} bytes total.`,
   );

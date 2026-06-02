@@ -307,43 +307,15 @@ export function pruneRecencyRoots(opts: {
   return { pruned };
 }
 
-export interface CollectGarbageOptions {
-  /** Inject a nix runner (tests); defaults to a real nix-portable spawn. */
-  readonly run?: NixRunner;
-  /** Hard-link dedup before collecting (mechanism 3). Off by default — it can be slow. */
-  readonly optimise?: boolean;
-  /** Surface progress (never silent — ADR 0007). */
-  readonly onLine?: (line: string) => void;
-}
-
-/** The surfaced result of a lifecycle sweep. */
-export interface CollectGarbageReport {
-  readonly gc: GcReport;
-  readonly optimise?: OptimiseReport;
-}
-
 /**
- * The policy-driven sweep (ADR 0007): optionally `nix-store --optimise` (dedup),
- * then `nix-store --gc` (delete unrooted paths — scoped-rooted closures survive).
- * Returns the surfaced reports. The live run is gated against a scratch store root.
+ * The pre-pool direct-drive sweep (`collectGarbage`) was removed in ADR 0012: both
+ * sweep callers now cross the unified pool brain. The automatic trigger (`autogc.ts`)
+ * drives `collectPool` per pool; the manual `dustcastle gc` (`cli/gc.ts`) drives
+ * `collectPools` over the Store + deps-cache pools with a zero budget. The Store pool
+ * (`storePool.ts`) owns the optimise → prune-cold-roots → `nix-store --gc` mechanism;
+ * `collectGarbageArgs`/`optimiseArgs`/`parseGcReport`/`parseOptimiseReport` live on as
+ * its building blocks.
  */
-export function collectGarbage(opts: CollectGarbageOptions = {}): CollectGarbageReport {
-  const run = opts.run ?? nixPortableRunner();
-  const log = opts.onLine ?? (() => {});
-
-  let optimise: OptimiseReport | undefined;
-  if (opts.optimise === true) {
-    const opt = run(optimiseArgs());
-    optimise = parseOptimiseReport(opt.stdout + opt.stderr);
-    log(`gc: optimise freed ${optimise.bytesFreed} bytes by hard-linking ${optimise.filesLinked} files`);
-  }
-
-  const gcResult = run(collectGarbageArgs());
-  const gc = parseGcReport(gcResult.stdout + gcResult.stderr);
-  log(`gc: collected ${gc.pathsDeleted} unrooted path(s), freed ${gc.bytesFreed} bytes`);
-
-  return optimise !== undefined ? { gc, optimise } : { gc };
-}
 
 /** The dustcastle-owned scoped-root directory under the rootless store install (ADR 0007/0008). */
 export function defaultGcRootsDir(): string {
