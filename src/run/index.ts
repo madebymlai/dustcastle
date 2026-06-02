@@ -309,6 +309,7 @@ export async function withProvisionedSandbox<T>(
   try {
     const prepared = prepareRun({
       ...opts,
+      depsCacheDir: cacheDir,
       ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
       // Stand up the production egress backend the moment the decision is known —
       // BEFORE the Store provision (ADR 0005/0010). A host that can't enforce scoped
@@ -500,14 +501,17 @@ function populateDepsCache(
 ): void {
   for (const entry of populate) {
     try {
-      const result = spawnSync("sh", ["-c", populateCommand({ cacheDir, ...entry })], { cwd, encoding: "utf8" });
+      const command = populateCommand({ cacheDir, ...entry });
+      const result = spawnSync("sh", ["-c", command], { cwd, encoding: "utf8" });
       if (result.status === 0) {
         onLine?.(`deps-cache: populated ${entry.lockfileHash} from ${entry.stageDir}`);
       } else {
-        onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${result.stderr?.trim() ?? ""}`);
+        const detail = result.stderr?.trim() ?? "";
+        onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${detail}`);
       }
     } catch (e) {
-      onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${(e as Error).message}`);
+      const detail = (e as Error).message;
+      onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${detail}`);
     }
   }
 }

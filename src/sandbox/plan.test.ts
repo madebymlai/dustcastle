@@ -425,6 +425,16 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     expect(plan.setupCommands.join("\n")).toContain("npm ci");
   });
 
+  it("requires the run-level cache root for cacheable decisions", () => {
+    expect(() =>
+      planSandbox({
+        provisioned: nodeProvisioned,
+        detection: nodeDetection,
+        cache: { lockfileHash: "abc123", hit: true },
+      }),
+    ).toThrow("cacheDir is required when a deps-cache decision has a lockfile hash");
+  });
+
   it("with no cache info at all (default), behaves like a miss with no caching", () => {
     // Backward-compatible default: existing callers that don't supply cache info get
     // the install (no restore, no populate) — the prior always-install behavior.

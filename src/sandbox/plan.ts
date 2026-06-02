@@ -111,13 +111,19 @@ const DEFAULT_IMAGE = AGENT_SPEC.tag;
  */
 export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   const { provisioned } = spec;
+  const primaryEcosystem: EcosystemPlan = {
+    provisioned,
+    detection: spec.detection,
+    ...(spec.cache !== undefined ? { cache: spec.cache } : {}),
+  };
   // Every detected Ecosystem (ADR 0012): the primary plus any polyglot siblings.
   // Each provisions its Toolchain and either restores its deps from the cache (hit)
   // or installs them in-Sandbox (miss / uncacheable).
   const ecosystems: readonly EcosystemPlan[] = [
-    { provisioned, detection: spec.detection, ...(spec.cache !== undefined ? { cache: spec.cache } : {}) },
+    primaryEcosystem,
     ...(spec.additionalEcosystems ?? []),
   ];
+  const cacheDir = spec.cacheDir;
   const egress =
     spec.egress ?? deriveEgress({ packageManagers: ecosystems.map((e) => e.detection.packageManager) });
 
@@ -159,14 +165,14 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     if (cache !== undefined && lockfileHash !== undefined && cache.hit) {
       // HIT: restore from the cache on the host; the in-Sandbox setup is just the
       // git-exclude (no install, no registry traffic).
-      hostWorktreeReady.push(restoreCommand({ cacheDir: requireCacheDir(spec), lockfileHash, stageDir }));
+      hostWorktreeReady.push(restoreCommand({ cacheDir: requireCacheDir(cacheDir), lockfileHash, stageDir }));
       setupCommands.push(gitExclude(stageDir));
     } else {
       // MISS / uncacheable: install in-Sandbox (git-exclude first, then the install).
       setupCommands.push(...setupFor(e.detection));
       if (cache !== undefined && lockfileHash !== undefined) {
         // A real miss (stable key, no entry yet): populate the cache after the run.
-        requireCacheDir(spec);
+        requireCacheDir(cacheDir);
         populate.push({ lockfileHash, stageDir });
       }
     }
@@ -175,11 +181,11 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   return { podmanOptions, setupCommands, hostWorktreeReady, populate, egress };
 }
 
-function requireCacheDir(spec: SandboxPlanSpec): string {
-  if (spec.cacheDir === undefined) {
+function requireCacheDir(cacheDir: string | undefined): string {
+  if (cacheDir === undefined) {
     throw new Error("cacheDir is required when a deps-cache decision has a lockfile hash");
   }
-  return spec.cacheDir;
+  return cacheDir;
 }
 
 /**
