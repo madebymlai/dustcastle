@@ -38,7 +38,10 @@ const PROXY_MAP_ADDR = "169.254.7.7";
 const PROXY_PORT = 18118;
 const PROXY_URL = `http://${PROXY_MAP_ADDR}:${PROXY_PORT}`;
 const CONTAINER = "dustcastle-egress-e2e";
-const IMAGE = "docker.io/library/node:20-alpine";
+// alpine-based so busybox provides `ip` for the route-strip confine, AND it ships git
+// (the in-Sandbox git-exclude shells `git`); node itself comes from the RO Store mount.
+// Its default entrypoint is `git`, so the run below overrides it with `--entrypoint sleep`.
+const IMAGE = "docker.io/alpine/git:latest";
 
 const tmps: string[] = [];
 afterAll(() => {
@@ -133,8 +136,10 @@ describe("dustcastle run (slice 3: impure-allow egress enforcement, ADR 0004/000
           `${storeRoot}:/nix/store:ro`,
           "-v",
           `${projectDir}:/work`,
-          IMAGE,
+          // alpine/git's default entrypoint is `git`; override it so the container just sleeps.
+          "--entrypoint",
           "sleep",
+          IMAGE,
           "600",
         ]);
         expect(up.code, `podman run failed: ${up.err}`).toBe(0);

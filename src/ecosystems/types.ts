@@ -64,6 +64,13 @@ export interface ToolchainContext {
   /** Derivation name (typically the repo directory name). */
   readonly pname: string;
   /**
+   * The detected Package Manager (ADR 0012). Threaded so a generator can ship the
+   * in-Sandbox install's own tooling in the Toolchain — Python's `uv`/`poetry` export
+   * front-ends run in-Sandbox now, so a uv repo's Toolchain must carry `uv` (poetry →
+   * `poetry`), while pip needs neither. Node/Go/Rust have a single manager and ignore it.
+   */
+  readonly packageManager?: PackageManager;
+  /**
    * The resolved Toolchain version (ADR 0006b), threaded from `Detection`. Each
    * generator adapts it as its semantics require — Python reads it as the nixpkgs
    * interpreter attr (`python311`) the Toolchain is built from; Node/Go/Rust
@@ -120,19 +127,24 @@ export interface PackageManagerDescriptor {
    */
   readonly installCommand: readonly string[];
   /**
-   * The registry host this manager's install fetches from — the Build Egress the
-   * standing allowlist proxy opens (ADR 0005/0012; CONTEXT.md: "the package registry
-   * the Package Manager names"). npm/pnpm/bun → registry.npmjs.org, yarn →
-   * registry.yarnpkg.com, pip/uv/poetry → pypi.org, go → proxy.golang.org (the module
-   * proxy), cargo → index.crates.io (the crates index).
+   * EVERY host this manager's install fetches from — the Build Egress the standing
+   * allowlist proxy opens (ADR 0005/0012; CONTEXT.md: "the package registry the Package
+   * Manager names"). A LIST, not one host: real installs split the *index* from the
+   * *artifact/checksum* host, and the strict CONNECT proxy is exact-match, so BOTH must
+   * be listed or the artifact fetch 403s. npm/pnpm/bun → [registry.npmjs.org] (tarballs
+   * served from the registry itself), yarn → [registry.yarnpkg.com], pip/uv/poetry →
+   * [pypi.org, files.pythonhosted.org] (index + wheel CDN), go → [proxy.golang.org,
+   * sum.golang.org] (module proxy + checksum DB), cargo → [index.crates.io,
+   * static.crates.io] (sparse index + crate downloads).
    *
-   * REQUIRED on every descriptor (go/cargo included): egress is a standing allowlist
-   * that no longer branches on purity (ADR 0012), so every detected manager contributes
-   * its registry. Making it required keeps `egress.ts` exhaustive at `tsc` — a half-added
-   * manager fails to compile rather than silently reaching no registry — and `egress.ts`
-   * derives the allowlist off this descriptor field rather than a free-`string` table.
+   * REQUIRED and NON-EMPTY on every descriptor (go/cargo included): egress is a standing
+   * allowlist that no longer branches on purity (ADR 0012), so every detected manager
+   * contributes its registry. Making it required keeps `egress.ts` exhaustive at `tsc` —
+   * a half-added manager fails to compile rather than silently reaching no registry — and
+   * `egress.ts` derives the allowlist off this descriptor field rather than a free-`string`
+   * table.
    */
-  readonly registryHost: string;
+  readonly registryHosts: readonly string[];
 }
 
 /**

@@ -38,6 +38,7 @@ describe("dustcastle run (slice 1: Go in-Sandbox install, ADR 0002/0005/0008/001
       expect(prepared.plan.egress.kind).toBe("allowlist");
       expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
       expect(egressHosts(prepared.plan.egress)).toContain("proxy.golang.org");
+
       expect(prepared.plan.setupCommands.join("\n")).toContain("go mod download");
 
       await runInSandbox({

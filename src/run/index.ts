@@ -101,6 +101,9 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
   const remoteHost = gitRemoteHost(opts.cwd);
   const egress: EgressDecision = deriveEgress({
     packageManagers: resolved.map((d) => d.packageManager),
+    // Open the hosts of any git-sourced deps (ADR 0012, dustcastle-61j): scanned from the
+    // detected managers' declared source files under cwd (manifests ∪ lockfiles).
+    projectDir: opts.cwd,
     ...(remoteHost !== undefined ? { gitRemoteHost: remoteHost } : {}),
     // Agent Egress (ADR 0010): the model host(s) carve a route for the agent's own
     // LLM calls alongside the build's standing registry/git egress.

@@ -38,6 +38,8 @@ async function expectRustFixture(
   expect(prepared.plan.egress.kind).toBe("allowlist");
   expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
   expect(egressHosts(prepared.plan.egress)).toContain("index.crates.io");
+  expect(egressHosts(prepared.plan.egress)).toContain("static.crates.io"); // crate downloads
+
   // `cargo fetch` installs in-Sandbox into the per-project CARGO_HOME (the stage dir).
   expect(prepared.plan.setupCommands.join("\n")).toContain("cargo fetch");
   expect(prepared.plan.setupCommands.join("\n")).toContain(CARGO_HOME_BASENAME);

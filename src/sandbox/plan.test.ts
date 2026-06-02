@@ -70,7 +70,8 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
   });
 
   it("surfaces the egress decision on the plan — never silent (ADR 0005)", () => {
-    // The standing allowlist for a go repo: the Go module proxy (ADR 0012).
+    // The standing allowlist for a go repo: the Go module proxy (ADR 0012). go.sum is
+    // committed, so the checksum DB is verified locally and never on the allowlist.
     expect(planSandbox({ provisioned, detection }).egress).toEqual({
       kind: "allowlist",
       buildHosts: ["proxy.golang.org"],
@@ -115,7 +116,7 @@ describe("planSandbox — Rust path (dustcastle-gy5.2)", () => {
     // Always-impure (ADR 0012): a cargo repo's standing allowlist opens the crates
     // index, and deps fetch in-Sandbox (cargo's offline mode is off).
     expect(plan.podmanOptions.network).not.toBe("none");
-    expect(plan.egress).toEqual({ kind: "allowlist", buildHosts: ["index.crates.io"], agentHosts: [] });
+    expect(plan.egress).toEqual({ kind: "allowlist", buildHosts: ["index.crates.io", "static.crates.io"], agentHosts: [] });
     expect(setup).not.toContain("cp -RL");
     expect(setup).toContain("cargo fetch");
     expect(env.PATH).toContain(`${rustProvisioned.toolchainStorePath}/bin`);

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -41,25 +41,29 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
     expect(decision.buildHosts).toContain("registry.yarnpkg.com");
   });
 
-  it("opens pypi.org for a pip/uv/poetry repo", () => {
+  it("opens pypi.org AND the wheel CDN for a pip/uv/poetry repo", () => {
     const managers: PackageManager[] = ["pip", "uv", "poetry"];
     for (const pm of managers) {
       const decision = deriveEgress({ packageManagers: [pm] });
       if (decision.kind !== "allowlist") throw new Error("unreachable");
+      // Both hosts: the index AND files.pythonhosted.org, or `pip install` 403s the
+      // wheel download even though the index resolves (dustcastle-61j).
       expect(decision.buildHosts).toContain("pypi.org");
+      expect(decision.buildHosts).toContain("files.pythonhosted.org");
     }
   });
 
-  it("opens the Go module proxy for a go repo (go gained a required registryHost)", () => {
+  it("opens the Go module proxy for a go repo (go.sum verifies locally)", () => {
     const decision = deriveEgress({ packageManagers: ["go"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("proxy.golang.org");
+    expect(decision.buildHosts).toEqual(["proxy.golang.org"]); // checksum DB never contacted
   });
 
-  it("opens the crates index for a cargo repo (cargo gained a required registryHost)", () => {
+  it("opens the crates index AND the crate download host for a cargo repo", () => {
     const decision = deriveEgress({ packageManagers: ["cargo"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("index.crates.io");
+    expect(decision.buildHosts).toContain("static.crates.io"); // `cargo fetch` downloads tarballs
   });
 
   it("yields BOTH registries for a polyglot Node + Python repo (the union)", () => {
@@ -180,5 +184,61 @@ describe("gitRemoteHost (egress allowlist input)", () => {
 
   it("returns undefined when there is no remote", () => {
     expect(gitRemoteHost(repo())).toBeUndefined();
+  });
+});
+
+describe("deriveEgress — git-sourced dependency hosts (ADR 0012, dustcastle-61j)", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+  const projectWith = (file: string, contents: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-egress-gitdep-"));
+    tmps.push(dir);
+    writeFileSync(join(dir, file), contents);
+    return dir;
+  };
+
+  it("opens a Cargo git dependency's VCS host from Cargo.lock (git+ source)", () => {
+    const dir = projectWith(
+      "Cargo.lock",
+      '[[package]]\nname = "itoa"\nsource = "git+https://github.com/dtolnay/itoa?tag=1.0.15#e2766b8"\n',
+    );
+    const decision = deriveEgress({ packageManagers: ["cargo"], projectDir: dir });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("github.com"); // the git dep's host
+    expect(decision.buildHosts).toContain("index.crates.io"); // registry still present
+  });
+
+  it("does NOT mistake the crates.io registry INDEX for a git dep host", () => {
+    // `registry+https://github.com/rust-lang/crates.io-index` names github.com, but that
+    // is the INDEX, not a git dep — bare https is deliberately not matched.
+    const dir = projectWith(
+      "Cargo.lock",
+      '[[package]]\nname = "itoa"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
+    );
+    const decision = deriveEgress({ packageManagers: ["cargo"], projectDir: dir });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).not.toContain("github.com");
+  });
+
+  it("reads git deps from a LOOSE project's MANIFEST (no lockfile) — pip requirements", () => {
+    const dir = projectWith("requirements.txt", "lib @ git+https://gitlab.com/org/lib@main\n");
+    const decision = deriveEgress({ packageManagers: ["pip"], projectDir: dir });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("gitlab.com");
+  });
+
+  it("resolves an npm forge shorthand (github:org/repo) to its host", () => {
+    const dir = projectWith("package.json", JSON.stringify({ dependencies: { x: "github:foo/bar" } }));
+    const decision = deriveEgress({ packageManagers: ["npm"], projectDir: dir });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("github.com");
+  });
+
+  it("stays pure (no file I/O, registry hosts only) when projectDir is omitted", () => {
+    const decision = deriveEgress({ packageManagers: ["cargo"] });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io"]);
   });
 });

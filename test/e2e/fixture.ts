@@ -253,12 +253,15 @@ export function stageWorkspaceProject(root: string): { root: string; members: st
     const dir = join(wsRoot, "packages", name);
     mkdirSync(dir, { recursive: true });
     cpSync(NODE_SAMPLE, dir, { recursive: true });
+    // Each member is its OWN committed repo (ADR 0009/0012): provisionStore stages the
+    // member via `git archive HEAD` and the in-Sandbox git-exclude needs a git repo at
+    // the member's worktree (each member is bind-mounted standalone at /work, so its own
+    // .git must be present). detectWorkspace reads wsRoot's package.json directly (no git),
+    // so the workspace root itself need not be a repo — and committing members as separate
+    // repos keeps each member's `npm ci` isolated from the workspace root.
+    commitFixtureTree(dir);
     return dir;
   });
-  // Commit the WHOLE workspace tree as one repo (ADR 0009/0012): each member is a
-  // subdir of this committed repo, so provisionStore's `git archive HEAD` (run per
-  // member dir) finds a committed tree to stage the member's Toolchain build from.
-  commitFixtureTree(wsRoot);
   return { root: wsRoot, members };
 }
 

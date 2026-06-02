@@ -61,9 +61,21 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
 
   describe("the Toolchain attr each manager realizes (ADR 0001/0012)", () => {
     it.each(["npm", "pnpm", "yarn", "bun"] as const)("%s realizes the nodejs Toolchain", (pm) => {
-      const build = packageManagerDescriptor(pm).generateToolchain({ pname: "p" });
-      expect(build.attr).toBe("nodejs");
+      const build = packageManagerDescriptor(pm).generateToolchain({ pname: "p", packageManager: pm });
+      expect(build.attr).toBe("toolchain");
       expect(build.expression).toContain("pkgs.nodejs");
+    });
+
+    it("ships the detected manager's CLI in the Node Toolchain (ADR 0012): pnpm/yarn/bun, not npm", () => {
+      // npm ships with nodejs → no extra tool; pnpm/yarn/bun are their own packages.
+      const npmBuild = packageManagerDescriptor("npm").generateToolchain({ pname: "p", packageManager: "npm" });
+      expect(npmBuild.expression).not.toContain("pkgs.pnpm");
+      expect(npmBuild.expression).not.toContain("pkgs.yarn");
+      expect(npmBuild.expression).not.toContain("pkgs.bun");
+
+      expect(packageManagerDescriptor("pnpm").generateToolchain({ pname: "p", packageManager: "pnpm" }).expression).toContain("pkgs.pnpm");
+      expect(packageManagerDescriptor("yarn").generateToolchain({ pname: "p", packageManager: "yarn" }).expression).toContain("pkgs.yarn");
+      expect(packageManagerDescriptor("bun").generateToolchain({ pname: "p", packageManager: "bun" }).expression).toContain("pkgs.bun");
     });
 
     it("go realizes the go Toolchain attr", () => {
@@ -129,27 +141,35 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
 
     // Standing egress (ADR 0012): egress no longer branches on purity, so EVERY
-    // detected manager contributes its registry. `registryHost` is therefore REQUIRED
-    // on every descriptor (go/cargo included) — proven at `tsc`, not by a runtime
-    // biconditional — so a polyglot repo opens every registry and egress.ts never
+    // detected manager contributes its registry. `registryHosts` is therefore REQUIRED
+    // and NON-EMPTY on every descriptor (go/cargo included) — proven at `tsc`, not by a
+    // runtime biconditional — so a polyglot repo opens every registry and egress.ts never
     // silently reaches no host (architecture review candidate 1).
-    it.each([...PACKAGE_MANAGERS])("%s carries a required registryHost", (pm) => {
-      expect(packageManagerDescriptor(pm).registryHost.length).toBeGreaterThan(0);
+    it.each([...PACKAGE_MANAGERS])("%s carries a non-empty registryHosts list", (pm) => {
+      expect(packageManagerDescriptor(pm).registryHosts.length).toBeGreaterThan(0);
     });
 
-    it("the node managers name their registry, the python managers name pypi", () => {
-      expect(packageManagerDescriptor("npm").registryHost).toBe("registry.npmjs.org");
-      expect(packageManagerDescriptor("pnpm").registryHost).toBe("registry.npmjs.org");
-      expect(packageManagerDescriptor("bun").registryHost).toBe("registry.npmjs.org");
-      expect(packageManagerDescriptor("yarn").registryHost).toBe("registry.yarnpkg.com");
-      expect(packageManagerDescriptor("pip").registryHost).toBe("pypi.org");
-      expect(packageManagerDescriptor("uv").registryHost).toBe("pypi.org");
-      expect(packageManagerDescriptor("poetry").registryHost).toBe("pypi.org");
+    // The list names EVERY host the manager's install reaches — index AND
+    // artifact/checksum — because the egress proxy is strict exact-match: a missing
+    // artifact host 403s real downloads even though the index resolves (dustcastle-61j).
+    it("the node managers name their registry (tarballs served from it)", () => {
+      expect(packageManagerDescriptor("npm").registryHosts).toEqual(["registry.npmjs.org"]);
+      expect(packageManagerDescriptor("pnpm").registryHosts).toEqual(["registry.npmjs.org"]);
+      expect(packageManagerDescriptor("bun").registryHosts).toEqual(["registry.npmjs.org"]);
+      expect(packageManagerDescriptor("yarn").registryHosts).toEqual(["registry.yarnpkg.com"]);
     });
 
-    it("go names the module proxy and cargo names the crates index (standing Build Egress)", () => {
-      expect(packageManagerDescriptor("go").registryHost).toBe("proxy.golang.org");
-      expect(packageManagerDescriptor("cargo").registryHost).toBe("index.crates.io");
+    it("the python managers name pypi AND the wheel CDN files.pythonhosted.org", () => {
+      for (const pm of ["pip", "uv", "poetry"] as const) {
+        expect(packageManagerDescriptor(pm).registryHosts).toEqual(["pypi.org", "files.pythonhosted.org"]);
+      }
+    });
+
+    it("go names the module proxy (go.sum verifies locally); cargo the index + crate downloads", () => {
+      // go.sum is committed, so `go mod download` verifies hashes locally and never
+      // contacts the checksum DB — proven by the e2e proxy log (only proxy.golang.org).
+      expect(packageManagerDescriptor("go").registryHosts).toEqual(["proxy.golang.org"]);
+      expect(packageManagerDescriptor("cargo").registryHosts).toEqual(["index.crates.io", "static.crates.io"]);
     });
 
     describe("node managers install strictly from the committed lockfile (frozen/immutable)", () => {
@@ -225,12 +245,25 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
 
     it("generates a Toolchain-ONLY NixBuild the store realizes (the interpreter with pip)", () => {
-      const build = packageManagerDescriptor("pip").generateToolchain({ pname: "sample" });
-      expect(build.attr).toBe("python");
+      const build = packageManagerDescriptor("pip").generateToolchain({ pname: "sample", packageManager: "pip" });
+      expect(build.attr).toBe("toolchain");
       // ADR 0012: the Toolchain ships pip + pytest; the deps pip-FOD is gone.
       expect(build.expression).toContain("withPackages");
       expect(build.expression).not.toContain("pip download");
       expect(build.expression).not.toContain("outputHash");
+      // pip reads requirements.txt directly → no export tool in the Toolchain (no bloat).
+      expect(build.expression).not.toContain("pkgs.uv");
+      expect(build.expression).not.toContain("pkgs.poetry");
+    });
+
+    it("ships the manager's in-Sandbox export tool in the Toolchain (ADR 0012): uv→uv, poetry→poetry", () => {
+      const uvBuild = packageManagerDescriptor("uv").generateToolchain({ pname: "sample", packageManager: "uv" });
+      expect(uvBuild.expression).toContain("pkgs.uv");
+      expect(uvBuild.expression).not.toContain("pkgs.poetry");
+
+      const poetryBuild = packageManagerDescriptor("poetry").generateToolchain({ pname: "sample", packageManager: "poetry" });
+      expect(poetryBuild.expression).toContain("pkgs.poetry");
+      expect(poetryBuild.expression).not.toContain("pkgs.uv");
     });
 
     it("builds the Toolchain against the resolved interpreter (ADR 0006b)", () => {

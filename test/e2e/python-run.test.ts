@@ -55,6 +55,8 @@ describe("dustcastle run (laimk-hse.2: Python in-Sandbox install, ADR 0002/0005/
         expect(prepared.plan.egress.kind).toBe("allowlist");
         expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
         expect(egressHosts(prepared.plan.egress)).toContain("pypi.org");
+        expect(egressHosts(prepared.plan.egress)).toContain("files.pythonhosted.org"); // wheel CDN
+
         // The deps install IN-SANDBOX: pip directly, uv/poetry behind their export front-end.
         expect(prepared.plan.setupCommands.join("\n")).toContain(install);
         expect(prepared.plan.setupCommands.join("\n")).toContain("pip install");

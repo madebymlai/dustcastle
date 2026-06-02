@@ -99,6 +99,9 @@ interface BuildContext {
 function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Provisioned {
   const build = descriptor.generateToolchain({
     pname: ctx.pname,
+    // Thread the detected manager (ADR 0012) so Python's Toolchain ships the manager's
+    // in-Sandbox export tool (uv/poetry); other ecosystems ignore it.
+    packageManager: spec.detection.packageManager,
     // Thread the resolved Toolchain version (ADR 0006b) so the Toolchain build uses
     // the requested interpreter (Python; laimk-hse.3). Node/Go/Rust ignore it.
     ...(spec.detection.toolchainVersion !== undefined

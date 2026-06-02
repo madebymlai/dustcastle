@@ -18,7 +18,7 @@ const npm: PackageManagerDescriptor = {
   // package-lock.json (frozen), running postinstall under the standing egress.
   installCommand: ["npm ci"],
   // Build Egress (ADR 0012): the registry `npm ci` fetches from.
-  registryHost: "registry.npmjs.org",
+  registryHosts: ["registry.npmjs.org"],
 };
 
 const pnpm: PackageManagerDescriptor = {
@@ -30,7 +30,7 @@ const pnpm: PackageManagerDescriptor = {
   // The in-Sandbox install (ADR 0012): frozen to pnpm-lock.yaml.
   installCommand: ["pnpm install --frozen-lockfile"],
   // Build Egress (ADR 0012): pnpm fetches from the npm registry too.
-  registryHost: "registry.npmjs.org",
+  registryHosts: ["registry.npmjs.org"],
 };
 
 const yarn: PackageManagerDescriptor = {
@@ -42,7 +42,7 @@ const yarn: PackageManagerDescriptor = {
   // The in-Sandbox install (ADR 0012): frozen to yarn.lock.
   installCommand: ["yarn install --frozen-lockfile"],
   // Build Egress (ADR 0012): yarn classic's own registry.
-  registryHost: "registry.yarnpkg.com",
+  registryHosts: ["registry.yarnpkg.com"],
 };
 
 const bun: PackageManagerDescriptor = {
@@ -56,7 +56,7 @@ const bun: PackageManagerDescriptor = {
   // to be missing any more (the real install runs in-Sandbox).
   installCommand: ["bun install --frozen-lockfile"],
   // Build Egress (ADR 0012): bun uses the npm registry.
-  registryHost: "registry.npmjs.org",
+  registryHosts: ["registry.npmjs.org"],
 };
 
 // Keyed by Package Manager name for the Registry's compile-time exhaustiveness
