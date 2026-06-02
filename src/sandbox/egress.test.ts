@@ -1,97 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PackageManager } from "../ecosystems/index.js";
-import { deriveEgress, egressHosts, parseGitRemoteHost } from "./egress.js";
+import { deriveEgress, egressHosts, gitRemoteHost, parseGitRemoteHost } from "./egress.js";
 
-// Scoped egress (ADR 0005 / 0010). Egress is the union of two sources: Build Egress
-// (the registry + git host an *impure* build needs, derived from detection) and
-// Agent Egress (the *agent's* model-provider host, present whenever an agent runs,
-// regardless of build purity). A pure build with no agent reaches nothing. The
-// derivation is pure — pinned here.
+// Standing egress (ADR 0005 / 0010 / 0012). Egress is a STANDING allowlist that no
+// longer branches on build purity: every Sandbox installs deps with the network on,
+// so the registry + git are always present. It is the union of each DETECTED Package
+// Manager's registry host (the install runs in-Sandbox via the sandcastle hook), the
+// repo's git host, and the agent's model host(s). A polyglot repo opens every detected
+// registry. The derivation is pure — pinned here.
 
-describe("deriveEgress — Build Egress (ADR 0005 derived allowlist)", () => {
-  it("closes egress entirely for a pure build with no agent — no network at all", () => {
-    const managers: PackageManager[] = ["npm", "pnpm", "yarn", "go", "cargo"];
-    for (const packageManager of managers) {
-      expect(deriveEgress({ packageManager, impure: false })).toEqual({ kind: "none" });
-    }
-  });
-
-  it("allows only the npm registry for an impure npm/pnpm/bun build", () => {
-    const managers: PackageManager[] = ["npm", "pnpm", "bun"];
-    for (const packageManager of managers) {
-      const decision = deriveEgress({ packageManager, impure: true });
-      expect(decision.kind).toBe("allowlist");
-      if (decision.kind !== "allowlist") throw new Error("unreachable");
-      expect(decision.buildHosts).toContain("registry.npmjs.org");
-      expect(decision.agentHosts).toEqual([]);
-    }
-  });
-
-  it("allows pypi.org for an impure uv build (uv's impure install fetches wheels from pypi)", () => {
-    const decision = deriveEgress({ packageManager: "uv", impure: true });
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("pypi.org");
-  });
-
-  it("allows pypi.org for an impure poetry build (poetry's impure install fetches from pypi)", () => {
-    const decision = deriveEgress({ packageManager: "poetry", impure: true });
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("pypi.org");
-  });
-
-  it("allows pypi.org for an impure pip build", () => {
-    const decision = deriveEgress({ packageManager: "pip", impure: true });
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("pypi.org");
-  });
-
-  it("allows the yarn registry for an impure yarn build", () => {
-    const decision = deriveEgress({ packageManager: "yarn", impure: true });
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("registry.yarnpkg.com");
-  });
-
-  it("adds the repo's git host to Build Egress when known (git deps resolve)", () => {
-    const decision = deriveEgress({ packageManager: "npm", impure: true, gitRemoteHost: "github.com" });
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.buildHosts).toContain("registry.npmjs.org");
-    expect(decision.buildHosts).toContain("github.com");
-  });
-
-  it("is an allowlist, never unrestricted — no wildcard / catch-all host", () => {
-    const decision = deriveEgress({ packageManager: "npm", impure: true, gitRemoteHost: "github.com" });
-    const hosts = egressHosts(decision);
-    expect(hosts.length).toBeGreaterThan(0);
-    for (const host of hosts) {
-      expect(host).not.toMatch(/[*]|0\.0\.0\.0\/0|^all$/);
-    }
-  });
-});
-
-describe("deriveEgress — Agent Egress (ADR 0010 model-host carve-out)", () => {
-  it("opens an allowlist with ONLY the agent host on a pure build (no build egress)", () => {
-    // The carve-out: a pure, offline build still lets the in-sandbox agent reach
-    // its LLM. The build itself gains no registry/git host.
-    const decision = deriveEgress({ packageManager: "npm", impure: false, agentModelHosts: ["api.deepseek.com"] });
-    expect(decision).toEqual({ kind: "allowlist", buildHosts: [], agentHosts: ["api.deepseek.com"] });
-  });
-
-  it("carries every host a multi-host provider may contact", () => {
-    // A provider can span several endpoints (auth refresh, regional); all are
-    // allowlisted so the agent's actual host is always covered.
+describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivation)", () => {
+  it("unions a single manager's registry with the git and model hosts", () => {
     const decision = deriveEgress({
-      packageManager: "go",
-      impure: false,
-      agentModelHosts: ["chatgpt.com", "auth.openai.com"],
-    });
-    if (decision.kind !== "allowlist") throw new Error("unreachable");
-    expect(decision.agentHosts).toEqual(["chatgpt.com", "auth.openai.com"]);
-  });
-
-  it("unions Build and Agent Egress on an impure build", () => {
-    const decision = deriveEgress({
-      packageManager: "npm",
-      impure: true,
+      packageManagers: ["npm"],
       gitRemoteHost: "github.com",
       agentModelHosts: ["api.deepseek.com"],
     });
@@ -100,17 +25,104 @@ describe("deriveEgress — Agent Egress (ADR 0010 model-host carve-out)", () => 
     expect(decision.agentHosts).toEqual(["api.deepseek.com"]);
   });
 
+  it("opens only the npm registry for an npm/pnpm/bun repo", () => {
+    const managers: PackageManager[] = ["npm", "pnpm", "bun"];
+    for (const pm of managers) {
+      const decision = deriveEgress({ packageManagers: [pm] });
+      if (decision.kind !== "allowlist") throw new Error("unreachable");
+      expect(decision.buildHosts).toContain("registry.npmjs.org");
+      expect(decision.agentHosts).toEqual([]);
+    }
+  });
+
+  it("opens the yarn registry for a yarn repo", () => {
+    const decision = deriveEgress({ packageManagers: ["yarn"] });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("registry.yarnpkg.com");
+  });
+
+  it("opens pypi.org for a pip/uv/poetry repo", () => {
+    const managers: PackageManager[] = ["pip", "uv", "poetry"];
+    for (const pm of managers) {
+      const decision = deriveEgress({ packageManagers: [pm] });
+      if (decision.kind !== "allowlist") throw new Error("unreachable");
+      expect(decision.buildHosts).toContain("pypi.org");
+    }
+  });
+
+  it("opens the Go module proxy for a go repo (go gained a required registryHost)", () => {
+    const decision = deriveEgress({ packageManagers: ["go"] });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("proxy.golang.org");
+  });
+
+  it("opens the crates index for a cargo repo (cargo gained a required registryHost)", () => {
+    const decision = deriveEgress({ packageManagers: ["cargo"] });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("index.crates.io");
+  });
+
+  it("yields BOTH registries for a polyglot Node + Python repo (the union)", () => {
+    const decision = deriveEgress({ packageManagers: ["npm", "uv"] });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("registry.npmjs.org");
+    expect(decision.buildHosts).toContain("pypi.org");
+  });
+
+  it("dedupes a shared registry across detected managers (Node + Node)", () => {
+    // npm and pnpm both name registry.npmjs.org — the union lists it once.
+    const decision = deriveEgress({ packageManagers: ["npm", "pnpm"] });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toEqual(["registry.npmjs.org"]);
+  });
+
+  it("adds the repo's git host to Build Egress when known (git-sourced deps resolve)", () => {
+    const decision = deriveEgress({ packageManagers: ["npm"], gitRemoteHost: "github.com" });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.buildHosts).toContain("registry.npmjs.org");
+    expect(decision.buildHosts).toContain("github.com");
+  });
+
+  it("is an allowlist, never unrestricted — no wildcard / catch-all host", () => {
+    const decision = deriveEgress({ packageManagers: ["npm"], gitRemoteHost: "github.com" });
+    const hosts = egressHosts(decision);
+    expect(hosts.length).toBeGreaterThan(0);
+    for (const host of hosts) {
+      expect(host).not.toMatch(/[*]|0\.0\.0\.0\/0|^all$/);
+    }
+  });
+
+  it("closes egress (`none`) only when no manager is detected and no agent runs", () => {
+    expect(deriveEgress({ packageManagers: [] })).toEqual({ kind: "none" });
+    expect(deriveEgress({ packageManagers: [], agentModelHosts: [] })).toEqual({ kind: "none" });
+    expect(deriveEgress({ packageManagers: [], agentModelHosts: [""] })).toEqual({ kind: "none" });
+  });
+
+  it("opens an agent-only allowlist when no manager is detected but an agent runs", () => {
+    const decision = deriveEgress({ packageManagers: [], agentModelHosts: ["api.deepseek.com"] });
+    expect(decision).toEqual({ kind: "allowlist", buildHosts: [], agentHosts: ["api.deepseek.com"] });
+  });
+
+  it("carries every host a multi-host provider may contact", () => {
+    const decision = deriveEgress({
+      packageManagers: ["go"],
+      agentModelHosts: ["chatgpt.com", "auth.openai.com"],
+    });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.agentHosts).toEqual(["chatgpt.com", "auth.openai.com"]);
+  });
+
   it("ignores empty agent hosts (no agent ⇒ no agent egress)", () => {
-    expect(deriveEgress({ packageManager: "npm", impure: false, agentModelHosts: [] })).toEqual({ kind: "none" });
-    expect(deriveEgress({ packageManager: "npm", impure: false, agentModelHosts: [""] })).toEqual({ kind: "none" });
+    const decision = deriveEgress({ packageManagers: ["npm"], agentModelHosts: ["", "api.deepseek.com"] });
+    if (decision.kind !== "allowlist") throw new Error("unreachable");
+    expect(decision.agentHosts).toEqual(["api.deepseek.com"]);
   });
 });
 
 describe("egressHosts (the deduped union the proxy enforces)", () => {
   it("returns Build hosts first, then Agent hosts", () => {
     const decision = deriveEgress({
-      packageManager: "npm",
-      impure: true,
+      packageManagers: ["npm"],
       gitRemoteHost: "github.com",
       agentModelHosts: ["api.deepseek.com"],
     });
@@ -145,5 +157,28 @@ describe("parseGitRemoteHost (read the host from a remote URL)", () => {
   it("returns undefined for an unrecognized / empty remote", () => {
     expect(parseGitRemoteHost("")).toBeUndefined();
     expect(parseGitRemoteHost("not a url")).toBeUndefined();
+  });
+});
+
+describe("gitRemoteHost (egress allowlist input)", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+  const repo = () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-egress-git-"));
+    tmps.push(dir);
+    execFileSync("git", ["-C", dir, "init", "-q"]);
+    return dir;
+  };
+
+  it("reads origin's host from a real repo", () => {
+    const dir = repo();
+    execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:org/repo.git"]);
+    expect(gitRemoteHost(dir)).toBe("github.com");
+  });
+
+  it("returns undefined when there is no remote", () => {
+    expect(gitRemoteHost(repo())).toBeUndefined();
   });
 });

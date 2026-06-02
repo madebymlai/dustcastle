@@ -1,39 +1,34 @@
-import { CARGO_HOME_BASENAME, generateRustBuild } from "../nix/rust.js";
+import { generateRustToolchain } from "./toolchain-nix.js";
 import { readRustToolchainVersion } from "./rust-version.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
- * The Rust Ecosystem descriptors. Cargo is the sole Package Manager. A committed
- * Cargo.lock builds pure: fetchCargoVendor produces one aggregate cargoHash, then
- * the Sandbox stages the relocatable CARGO_HOME deps with the existing env-only
- * cp -RL path. A loose Cargo.toml pins first with cargo generate-lockfile.
+ * Shared basename for Rust's writable, per-project CARGO_HOME (the descriptor's
+ * `sandbox` stage dir + the store's stage-skip filter agree on it). The in-Sandbox
+ * `cargo fetch` populates it; it is git-excluded like every other stage dir.
+ */
+export const CARGO_HOME_BASENAME = "dustcastle-cargo-home";
+
+/**
+ * The Rust Ecosystem descriptors. Cargo is the sole Package Manager. Its Toolchain
+ * is rustc + cargo + a C compiler from nixpkgs; its crates are fetched in-Sandbox via
+ * `cargo fetch` into a writable CARGO_HOME (ADR 0012).
  */
 
 const cargo: PackageManagerDescriptor = {
   packageManager: "cargo",
   ecosystem: "rust",
   lockfiles: ["Cargo.lock"],
-  generateBuild: (ctx) =>
-    generateRustBuild({
-      pname: ctx.pname,
-      cargoHash: ctx.depsHash,
-      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
-    }),
-  lockOnlyResolve: {
-    kind: "command",
-    command: "cargo",
-    args: ["generate-lockfile"],
-    lockfile: "Cargo.lock",
-    // The host-side resolve runs deny-by-default (ADR 0005 / dustcastle-4ky): it
-    // gets an isolated, throwaway CARGO_HOME and the shared env floor, PLUS the
-    // rustup vars a `cargo` shim needs to resolve the toolchain. CARGO_NET_OFFLINE
-    // is deliberately NOT passed through, so the one-time resolve runs online.
-    execution: {
-      isolatedHomeEnv: "CARGO_HOME",
-      extraEnv: ["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
-    },
-  },
-  // No impuritySignal / impureInstall: Cargo builds pure unconditionally in v1.
+  generateToolchain: generateRustToolchain,
+  // The crates index — the standing Build Egress for a cargo repo (ADR 0012).
+  // registryHost is required on every descriptor now that egress no longer branches
+  // on purity.
+  registryHost: "index.crates.io",
+  // The in-Sandbox install (ADR 0012 always-impure): `cargo fetch` downloads the
+  // committed Cargo.lock's crates into CARGO_HOME, so `cargo test` runs offline
+  // against them. Every detected Ecosystem installs in-Sandbox now, so cargo
+  // carries an install command.
+  installCommand: ["cargo fetch"],
 };
 
 export const RUST_MANAGERS = { cargo } satisfies Partial<Record<PackageManager, PackageManagerDescriptor>>;
@@ -44,15 +39,15 @@ export const RUST_ECOSYSTEM: EcosystemDescriptor = {
   managers: ["cargo"],
   defaultManager: "cargo",
   readToolchainVersion: readRustToolchainVersion,
-  // Generic loose detection covers Cargo.toml without Cargo.lock; cargo's
-  // lockOnlyResolve pins it once before the pure vendored build.
+  // In-Sandbox install staging (ADR 0012): `cargo fetch` populates the writable
+  // per-project CARGO_HOME basename (a loose Cargo.toml resolves in the same step).
+  // Offline mode is OFF so the fetch reaches the crates index in-Sandbox; the build
+  // cache points at writable /tmp.
   sandbox: {
     stageDir: CARGO_HOME_BASENAME,
-    storeSubpath: "",
     env: (bin) => ({
       PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
       CARGO_HOME: CARGO_HOME_BASENAME,
-      CARGO_NET_OFFLINE: "true",
       CARGO_TARGET_DIR: "/tmp/cargo-target",
     }),
   },

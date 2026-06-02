@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { CARGO_HOME_BASENAME } from "../../src/nix/rust.js";
+import { CARGO_HOME_BASENAME } from "../../src/ecosystems/rust.js";
 import { prepareRun } from "../../src/run/index.js";
 import { stageRustCrateProject, stageRustGitProject, stageRustProject } from "./fixture.js";
 
@@ -89,8 +89,7 @@ describe("dustcastle run — Rust pure path (dustcastle-gy5.2)", () => {
 
   e2e("vendors a real crates.io dependency under the aggregate hash and resolves it offline", async () => {
     // The gy5.2 happy path is zero-dependency; this proves a non-empty crates.io
-    // vendor tree builds+tests offline (dustcastle-kzw — the live half of the
-    // default-CI tripwire in src/nix/rust.test.ts).
+    // fetch builds+tests offline in-Sandbox (dustcastle-kzw).
     await expectRustFixtureOffline(stageRustCrateProject, "dustcastle-rust-crate-run-");
   });
 });

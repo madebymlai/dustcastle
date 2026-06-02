@@ -3,36 +3,25 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Detection } from "../detect/index.js";
-import { CARGO_HOME_BASENAME } from "../nix/rust.js";
+import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
-import { parseStorePath, parseVendorHashMismatch } from "./parse.js";
+import { parseStorePath } from "./parse.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
 
 export { physPath } from "./paths.js";
-export { parseVendorHashMismatch, parseStorePath } from "./parse.js";
+export { parseStorePath } from "./parse.js";
 export { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
-
-/** The canonical placeholder hash used to provoke Nix into reporting the real one. */
-const FAKE_VENDOR_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 export interface ProvisionSpec {
   /** The project directory to provision (its source is staged into the build). */
   readonly projectDir: string;
-  /** What detection concluded (ADR 0006) — selects the importer. */
+  /** What detection concluded (ADR 0006) — selects the Toolchain expression. */
   readonly detection: Detection;
   /**
-   * Known deps hash to skip discovery. The single honest hash for any ecosystem
-   * (each importer maps it onto its own Nix attr internally). When omitted, the
-   * store discovers it via a placeholder build (ADR 0004 — v1 has no
-   * dynamic-derivations).
+   * Known deps hash to skip discovery. Retained for API compatibility; unused now
+   * that the Store realizes only Toolchains (ADR 0012 — deps install in-Sandbox).
    */
   readonly depsHash?: string;
-  /**
-   * Provision impurely (ADR 0004 `allow`): build only the Toolchain into the
-   * Store and leave Project Deps to a container-side install under scoped egress.
-   * Only meaningful for ecosystems with impure install scripts (Node).
-   */
-  readonly impure?: boolean;
   /** Path to the nix-portable binary (defaults to the dustcastle-owned copy). */
   readonly nixPortable?: string;
   /** Physical rootless store root (defaults to ~/.nix-portable/nix/store). */
@@ -58,10 +47,10 @@ export interface Provisioned {
 }
 
 /**
- * Realize a project's Toolchain + Project Deps into the rootless Store (ADR
- * 0004/0008). Builds the importer expression via nix-portable; the `app` build
- * also runs `go test` offline in the Nix sandbox — the first green gate. Returns
- * the canonical store paths plus the physical root and active runtime mode.
+ * Realize a project's Toolchain into the rootless Store (ADR 0008/0012). The Store
+ * provision realizes ONLY the Toolchain — Project Deps install in-Sandbox via the
+ * sandcastle hook (ADR 0012, always-impure), so there is no deps FOD to build here.
+ * Returns the canonical Toolchain store path plus the physical root and runtime mode.
  */
 export function provisionStore(spec: ProvisionSpec): Provisioned {
   const physStoreRoot = spec.physStoreRoot ?? join(homedir(), ".nix-portable", "nix", "store");
@@ -77,21 +66,17 @@ export function provisionStore(spec: ProvisionSpec): Provisioned {
 
   // Route by the Package Manager descriptor in the Ecosystem Registry (ADR 0001:
   // internal curation, NOT a plugin system; ADR 0006: the lockfile names the
-  // manager, the manager selects the importer). `detection.packageManager` is the
-  // closed `PackageManager` union narrowed once at detection, and the Registry is
-  // exhaustive over it by construction (architecture review candidate 2), so the
+  // manager, the manager carries the Toolchain expression). `detection.packageManager`
+  // is the closed `PackageManager` union narrowed once at detection, and the Registry
+  // is exhaustive over it by construction (architecture review candidate 2), so the
   // store's old defensive `default:`/Registry-miss guard has retired — the lookup's
   // own honest throw is the single never-drop-a-gate net (ADR 0004) if a caller
   // ever widens the type.
   const descriptor = packageManagerDescriptor(spec.detection.packageManager);
 
-  // The honest provision gate (ADR 0001): bun carries one because nixpkgs has no
-  // canonical bun deps importer yet. Throw its EXISTING actionable reason rather
-  // than building it wrong (slice 2b caveat).
-  if (descriptor.provisionGate !== undefined) {
-    throw new Error(descriptor.provisionGate.reason);
-  }
-
+  // No provision gate any more (ADR 0012): every manager — bun included — provisions
+  // its Toolchain into the Store and installs its Project Deps impurely in-Sandbox,
+  // so there is no gated state to honour here.
   return provision(spec, ctx, descriptor);
 }
 
@@ -105,84 +90,35 @@ interface BuildContext {
 }
 
 /**
- * Provision one project from its Package Manager descriptor (collapses the old
- * provisionGo + provisionJs). The descriptor's `generateBuild` emits the importer
- * expression and declares the attribute names ({toolchain,deps,app}) to realize;
- * the two-pass discover-FOD-hash-then-build-offline flow (ADR 0004) is identical
- * across ecosystems. "Supports impure" is derived from the PRESENCE of an install-
- * script signal — node has one, go doesn't — reproducing today's Go vs JS branch.
- *
- * The output Provisioned hash is a single `depsHash` field — `""` for impure /
- * toolchain-only provisions.
+ * Provision one project's Toolchain from its Package Manager descriptor (ADR 0012,
+ * always-impure). The descriptor's `generateToolchain` emits a Toolchain-ONLY Nix
+ * expression (no deps FOD — Project Deps install in-Sandbox via the sandcastle hook),
+ * and the store realizes its single attr. `depsStorePath`/`depsHash` stay empty
+ * because the Store holds only the Toolchain now.
  */
 function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Provisioned {
-  const build = (depsHash: string) =>
-    descriptor.generateBuild({
-      pname: ctx.pname,
-      depsHash,
-      src: "./src",
-      // Thread the resolved Toolchain version (ADR 0006b) so the importer builds
-      // against the requested interpreter (Python; laimk-hse.3). Node/Go ignore it.
-      ...(spec.detection.toolchainVersion !== undefined
-        ? { toolchainVersion: spec.detection.toolchainVersion }
-        : {}),
-    });
-  const attrs = build(FAKE_VENDOR_HASH).attrs;
-  const write = (depsHash: string) =>
-    writeFileSync(join(ctx.buildDir, "default.nix"), build(depsHash).expression);
-  const realize = (attr: string) => parseStorePath(ctx.run(["-A", attr, "--no-out-link"]).stdout);
-  // Only an ecosystem with an install-script signal (node) can build impure; go has
-  // none, so it always takes the pure path even if a stray `impure` flag is set.
-  const supportsImpure = descriptor.impuritySignal !== undefined;
+  const build = descriptor.generateToolchain({
+    pname: ctx.pname,
+    // Thread the resolved Toolchain version (ADR 0006b) so the Toolchain build uses
+    // the requested interpreter (Python; laimk-hse.3). Node/Go/Rust ignore it.
+    ...(spec.detection.toolchainVersion !== undefined
+      ? { toolchainVersion: spec.detection.toolchainVersion }
+      : {}),
+  });
+  writeFileSync(join(ctx.buildDir, "default.nix"), build.expression);
 
-  if (supportsImpure && spec.impure === true) {
-    // Impure `allow` (ADR 0004/0005): realize only the Toolchain into the Store; the
-    // container installs deps under scoped egress. A placeholder hash is fine —
-    // `-A <toolchain>` never forces the deps derivation (Nix evaluates lazily).
-    write(FAKE_VENDOR_HASH);
-    const toolchain = ctx.run(["-A", attrs.toolchain, "--no-out-link"]);
-    if (toolchain.status !== 0) {
-      throw new Error(`store: toolchain build failed (exit ${toolchain.status}):\n${toolchain.stderr.slice(-2000)}`);
-    }
-    const toolchainStorePath = parseStorePath(toolchain.stdout);
-    return {
-      mode: ctx.mode,
-      physStoreRoot: ctx.physStoreRoot,
-      toolchainStorePath,
-      depsStorePath: "", // deps install in the container (impure); not in the Store
-      appStorePath: toolchainStorePath,
-      depsHash: "",
-    };
+  const toolchain = ctx.run(["-A", build.attr, "--no-out-link"]);
+  if (toolchain.status !== 0) {
+    throw new Error(`store: toolchain build failed (exit ${toolchain.status}):\n${toolchain.stderr.slice(-2000)}`);
   }
-
-  // Pure path. Pass 1: discover the deps hash if not supplied (ADR 0004).
-  let depsHash = spec.depsHash;
-  if (depsHash === undefined) {
-    write(FAKE_VENDOR_HASH);
-    const probe = ctx.run(["-A", attrs.deps, "--no-out-link"]);
-    depsHash = parseVendorHashMismatch(probe.stderr);
-    if (depsHash === undefined) {
-      throw new Error(`store: could not discover deps hash from build output:\n${probe.stderr.slice(-2000)}`);
-    }
-  }
-
-  // Pass 2: build for real. `-A <app>` triggers the deps FOD + the offline test gate.
-  write(depsHash);
-  const app = ctx.run(["-A", attrs.app, "--no-out-link"]);
-  if (app.status !== 0) {
-    throw new Error(`store: build/offline-test failed (exit ${app.status}):\n${app.stderr.slice(-2000)}`);
-  }
-
-  // The single depsHash holds the discovered/supplied FOD hash for all ecosystems.
-  // The per-importer Nix attr name (vendorHash / npmDepsHash / pythonDepsHash) is
-  // internal to each generateBuild adapter — the store/run layers never needed it.
+  const toolchainStorePath = parseStorePath(toolchain.stdout);
   return {
     mode: ctx.mode,
     physStoreRoot: ctx.physStoreRoot,
-    toolchainStorePath: realize(attrs.toolchain),
-    depsStorePath: realize(attrs.deps),
-    appStorePath: parseStorePath(app.stdout),
-    depsHash,
+    toolchainStorePath,
+    depsStorePath: "", // deps install in-Sandbox (ADR 0012); not realized in the Store
+    appStorePath: toolchainStorePath,
+    depsHash: "",
   };
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CARGO_HOME_BASENAME } from "../nix/rust.js";
+import { CARGO_HOME_BASENAME } from "./rust.js";
 import {
   ECOSYSTEMS,
   PACKAGE_MANAGERS,
@@ -8,11 +8,14 @@ import {
 } from "./index.js";
 
 // The Ecosystem Registry (ADR 0001: internal curation, NOT a plugin system) is
-// the single, closed set of descriptors the detect/store/impurity/pin/nix sites
+// the single, closed set of descriptors the detect/store/sandbox/egress sites
 // derive from. These tests are a parametrized round-trip over EVERY descriptor:
-// they pin the exact strings, importer derivation, gate reasons, and impurity
-// signals that today's dispatch sites encode, so the rest of the epic can fold
-// onto the Registry without changing behavior.
+// they pin the exact strings, Toolchain expression, install commands, and registry
+// hosts that the dispatch sites encode (ADR 0012: the Store realizes only the
+// Toolchain; Project Deps install in-Sandbox via the install command). The impurity
+// machinery (impuritySignal, the bun provisionGate, the impuritySignal↔installCommand
+// biconditional) is gone — every manager installs impurely (ADR 0012), so there is
+// no signal to read and no gate to honour.
 
 describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
   it("exposes the closed Ecosystem list, ordered go then node then python then rust", () => {
@@ -44,41 +47,42 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(d.lockfiles.length).toBeGreaterThan(0);
     });
 
-    it("generates a NixBuild whose attrs the store realizes", () => {
-      const build = d.generateBuild({ pname: "sample", depsHash: "sha256-AAA=", src: "./src" });
-      expect(build.attrs.toolchain.length).toBeGreaterThan(0);
-      expect(build.attrs.deps).toBe("deps");
-      expect(build.attrs.app).toBe("app");
-      expect(build.expression).toContain('pname = "sample');
+    it("generates a Toolchain-ONLY NixBuild the store realizes (no deps FOD)", () => {
+      const build = d.generateToolchain({ pname: "sample" });
+      expect(build.attr.length).toBeGreaterThan(0);
+      expect(build.expression).toContain('pname = "sample"');
+      // ADR 0012: the Store realizes only the Toolchain — no deps FOD / Importer.
+      expect(build.expression).not.toContain("fetchCargoVendor");
+      expect(build.expression).not.toContain("buildNpmPackage");
+      expect(build.expression).not.toContain("pip download");
+      expect(build.expression).not.toContain("vendorHash");
     });
-
-    // outputHashField removed — Provisioned now uses a single depsHash field.
   });
 
-  describe("importer derivation reproduces today's JS_IMPORTERS map exactly", () => {
-    it.each(["npm", "pnpm", "yarn", "bun"] as const)("%s", (pm) => {
-      const build = packageManagerDescriptor(pm).generateBuild({ pname: "p", depsHash: "sha256-AAA=" });
-      // The toolchain attr is the contract the store stages: nodejs for JS, go for Go.
-      expect(build.attrs.toolchain).toBe("nodejs");
+  describe("the Toolchain attr each manager realizes (ADR 0001/0012)", () => {
+    it.each(["npm", "pnpm", "yarn", "bun"] as const)("%s realizes the nodejs Toolchain", (pm) => {
+      const build = packageManagerDescriptor(pm).generateToolchain({ pname: "p" });
+      expect(build.attr).toBe("nodejs");
+      expect(build.expression).toContain("pkgs.nodejs");
     });
 
-    it("go realizes the go toolchain attr", () => {
-      const build = packageManagerDescriptor("go").generateBuild({ pname: "p", depsHash: "sha256-AAA=" });
-      expect(build.attrs.toolchain).toBe("go");
+    it("go realizes the go Toolchain attr", () => {
+      const build = packageManagerDescriptor("go").generateToolchain({ pname: "p" });
+      expect(build.attr).toBe("go");
+      expect(build.expression).toContain("pkgs.go");
     });
 
-    it("cargo realizes the Rust toolchain attr", () => {
-      const build = packageManagerDescriptor("cargo").generateBuild({ pname: "p", depsHash: "sha256-AAA=" });
-      expect(build.attrs.toolchain).toBe("toolchain");
-      expect(build.expression).toContain("fetchCargoVendor");
-      expect(build.expression).toContain('cargoHash = "sha256-AAA="');
+    it("cargo realizes the Rust Toolchain attr (rustc + cargo + cc, no deps FOD)", () => {
+      const build = packageManagerDescriptor("cargo").generateToolchain({ pname: "p" });
+      expect(build.attr).toBe("toolchain");
+      expect(build.expression).toContain("pkgs.rustc");
+      expect(build.expression).toContain("pkgs.cargo");
     });
 
     it("cargo ignores the recorded Toolchain version in v1 (builds with nixpkgs default)", () => {
-      const unpinned = packageManagerDescriptor("cargo").generateBuild({ pname: "p", depsHash: "sha256-AAA=" });
-      const pinned = packageManagerDescriptor("cargo").generateBuild({
+      const unpinned = packageManagerDescriptor("cargo").generateToolchain({ pname: "p" });
+      const pinned = packageManagerDescriptor("cargo").generateToolchain({
         pname: "p",
-        depsHash: "sha256-AAA=",
         toolchainVersion: "1.76.0",
       });
 
@@ -86,92 +90,51 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
   });
 
-  describe("the bun gate is a first-class honest state (ADR 0001), not an ad-hoc throw", () => {
-    it("bun carries a provisionGate with its actionable no-canonical-importer reason", () => {
-      const gate = packageManagerDescriptor("bun").provisionGate;
-      expect(gate).toBeDefined();
-      expect(gate?.reason).toMatch(/bun/i);
-      expect(gate?.reason).toMatch(/no canonical|not yet supported/i);
+  describe("the impurity machinery is gone (ADR 0012 — every manager installs impurely)", () => {
+    // No more impuritySignal, no more biconditional, no bun provisionGate: every
+    // detected manager installs impurely in-Sandbox, so there is no signal to read
+    // and no gate to honour. These pin the ABSENCE so a re-added field fails the test.
+    it.each([...PACKAGE_MANAGERS])("%s carries no impuritySignal (the lockfile reader is gone)", (pm) => {
+      const d = packageManagerDescriptor(pm) as unknown as Record<string, unknown>;
+      expect(d.impuritySignal).toBeUndefined();
     });
 
-    it.each(["npm", "pnpm", "yarn", "go", "cargo"] as const)("%s has no provisionGate", (pm) => {
-      expect(packageManagerDescriptor(pm).provisionGate).toBeUndefined();
-    });
-  });
-
-  describe("the impurity signal reads straight from the lockfile (ADR 0004)", () => {
-    it("npm fires when the lockfile records hasInstallScript", () => {
-      const sig = packageManagerDescriptor("npm").impuritySignal;
-      expect(sig?.lockfile).toBe("package-lock.json");
-      expect(sig?.needsImpurity(JSON.stringify({ packages: { "node_modules/x": { hasInstallScript: true } } }))).toBe(
-        true,
-      );
-      expect(sig?.needsImpurity(JSON.stringify({ packages: { "node_modules/x": {} } }))).toBe(false);
+    it.each([...PACKAGE_MANAGERS])("%s carries no provisionGate (bun's gate is dropped)", (pm) => {
+      const d = packageManagerDescriptor(pm) as unknown as Record<string, unknown>;
+      expect(d.provisionGate).toBeUndefined();
     });
 
-    it("pnpm fires when the lockfile records requiresBuild: true", () => {
-      const sig = packageManagerDescriptor("pnpm").impuritySignal;
-      expect(sig?.lockfile).toBe("pnpm-lock.yaml");
-      expect(sig?.needsImpurity("  x:\n    requiresBuild: true\n")).toBe(true);
-      expect(sig?.needsImpurity("  x:\n    resolution: {}\n")).toBe(false);
-    });
-
-    it.each(["yarn", "bun"] as const)("%s carries a present-but-always-false signal (settled by design)", (pm) => {
-      const sig = packageManagerDescriptor(pm).impuritySignal;
-      expect(sig).toBeDefined();
-      // The signal exists (it has a lockfile name) but the lockfile cannot carry a
-      // script flag, so it always reads false — honest, not a gap.
-      expect(sig?.needsImpurity("anything")).toBe(false);
-    });
-
-    it("pip carries a conservative-pure signal over requirements.txt (laimk-hse.4)", () => {
-      // pip consumes requirements.txt directly, which has no in-file wheel-vs-sdist
-      // signal, so the static reader is conservative-pure; --only-binary=:all: keeps
-      // it honest at build time. The richer uv.lock/poetry.lock readers live in
-      // src/impurity/python.ts and become each manager's signal when uv/poetry land.
-      const sig = packageManagerDescriptor("pip").impuritySignal;
-      expect(sig?.lockfile).toBe("requirements.txt");
-      expect(sig?.needsImpurity("idna==3.7 --hash=sha256:aaa")).toBe(false);
-    });
-
-    it("go has no impuritySignal — it builds pure unconditionally", () => {
-      // Go has no impure install scripts; a manager with no signal is always pure.
-      expect(packageManagerDescriptor("go").impuritySignal).toBeUndefined();
-    });
-
-    it("cargo has no impuritySignal — it builds pure unconditionally", () => {
-      expect(packageManagerDescriptor("cargo").impuritySignal).toBeUndefined();
+    it("bun installs through the normal path, with no gate", () => {
+      const d = packageManagerDescriptor("bun") as unknown as Record<string, unknown>;
+      expect(d.provisionGate).toBeUndefined();
+      // bun provisions like every other manager: a real install command, no gate.
+      expect(packageManagerDescriptor("bun").installCommand).toEqual(["bun install --frozen-lockfile"]);
     });
   });
 
-  describe("the frozen impureInstall is present iff impurity is reachable (dustcastle-bbg.3)", () => {
-    // Impurity is reachable for any manager whose descriptor carries an
-    // `impuritySignal` (decideImpurity is ecosystem-agnostic), so the guarantee
-    // that every such manager has an in-container install command is the invariant:
-    // a manager carries `impureInstall` IFF it carries `impuritySignal`. go has
-    // neither (it never goes impure); the other seven have both. This keeps a
-    // half-added manager honest — anything that can reach the impure path is proven
-    // to have an install command, without leaning on the type system (the field is
-    // legitimately optional, since go has none).
-    it.each([...PACKAGE_MANAGERS])("%s has impureInstall iff it has impuritySignal", (pm) => {
-      const d = packageManagerDescriptor(pm);
-      expect(d.impureInstall !== undefined).toBe(d.impuritySignal !== undefined);
+  describe("every manager carries a canonical install command (ADR 0012 always-impure)", () => {
+    // Deps now ALWAYS install in-Sandbox via the sandcastle hook (ADR 0012): there is
+    // no pure-vs-impure decision, so EVERY detected manager must carry an install
+    // command — go and cargo included (formerly pure-only). The install runs the real
+    // Package Manager, frozen to the committed lockfile where possible, resolving when not.
+    it.each([...PACKAGE_MANAGERS])("%s carries a non-empty installCommand", (pm) => {
+      const cmds = packageManagerDescriptor(pm).installCommand;
+      expect(cmds).toBeDefined();
+      expect(cmds.length).toBeGreaterThan(0);
     });
 
-    it("go and cargo have neither (they build pure unconditionally)", () => {
-      expect(packageManagerDescriptor("go").impureInstall).toBeUndefined();
-      expect(packageManagerDescriptor("cargo").impureInstall).toBeUndefined();
+    it("go fetches its modules in-Sandbox, cargo fetches its crates", () => {
+      expect(packageManagerDescriptor("go").installCommand).toEqual(["go mod download"]);
+      expect(packageManagerDescriptor("cargo").installCommand).toEqual(["cargo fetch"]);
     });
 
-    // The Build Egress host is the NETWORK half of impureInstall (the install runs,
-    // and it reaches this registry), so it shares the same biconditional: a manager
-    // carries `registryHost` IFF it carries `impuritySignal`. This keeps a half-added
-    // manager honest — anything that can reach the impure path is proven to name the
-    // registry its install fetches from, so egress.ts never silently reaches no host
-    // (architecture review candidate 1). go/cargo have neither (they build pure).
-    it.each([...PACKAGE_MANAGERS])("%s has registryHost iff it has impuritySignal", (pm) => {
-      const d = packageManagerDescriptor(pm);
-      expect(d.registryHost !== undefined).toBe(d.impuritySignal !== undefined);
+    // Standing egress (ADR 0012): egress no longer branches on purity, so EVERY
+    // detected manager contributes its registry. `registryHost` is therefore REQUIRED
+    // on every descriptor (go/cargo included) — proven at `tsc`, not by a runtime
+    // biconditional — so a polyglot repo opens every registry and egress.ts never
+    // silently reaches no host (architecture review candidate 1).
+    it.each([...PACKAGE_MANAGERS])("%s carries a required registryHost", (pm) => {
+      expect(packageManagerDescriptor(pm).registryHost.length).toBeGreaterThan(0);
     });
 
     it("the node managers name their registry, the python managers name pypi", () => {
@@ -184,46 +147,45 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("poetry").registryHost).toBe("pypi.org");
     });
 
-    it("go and cargo name no registry (no Build Egress — they build pure)", () => {
-      expect(packageManagerDescriptor("go").registryHost).toBeUndefined();
-      expect(packageManagerDescriptor("cargo").registryHost).toBeUndefined();
+    it("go names the module proxy and cargo names the crates index (standing Build Egress)", () => {
+      expect(packageManagerDescriptor("go").registryHost).toBe("proxy.golang.org");
+      expect(packageManagerDescriptor("cargo").registryHost).toBe("index.crates.io");
     });
 
     describe("node managers install strictly from the committed lockfile (frozen/immutable)", () => {
       it("npm runs npm ci", () => {
-        expect(packageManagerDescriptor("npm").impureInstall).toEqual(["npm ci"]);
+        expect(packageManagerDescriptor("npm").installCommand).toEqual(["npm ci"]);
       });
       it("pnpm runs a frozen-lockfile install", () => {
-        expect(packageManagerDescriptor("pnpm").impureInstall).toEqual(["pnpm install --frozen-lockfile"]);
+        expect(packageManagerDescriptor("pnpm").installCommand).toEqual(["pnpm install --frozen-lockfile"]);
       });
       it("yarn runs a frozen-lockfile install", () => {
-        expect(packageManagerDescriptor("yarn").impureInstall).toEqual(["yarn install --frozen-lockfile"]);
+        expect(packageManagerDescriptor("yarn").installCommand).toEqual(["yarn install --frozen-lockfile"]);
       });
-      it("bun runs a frozen-lockfile install (uniform, though its provisionGate fires first)", () => {
-        expect(packageManagerDescriptor("bun").impureInstall).toEqual(["bun install --frozen-lockfile"]);
+      it("bun runs a frozen-lockfile install through the normal path (no gate)", () => {
+        expect(packageManagerDescriptor("bun").installCommand).toEqual(["bun install --frozen-lockfile"]);
       });
     });
 
-    describe("python managers install into ./site (where the pure path stages and PYTHONPATH points)", () => {
-      // The lists are CONSTRUCTED from each manager's existing `exportFrontEnd` plus
-      // one shared pip-into-site command, so the export string is single-sourced
-      // (not duplicated as a literal). pip consumes requirements.txt directly, so it
-      // has no export step — just the shared install.
+    describe("python managers install into ./site (where the install lands and PYTHONPATH points)", () => {
+      // The uv/poetry lists prepend their in-Sandbox `export` step before one shared
+      // pip-into-site command. pip consumes requirements.txt directly, so it has no
+      // export step — just the shared install (ADR 0012, always-impure in-Sandbox).
       const sharedPipInstall = "pip install --require-hashes -r requirements.txt --target site";
 
-      it("pip is just the shared pip-into-site install (no export front-end)", () => {
-        expect(packageManagerDescriptor("pip").impureInstall).toEqual([sharedPipInstall]);
+      it("pip is just the shared pip-into-site install (no export step)", () => {
+        expect(packageManagerDescriptor("pip").installCommand).toEqual([sharedPipInstall]);
       });
 
       it("uv exports its hash-pinned requirements, then installs them into site", () => {
-        expect(packageManagerDescriptor("uv").impureInstall).toEqual([
+        expect(packageManagerDescriptor("uv").installCommand).toEqual([
           "uv export --format requirements-txt -o requirements.txt",
           sharedPipInstall,
         ]);
       });
 
       it("poetry exports its hash-pinned requirements, then installs them into site", () => {
-        expect(packageManagerDescriptor("poetry").impureInstall).toEqual([
+        expect(packageManagerDescriptor("poetry").installCommand).toEqual([
           "poetry export --format requirements.txt -o requirements.txt",
           sharedPipInstall,
         ]);
@@ -231,66 +193,16 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     });
   });
 
-  describe("pin-then-pure lockOnlyResolve state (ADR 0006c)", () => {
-    it("npm resolves to a package-lock-only command", () => {
-      const r = packageManagerDescriptor("npm").lockOnlyResolve;
-      expect(r).toEqual({
-        kind: "command",
-        command: "npm",
-        args: ["install", "--package-lock-only"],
-        lockfile: "package-lock.json",
-      });
-    });
-
-    it("pnpm resolves to a lockfile-only command", () => {
-      const r = packageManagerDescriptor("pnpm").lockOnlyResolve;
-      expect(r).toEqual({
-        kind: "command",
-        command: "pnpm",
-        args: ["install", "--lockfile-only"],
-        lockfile: "pnpm-lock.yaml",
-      });
-    });
-
-    it("yarn is a gated state carrying its actionable reason (no clean lockfile-only resolve)", () => {
-      const r = packageManagerDescriptor("yarn").lockOnlyResolve;
-      expect(r?.kind).toBe("gated");
-      if (r?.kind === "gated") expect(r.reason).toMatch(/yarn/i);
-    });
-
-    it.each(["bun", "go"] as const)("%s has no lockOnlyResolve", (pm) => {
-      // bun is gated at provision; go has no loose pin step.
-      expect(packageManagerDescriptor(pm).lockOnlyResolve).toBeUndefined();
-    });
-
-    it("cargo resolves a loose Cargo.toml with `cargo generate-lockfile` (dustcastle-gy5.4)", () => {
-      const r = packageManagerDescriptor("cargo").lockOnlyResolve;
-      expect(r).toEqual({
-        kind: "command",
-        command: "cargo",
-        args: ["generate-lockfile"],
-        lockfile: "Cargo.lock",
-        // The host-side resolve isolates CARGO_HOME and scopes env under the shared
-        // deny-by-default floor + the rustup vars (dustcastle-k4d / ADR 0005).
-        execution: {
-          isolatedHomeEnv: "CARGO_HOME",
-          extraEnv: ["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
-        },
-      });
-    });
-
-    it("pip resolves a loose manifest with `uv pip compile --generate-hashes` (laimk-hse.5)", () => {
-      // The loose Python case (unpinned/hash-less requirements.txt, abstract
-      // pyproject) is resolved ONCE into a VISIBLE, hash-pinned requirements.txt
-      // via the validated spike command (ADR 0006c amendment). uv is a pure export
-      // front-end to the pip-FOD, not a separate Importer.
-      const r = packageManagerDescriptor("pip").lockOnlyResolve;
-      expect(r).toEqual({
-        kind: "command",
-        command: "uv",
-        args: ["pip", "compile", "--generate-hashes", "requirements.in", "-o", "requirements.txt"],
-        lockfile: "requirements.txt",
-      });
+  describe("the FOD/Importer machinery is gone (ADR 0012 — deps install in-Sandbox)", () => {
+    it.each(PACKAGE_MANAGERS)("%s carries no pin-then-pure or export front-end descriptor data", (pm) => {
+      const d = packageManagerDescriptor(pm) as unknown as Record<string, unknown>;
+      // `lockOnlyResolve` (pin-then-pure) and `exportFrontEnd` only fed the deleted
+      // deps FOD; the in-Sandbox install replaces both. They are off the descriptor.
+      expect(d.lockOnlyResolve).toBeUndefined();
+      expect(d.exportFrontEnd).toBeUndefined();
+      // `generateBuild` (the FOD expression) is replaced by `generateToolchain`.
+      expect(d.generateBuild).toBeUndefined();
+      expect(typeof packageManagerDescriptor(pm).generateToolchain).toBe("function");
     });
   });
 
@@ -304,12 +216,6 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("pip").lockfiles).toEqual(["requirements.txt"]);
     });
 
-    // depsHash replaced outputHashField — pip stores its hash in the single field.
-
-    it("pip has no provisionGate (the pip-FOD is supported, unlike bun)", () => {
-      expect(packageManagerDescriptor("pip").provisionGate).toBeUndefined();
-    });
-
     it("python's manifest markers are pyproject.toml/requirements.txt/setup.py", () => {
       const python = ecosystemFor("python");
       expect(python.manifests).toEqual(["pyproject.toml", "requirements.txt", "setup.py"]);
@@ -318,134 +224,55 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(python.defaultManager).toBe("pip");
     });
 
-    it("generates a pip-FOD NixBuild whose attrs the store realizes", () => {
-      const build = packageManagerDescriptor("pip").generateBuild({
+    it("generates a Toolchain-ONLY NixBuild the store realizes (the interpreter with pip)", () => {
+      const build = packageManagerDescriptor("pip").generateToolchain({ pname: "sample" });
+      expect(build.attr).toBe("python");
+      // ADR 0012: the Toolchain ships pip + pytest; the deps pip-FOD is gone.
+      expect(build.expression).toContain("withPackages");
+      expect(build.expression).not.toContain("pip download");
+      expect(build.expression).not.toContain("outputHash");
+    });
+
+    it("builds the Toolchain against the resolved interpreter (ADR 0006b)", () => {
+      const build = packageManagerDescriptor("pip").generateToolchain({
         pname: "sample",
-        depsHash: "sha256-AAA=",
-        src: "./src",
+        toolchainVersion: "python311",
       });
-      expect(build.attrs).toEqual({ toolchain: "python", deps: "deps", app: "app" });
-      // The pip-FOD download step, hash-pinned (ADR 0006 amendment).
-      expect(build.expression).toContain("pip download");
-      expect(build.expression).toContain("--only-binary=:all:");
-      expect(build.expression).toContain('outputHash = "sha256-AAA="');
+      expect(build.expression).toContain("pkgs.python311");
     });
   });
 
-  describe("the uv Package Manager is an export front-end to the pip-FOD (laimk-hse.6)", () => {
-    it("registers uv as a python Package Manager that builds via the pip-FOD (not uv2nix)", () => {
+  describe("the uv Package Manager shares the Python Toolchain (laimk-hse.6)", () => {
+    it("registers uv as a python Package Manager", () => {
       const uv = packageManagerDescriptor("uv");
       expect(uv.ecosystem).toBe("python");
-      // That the build IS the pip-FOD (not a separate importer) is asserted by the
-      // "generates the SAME pip-FOD NixBuild as pip" test below.
     });
 
     it("signals on uv.lock (the real lockfile that beats requirements.txt)", () => {
       expect(packageManagerDescriptor("uv").lockfiles).toEqual(["uv.lock"]);
     });
 
-    // depsHash replaced outputHashField — uv stores its hash in the single field.
-
-    it("has no provisionGate (the pip-FOD is supported)", () => {
-      expect(packageManagerDescriptor("uv").provisionGate).toBeUndefined();
-    });
-
-    it("carries the `uv export --format requirements-txt` front-end that feeds the pip-FOD", () => {
-      // uv produces the Importer's hash-pinned requirements via `uv export` — carried
-      // as descriptor data, NOT a separate Importer (ADR 0006 amendment).
-      const front = packageManagerDescriptor("uv").exportFrontEnd;
-      expect(front).toEqual({
-        command: "uv",
-        args: ["export", "--format", "requirements-txt", "-o", "requirements.txt"],
-        requirementsFile: "requirements.txt",
-      });
-    });
-
-    it("reuses the uv.lock impurity reader (laimk-hse.4): sdist-only fires, wheels stay pure", () => {
-      const sig = packageManagerDescriptor("uv").impuritySignal;
-      expect(sig?.lockfile).toBe("uv.lock");
-      // A package with an sdist but no wheels is sdist-only → impure.
-      expect(
-        sig?.needsImpurity("[[package]]\nname = \"x\"\n\n[package.sdist]\nurl = \"x.tar.gz\"\n"),
-      ).toBe(true);
-      // A package with wheels stays pure.
-      expect(
-        sig?.needsImpurity("[[package]]\nname = \"x\"\n\n[[package.wheels]]\nurl = \"x.whl\"\n"),
-      ).toBe(false);
-    });
-
-    it("generates the SAME pip-FOD NixBuild as pip (uv only changes how requirements are produced)", () => {
-      const build = packageManagerDescriptor("uv").generateBuild({
-        pname: "sample",
-        depsHash: "sha256-AAA=",
-        src: "./src",
-      });
-      expect(build.attrs).toEqual({ toolchain: "python", deps: "deps", app: "app" });
-      expect(build.expression).toContain("pip download");
-      expect(build.expression).toContain("--only-binary=:all:");
-      expect(build.expression).toContain('outputHash = "sha256-AAA="');
+    it("shares the SAME Python Toolchain as pip (only the install command differs)", () => {
+      const uvBuild = packageManagerDescriptor("uv").generateToolchain({ pname: "sample" });
+      const pipBuild = packageManagerDescriptor("pip").generateToolchain({ pname: "sample" });
+      expect(uvBuild).toEqual(pipBuild);
     });
   });
 
-  describe("the poetry Package Manager is an export front-end to the pip-FOD (laimk-hse.7)", () => {
-    it("registers poetry as a python Package Manager that builds via the pip-FOD (not poetry2nix)", () => {
+  describe("the poetry Package Manager shares the Python Toolchain (laimk-hse.7)", () => {
+    it("registers poetry as a python Package Manager", () => {
       const poetry = packageManagerDescriptor("poetry");
       expect(poetry.ecosystem).toBe("python");
-      // The pip-FOD build (not poetry2nix) is asserted by the "generates the SAME
-      // pip-FOD NixBuild as pip" test below.
     });
 
     it("signals on poetry.lock", () => {
       expect(packageManagerDescriptor("poetry").lockfiles).toEqual(["poetry.lock"]);
     });
 
-    // depsHash replaced outputHashField — poetry stores its hash in the single field.
-
-    it("carries the `poetry export` front-end that feeds the pip-FOD", () => {
-      // poetry produces the Importer's hash-pinned requirements via `poetry export`
-      // — carried as descriptor data, NOT a separate Importer / poetry2nix.
-      const front = packageManagerDescriptor("poetry").exportFrontEnd;
-      expect(front).toEqual({
-        command: "poetry",
-        // Hashes are ON by default; no `--without-hashes` flag (it is a boolean
-        // opt-out, and poetry-plugin-export 1.10 rejects the `=false` value form
-        // the laimk-hse.7 spike caught).
-        args: ["export", "--format", "requirements.txt", "-o", "requirements.txt"],
-        requirementsFile: "requirements.txt",
-      });
-    });
-
-    it("has no provisionGate (the laimk-hse.7 spike proved poetry export hermetic, like uv)", () => {
-      // The spike validated `poetry export` end-to-end through the pip-FOD (pure,
-      // offline, same aggregate hash as `uv export`), so the honest bun-gate the
-      // unproven front-end once warranted (ADR 0001) is dropped — poetry now
-      // provisions through the same pure path as uv/pip.
-      expect(packageManagerDescriptor("poetry").provisionGate).toBeUndefined();
-    });
-
-    it("reuses the poetry.lock impurity reader (laimk-hse.4): sdist-only fires, wheels stay pure", () => {
-      const sig = packageManagerDescriptor("poetry").impuritySignal;
-      expect(sig?.lockfile).toBe("poetry.lock");
-      // A package whose files section lists only an sdist (no wheel) is impure.
-      expect(
-        sig?.needsImpurity('[[package]]\nname = "x"\n\n[package.files]\n"x-1.0.tar.gz" = "sha256:aaa"\n'),
-      ).toBe(true);
-      // A package with a wheel stays pure.
-      expect(
-        sig?.needsImpurity('[[package]]\nname = "x"\n\n[package.files]\n"x-1.0-py3-none-any.whl" = "sha256:bbb"\n'),
-      ).toBe(false);
-    });
-
-    it("generates the SAME pip-FOD NixBuild as pip (poetry only changes how requirements are produced)", () => {
-      const build = packageManagerDescriptor("poetry").generateBuild({
-        pname: "sample",
-        depsHash: "sha256-AAA=",
-        src: "./src",
-      });
-      expect(build.attrs).toEqual({ toolchain: "python", deps: "deps", app: "app" });
-      expect(build.expression).toContain("pip download");
-      expect(build.expression).toContain("--only-binary=:all:");
-      expect(build.expression).toContain('outputHash = "sha256-AAA="');
+    it("shares the SAME Python Toolchain as pip (only the install command differs)", () => {
+      const poetryBuild = packageManagerDescriptor("poetry").generateToolchain({ pname: "sample" });
+      const pipBuild = packageManagerDescriptor("pip").generateToolchain({ pname: "sample" });
+      expect(poetryBuild).toEqual(pipBuild);
     });
   });
 
@@ -493,28 +320,30 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("cargo").lockfiles).toEqual(["Cargo.lock"]);
     });
 
-    describe("each Ecosystem carries its pure-staging sandbox facet (ADR 0002)", () => {
-      // The PURE-path staging knowledge — which worktree dir deps land in and which
-      // subpath of the deps Store to copy from — lives on the descriptor, not in a
-      // per-Ecosystem `if` ladder in setupFor. `stageCommands` consumes these.
-      it("node stages node_modules from the deps Store's node_modules subpath", () => {
-        const { stageDir, storeSubpath } = ecosystemFor("node").sandbox;
-        expect({ stageDir, storeSubpath }).toEqual({ stageDir: "node_modules", storeSubpath: "node_modules" });
+    describe("each Ecosystem carries its in-Sandbox install stage dir (ADR 0002/0012)", () => {
+      // The stage dir the in-Sandbox install lands in lives on the descriptor, not in
+      // a per-Ecosystem `if` ladder in setupFor. The deleted `storeSubpath` (the pure
+      // Store-staging source) is gone — deps install in-Sandbox, not copied from the Store.
+      it("node installs into node_modules", () => {
+        expect(ecosystemFor("node").sandbox.stageDir).toBe("node_modules");
       });
 
-      it("python stages site from the pip-FOD's site subpath (PYTHONPATH points there)", () => {
-        const { stageDir, storeSubpath } = ecosystemFor("python").sandbox;
-        expect({ stageDir, storeSubpath }).toEqual({ stageDir: "site", storeSubpath: "site" });
+      it("python installs into site (PYTHONPATH points there)", () => {
+        expect(ecosystemFor("python").sandbox.stageDir).toBe("site");
       });
 
-      it("go stages vendor from the WHOLE deps Store path (no subpath — the store path IS vendor)", () => {
-        const { stageDir, storeSubpath } = ecosystemFor("go").sandbox;
-        expect({ stageDir, storeSubpath }).toEqual({ stageDir: "vendor", storeSubpath: "" });
+      it("go's stage dir is vendor", () => {
+        expect(ecosystemFor("go").sandbox.stageDir).toBe("vendor");
       });
 
-      it("rust stages the CARGO_HOME basename from the WHOLE deps Store path", () => {
-        const { stageDir, storeSubpath } = ecosystemFor("rust").sandbox;
-        expect({ stageDir, storeSubpath }).toEqual({ stageDir: CARGO_HOME_BASENAME, storeSubpath: "" });
+      it("rust installs into the CARGO_HOME basename", () => {
+        expect(ecosystemFor("rust").sandbox.stageDir).toBe(CARGO_HOME_BASENAME);
+      });
+
+      it("no Ecosystem carries the deleted pure-staging storeSubpath", () => {
+        for (const eco of ["node", "python", "go", "rust"] as const) {
+          expect((ecosystemFor(eco).sandbox as unknown as Record<string, unknown>).storeSubpath).toBeUndefined();
+        }
       });
     });
 
@@ -544,23 +373,26 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
         });
       });
 
-      it("go vendors deps, turns the proxy off, points the build cache at /tmp", () => {
+      it("go fetches modules in-Sandbox (proxy on, no vendor), points the build cache at /tmp", () => {
+        // Always-impure (ADR 0012): `go mod download` fetches from the module proxy
+        // in-Sandbox, so GOPROXY is the default (not `off`) and deps are no longer
+        // vendored. The build cache still points at writable /tmp off the RO Store.
         expect(ecosystemFor("go").sandbox.env(bin)).toEqual({
           PATH: `${bin}:/usr/bin:/bin`,
-          GOFLAGS: "-mod=vendor",
-          GOPROXY: "off",
           GOTOOLCHAIN: "local",
           CGO_ENABLED: "0",
           GOCACHE: "/tmp/gocache",
+          GOMODCACHE: "/tmp/gomodcache",
           GOENV: "off",
         });
       });
 
-      it("rust points Cargo at the staged CARGO_HOME and forces offline mode", () => {
+      it("rust points Cargo at a writable CARGO_HOME and fetches crates in-Sandbox", () => {
+        // Always-impure (ADR 0012): `cargo fetch` downloads crates in-Sandbox, so
+        // offline mode is OFF; CARGO_HOME points at the writable per-project basename.
         expect(ecosystemFor("rust").sandbox.env(bin)).toEqual({
           PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
           CARGO_HOME: CARGO_HOME_BASENAME,
-          CARGO_NET_OFFLINE: "true",
           CARGO_TARGET_DIR: "/tmp/cargo-target",
         });
       });

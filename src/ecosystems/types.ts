@@ -1,5 +1,3 @@
-import type { NixBuild } from "../nix/go.js";
-
 /**
  * The Ecosystem Registry's type vocabulary (ADR 0001 — internal curation, NOT a
  * plugin system). These are the two closed, vetted unions the whole epic derives
@@ -8,9 +6,9 @@ import type { NixBuild } from "../nix/go.js";
  *   - an {@link EcosystemDescriptor} owns the DETECTION grain — how an Ecosystem
  *     recognises itself in a directory, resolves which Package Manager a repo
  *     uses, and reads its Toolchain version (ADR 0006a/b/d);
- *   - a {@link PackageManagerDescriptor} owns the DISPATCH grain — store
- *     provisioning (the Importer + output-hash field), the impurity signal, and
- *     the pin-then-pure resolve (ADR 0004/0006a/c).
+ *   - a {@link PackageManagerDescriptor} owns the DISPATCH grain — the Toolchain
+ *     Nix expression, the in-Sandbox install command, and the registry host
+ *     (ADR 0006a, ADR 0012).
  *
  * The `Detection` type lives here too — it is the Registry's output shape — and
  * is re-exported from `src/detect/index.ts` so existing import paths keep working.
@@ -22,14 +20,14 @@ export type Ecosystem = "node" | "go" | "python" | "rust";
 /**
  * The specific tool within an Ecosystem that owns a repo's dependency resolution
  * (CONTEXT.md: Package Manager). A closed union — the lockfile names one of these,
- * which selects the Importer. Go is still a Package Manager, not a special case.
+ * which selects its install command. Go is still a Package Manager, not a special case.
  */
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip" | "uv" | "poetry" | "cargo";
 
 /**
- * What detection concludes about one directory: which Ecosystem it is, the
- * package manager that signalled it, and therefore the Nix importer to run
- * (ADR 0006 — the lockfile names the manager, which selects the importer).
+ * What detection concludes about one directory: which Ecosystem it is and the
+ * package manager that signalled it (ADR 0006 — the lockfile names the manager,
+ * which selects the install command + registry host).
  */
 export interface Detection {
   readonly ecosystem: Ecosystem;
@@ -37,148 +35,56 @@ export interface Detection {
    * The closed Package Manager union, not a free string (laimk-mhg.6): detection
    * VALIDATES the resolved manager against the Registry at the single lockfile→
    * manager narrowing point as it builds the Detection, so every downstream
-   * dispatch site (store/impurity/pin/sandbox/run) is exhaustive by construction —
-   * a half-added Ecosystem fails at tsc, not at a runtime `default:`/Registry-miss.
+   * dispatch site (store/sandbox/run) is exhaustive by construction — a half-added
+   * Ecosystem fails at tsc, not at a runtime `default:`/Registry-miss.
    */
   readonly packageManager: PackageManager;
   /**
    * The runtime version the repo asks for, read from version files / manifests
-   * (ADR 0006b). The lockfile names the importer but not the toolchain version;
+   * (ADR 0006b). The lockfile names the manager but not the toolchain version;
    * for Go that comes from go.mod's `go` line. Undefined when unspecified.
    */
   readonly toolchainVersion?: string;
   /**
    * A resolvable-but-unpinned manifest: a `package.json` with no lockfile (ADR
-   * 0006c). dustcastle resolves it once into a generated lock, then builds pure —
-   * strictly better than going impure. Undefined/false when a lockfile pins it.
+   * 0006c). dustcastle's in-Sandbox install resolves it (ADR 0012); detection still
+   * surfaces the flag for callers. Undefined/false when a lockfile pins it.
    */
   readonly loose?: boolean;
 }
 
 /**
- * The uniform inputs every Importer needs to emit its expression. The store
- * passes the discovered/supplied deps hash and the staged `src` path; each
- * descriptor adapts these onto its generator's spec (vendorHash for Go,
- * npmDepsHash for npm, depsHash for pnpm/yarn, pythonDepsHash for pip/uv/poetry)
- * so the dispatch site stays uniform (CONTEXT.md: the Importer is a property of
- * the Package Manager).
+ * The inputs a Toolchain Nix expression needs (ADR 0001/0012). dustcastle realizes
+ * ONLY the Toolchain into the Store now — Project Deps install in-Sandbox via the
+ * sandcastle hook (ADR 0012, always-impure), so there is no deps FOD and no
+ * fixed-output deps hash here. Each descriptor adapts the resolved version as its
+ * semantics require.
  */
-export interface BuildContext {
+export interface ToolchainContext {
   /** Derivation name (typically the repo directory name). */
   readonly pname: string;
-  /** The fixed-output hash pinning the deps FOD (ADR 0004). */
-  readonly depsHash: string;
-  /** The Nix `src` path the build runs against (the store stages source here). */
-  readonly src?: string;
   /**
    * The resolved Toolchain version (ADR 0006b), threaded from `Detection`. Each
    * generator adapts it as its semantics require — Python reads it as the nixpkgs
-   * interpreter attr (`python311`) the pip-FOD builds against; Node/Go currently
-   * hardcode their runtime and ignore it. Undefined when detection found no version.
+   * interpreter attr (`python311`) the Toolchain is built from; Node/Go/Rust
+   * currently hardcode their runtime and ignore it. Undefined when detection
+   * found no version.
    */
   readonly toolchainVersion?: string;
 }
 
-/**
- * The lockfile-read impurity signal (ADR 0004), read straight from the lockfile
- * per manager rather than inferred from a failed build. Present for every JS
- * manager; `needsImpurity` reads true for npm/pnpm when the lockfile records a
- * script flag, and is always-false for yarn/bun (settled by design — their
- * lockfiles can't carry the flag, so faking one would be worse than honest).
- */
-export interface ImpuritySignal {
-  /** The lockfile that carries (or can't carry) the install-script signal. */
-  readonly lockfile: string;
-  /** Read the manager's lockfile text and decide whether an impure build is needed. */
-  readonly needsImpurity: (lockText: string | undefined) => boolean;
+/** A buildable Toolchain Nix expression plus the single attribute the store realizes. */
+export interface ToolchainBuild {
+  /** The Nix expression (a `default.nix` body) that emits the Toolchain derivation. */
+  readonly expression: string;
+  /** The attribute the store realizes via `nix-build -A <attr>` (CONTEXT.md: Toolchain). */
+  readonly attr: string;
 }
 
 /**
- * How the host-side loose-pin resolve must execute (ADR 0005 decision 1 /
- * dustcastle-4ky). The resolve is trusted + pre-Sandbox, but it must inherit NO
- * ambient host secret: it runs under a shared deny-by-default floor, plus only the
- * `extraEnv` this manager legitimately needs (cargo's rustup vars). When
- * `isolatedHomeEnv` is set, the runner binds it to a throwaway temp dir so the
- * resolve writes into an isolated, writable home (cargo's CARGO_HOME) rather than
- * the host's. Absent ⇒ the resolve runs under the bare floor. This is descriptor
- * DATA: the runner applies it mechanically with no Package-Manager name in sight.
- */
-export interface HostResolveExecution {
-  /**
-   * An env var the runner binds to a throwaway temp dir — the manager's isolated,
-   * writable home (cargo's `CARGO_HOME`). Absent ⇒ no isolated home is created.
-   */
-  readonly isolatedHomeEnv?: string;
-  /**
-   * Extra ambient env vars to pass through on top of the shared floor — the vars
-   * THIS manager legitimately needs (cargo's `RUSTUP_HOME`/`RUSTUP_TOOLCHAIN` for a
-   * rustup-shimmed toolchain). Everything else ambient is stripped.
-   */
-  readonly extraEnv?: readonly string[];
-}
-
-/**
- * The pin-then-pure lock-only resolve state (ADR 0006c). Either a runnable
- * `command` that produces a lockfile WITHOUT installing node_modules, or a
- * `gated` state carrying its actionable reason (yarn classic has no clean
- * lockfile-only resolve — the bun-gate honesty pattern). Absent when the manager
- * never needs pinning (bun is gated at provision; go has a real lockfile).
- */
-export type LockOnlyResolve =
-  | {
-      readonly kind: "command";
-      readonly command: string;
-      readonly args: readonly string[];
-      /** The lockfile this resolve generates — the visible, committed artifact. */
-      readonly lockfile: string;
-      /**
-       * How the host-side resolve must execute (env scoping + isolated home). Absent
-       * for managers (npm/pnpm) that need only the shared deny-by-default floor.
-       */
-      readonly execution?: HostResolveExecution;
-    }
-  | { readonly kind: "gated"; readonly reason: string };
-
-/**
- * A first-class, honest gate on a Package Manager (ADR 0001: a gated manager is a
- * Registry state, not an ad-hoc throw). bun carries one because nixpkgs has no
- * canonical bun deps importer yet — detection still routes bun, but provisioning
- * surfaces this reason rather than building it wrong.
- */
-export interface ProvisionGate {
-  readonly reason: string;
-}
-
-/**
- * The export FRONT-END a Package Manager runs to produce the pip-FOD's input — a
- * hash-pinned `requirements.txt` — from its own lockfile (ADR 0006 amendment). uv
- * carries `uv export --format requirements-txt` and poetry carries `poetry export`
- * (laimk-hse.7); the EXPORTED requirements then feed the SAME pip-FOD Importer, so
- * each is a front-end to that one Importer, NOT a separate importer / uv2nix /
- * poetry2nix. Absent for a manager that consumes its lockfile directly (pip reads
- * `requirements.txt` as-is).
- */
-export interface ExportFrontEnd {
-  /** The front-end binary to run (`uv`). */
-  readonly command: string;
-  /** Its args, emitting the hash-pinned requirements file (`export --format requirements-txt …`). */
-  readonly args: readonly string[];
-  /** The requirements file the export writes — the visible artifact the pip-FOD consumes. */
-  readonly requirementsFile: string;
-  /**
-   * How the host-side export must execute (env scoping + isolated home). The export
-   * is the SECOND host-side subprocess: like the loose-pin resolve, it runs through
-   * the shared scoped runner, so it inherits only the deny-by-default floor — plus
-   * any per-manager `extraEnv`/isolated home it declares. Absent for uv/poetry, which
-   * need only the bare floor.
-   */
-  readonly execution?: HostResolveExecution;
-}
-
-/**
- * The DISPATCH grain (CONTEXT.md: Package Manager). Everything the store, impurity
- * policy, and pin step key on for one Package Manager — owned in one place rather
- * than smeared across per-manager switches at each site.
+ * The DISPATCH grain (CONTEXT.md: Package Manager). Everything the store, the
+ * in-Sandbox install, and the standing egress key on for one Package Manager —
+ * owned in one place rather than smeared across per-manager switches at each site.
  */
 export interface PackageManagerDescriptor {
   /** The closed Package Manager name this descriptor keys on. */
@@ -189,79 +95,62 @@ export interface PackageManagerDescriptor {
    * The lockfile name(s) that signal this manager, in precedence order. A manager
    * usually has one; bun has two (`bun.lockb`, `bun.lock`).
    *
-   * The Nix Importer itself is NOT a field: it's emitted by {@link generateBuild}
-   * (the function that owns the expression), so it never needed a duplicate string
-   * label keyed in parallel (architecture review candidate 2).
+   * The Toolchain Nix expression is NOT a parallel string label: it's emitted by
+   * {@link generateToolchain} (the function that owns the expression), so it never
+   * needed a duplicate field keyed alongside (architecture review candidate 2).
    */
   readonly lockfiles: readonly string[];
-  /** Emit the Importer's Nix expression for a deps hash (ADR 0004). Uniform across managers. */
-  readonly generateBuild: (ctx: BuildContext) => NixBuild;
-  /** The lockfile-read impurity signal (ADR 0004). Absent for go (no impure install scripts). */
-  readonly impuritySignal?: ImpuritySignal;
-  /** The pin-then-pure lock-only resolve (ADR 0006c). Absent for gated/already-locked managers. */
-  readonly lockOnlyResolve?: LockOnlyResolve;
   /**
-   * The export front-end that produces the Importer's hash-pinned requirements from
-   * this manager's own lockfile (ADR 0006 amendment). Present for uv (`uv export`);
-   * absent for pip, which consumes `requirements.txt` directly.
+   * Emit the Toolchain's Nix expression (ADR 0001/0012). dustcastle realizes ONLY
+   * the Toolchain into the Store now — Project Deps install in-Sandbox via the
+   * sandcastle hook, so there is no deps FOD. Uniform across managers.
    */
-  readonly exportFrontEnd?: ExportFrontEnd;
+  readonly generateToolchain: (ctx: ToolchainContext) => ToolchainBuild;
   /**
-   * The frozen/immutable in-container install command(s) for the impure path
-   * (ADR 0004/0005). When deps were NOT pre-assembled in the Store, the real
-   * install — lifecycle/postinstall scripts included — runs in the container under
-   * scoped egress, with the manager that signalled. Each command installs strictly
-   * from the committed/exported requirements (frozen lockfile, `--require-hashes`),
-   * so an impure build still can't silently drift from the pinned deps.
+   * The canonical in-Sandbox install command(s) (CONTEXT.md: Install command; ADR
+   * 0012, always-impure). The real Package Manager runs in-Sandbox via the sandcastle
+   * hook — lifecycle/postinstall scripts included — frozen to the committed lockfile
+   * where one is present (`npm ci`, `pnpm install --frozen-lockfile`, `uv sync`,
+   * `cargo build`), resolving when not. Its assembled output is what the deps cache
+   * stores. uv/poetry prepend their own `export` step before the shared pip install.
    *
-   * PRESENT for every manager that can reach the impure path — i.e. exactly those
-   * with an {@link impuritySignal} (npm/pnpm/yarn/bun + pip/uv/poetry). ABSENT for
-   * go, which has no `impuritySignal` and builds pure unconditionally. That biconditional
-   * (`impureInstall` iff `impuritySignal`) is the invariant `ecosystems.test.ts` pins —
-   * the field is legitimately optional, so the guarantee is a test, not the type system.
+   * REQUIRED on EVERY descriptor (go/cargo included): there is no pure-vs-impure
+   * decision any more, so every detected manager installs in-Sandbox — proven at
+   * `tsc`, not by a runtime biconditional against a deleted impurity signal.
    */
-  readonly impureInstall?: readonly string[];
+  readonly installCommand: readonly string[];
   /**
-   * The registry host this manager's impure install fetches from — the Build Egress
-   * the allowlist proxy opens on an impure runtime build (ADR 0005; CONTEXT.md:
-   * "the package registry the Package Manager names"). npm/pnpm/bun → registry.npmjs.org,
-   * yarn → registry.yarnpkg.com, pip/uv/poetry → pypi.org.
+   * The registry host this manager's install fetches from — the Build Egress the
+   * standing allowlist proxy opens (ADR 0005/0012; CONTEXT.md: "the package registry
+   * the Package Manager names"). npm/pnpm/bun → registry.npmjs.org, yarn →
+   * registry.yarnpkg.com, pip/uv/poetry → pypi.org, go → proxy.golang.org (the module
+   * proxy), cargo → index.crates.io (the crates index).
    *
-   * This is the NETWORK half of {@link impureInstall}: the command runs, and it reaches
-   * THIS host. So the invariant is the same biconditional — `registryHost` present IFF
-   * `impuritySignal` present (the manager can reach the impure path). ABSENT for go/cargo,
-   * which have no `impuritySignal` and build pure unconditionally, so they open no Build
-   * Egress at all. `egress.ts` derives the allowlist off this descriptor field rather than
-   * a free-`string` table, so a half-added manager fails at `tsc` instead of silently
-   * reaching no registry. `ecosystems.test.ts` pins the biconditional.
+   * REQUIRED on every descriptor (go/cargo included): egress is a standing allowlist
+   * that no longer branches on purity (ADR 0012), so every detected manager contributes
+   * its registry. Making it required keeps `egress.ts` exhaustive at `tsc` — a half-added
+   * manager fails to compile rather than silently reaching no registry — and `egress.ts`
+   * derives the allowlist off this descriptor field rather than a free-`string` table.
    */
-  readonly registryHost?: string;
-  /** The honest provision gate (ADR 0001). Present only for bun in v1. */
-  readonly provisionGate?: ProvisionGate;
+  readonly registryHost: string;
 }
 
 /**
- * The PURE-path sandbox staging facet (ADR 0002): the things that vary per
- * Ecosystem when running a provisioned project in the Sandbox — copying Project
- * Deps out of the read-only Store into the writable worktree, AND the run
- * environment the container runs under. `stageCommands` and `envFor`
- * (src/sandbox/plan.ts) consume these — the knowledge of WHAT to stage and WHICH
- * env to run under lives here on the descriptor, not in per-Ecosystem `if` ladders.
+ * The in-Sandbox staging facet (ADR 0002/0012): the things that vary per Ecosystem
+ * when running a provisioned project in the Sandbox — the stage dir its in-Sandbox
+ * install lands in, AND the run environment the container runs under. `setupFor`
+ * and `mergeEnv` (src/sandbox/plan.ts) consume these — the knowledge of WHERE deps
+ * land and WHICH env to run under lives here on the descriptor, not in per-Ecosystem
+ * `if` ladders.
  */
 export interface SandboxStaging {
   /**
-   * The worktree directory deps are staged into (`node_modules` for node, `site`
+   * The worktree directory deps are installed into (`node_modules` for node, `site`
    * for python, `vendor` for go). The run env points the toolchain here
-   * (PYTHONPATH=site, GOFLAGS=-mod=vendor, node_modules by convention).
+   * (PYTHONPATH=site, node_modules by convention), and it is git-excluded so the
+   * in-Sandbox install never churns the agent's diff.
    */
   readonly stageDir: string;
-  /**
-   * The path WITHIN `depsStorePath` to copy from. node's deps FOD publishes
-   * `node_modules`, python's pip-FOD publishes `site`; go's deps store path IS
-   * the vendor dir, so it has no subpath — `stageCommands` copies the whole
-   * `depsStorePath`. Empty string means "copy the store path itself".
-   */
-  readonly storeSubpath: string;
   /**
    * The run environment for this Ecosystem given the Toolchain `bin` directory:
    * the Toolchain on PATH (the project's node/go/python/rust wins, ahead of the
@@ -315,18 +204,18 @@ export interface EcosystemDescriptor {
   /** Read the requested Toolchain version (ADR 0006b). Absent when none applies. */
   readonly readToolchainVersion?: (input: ToolchainVersionInput) => string | undefined;
   /**
-   * Decide whether a directory is a LOOSE manifest needing pin-then-pure (ADR
-   * 0006c). Absent for Ecosystems whose "manifest present but no lockfile" IS the
-   * loose test (Node's package.json) — the generic default covers them. Present
-   * for Python, where `requirements.txt` is BOTH the manifest AND the lockfile, so
-   * loose-ness is a CONTENT decision (unpinned/hash-less requirements.txt, or an
-   * abstract pyproject with no lock), not a file-presence one.
+   * Decide whether a directory is a LOOSE manifest — a resolvable-but-unpinned
+   * manifest with no lockfile (ADR 0006c). Absent for Ecosystems whose "manifest
+   * present but no lockfile" IS the loose test (Node's package.json) — the generic
+   * default covers them. Present for Python, where `requirements.txt` is BOTH the
+   * manifest AND the lockfile, so loose-ness is a CONTENT decision (unpinned/hash-less
+   * requirements.txt, or an abstract pyproject with no lock), not a file-presence one.
    */
   readonly isLooseManifest?: (input: LooseManifestInput) => boolean;
   /**
-   * The PURE-path Project-Deps staging (ADR 0002): which worktree dir deps are
-   * staged into and which subpath of the deps Store to copy from. Consumed by
-   * `stageCommands` (src/sandbox/plan.ts) to emit the self-healing copy.
+   * The in-Sandbox Project-Deps staging (ADR 0002/0012): which worktree dir the
+   * in-Sandbox install lands in, plus the run env. Consumed by `setupFor`/`mergeEnv`
+   * (src/sandbox/plan.ts).
    */
   readonly sandbox: SandboxStaging;
 }

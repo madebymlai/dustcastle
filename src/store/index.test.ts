@@ -12,15 +12,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CARGO_HOME_BASENAME } from "../nix/rust.js";
+import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 import { isStageableSource, provisionStore, stageSource } from "./index.js";
 
-// The store dispatch (slice 2b): which importer a detection routes to, and how
-// unbuilt importers are gated. These cases throw inside the `switch` before any
-// nix-portable build runs, so they need no toolchain — they pin the routing
-// contract and the honest bun gate. The live builds are proven by the gated e2e.
+// The store dispatch: which descriptor a detection routes to. The case under test
+// throws in the Registry lookup before any nix-portable build runs, so it needs no
+// toolchain — it pins the routing contract's never-drop-a-gate safety net. There is
+// no bun gate any more (ADR 0012): bun provisions like every other manager. The live
+// builds are proven by the gated e2e.
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -50,17 +51,7 @@ const provision = (detection: Detection) =>
     nixPortable: "/nonexistent/nix-portable",
   });
 
-describe("provisionStore dispatch (slice 2b importer routing)", () => {
-  it("gates bun explicitly: nixpkgs has no canonical bun importer yet", () => {
-    expect(() =>
-      provision({ ecosystem: "node", packageManager: "bun" }),
-    ).toThrowError(/bun importer is not yet supported/);
-  });
-
-  // (poetry was gated here until laimk-hse.7 proved `poetry export` hermetic; it now
-  // provisions through the pure pip-FOD like uv, so its "no provisionGate" contract
-  // lives in ecosystems.test.ts and its live build in the gated e2e.)
-
+describe("provisionStore dispatch", () => {
   it("rejects an unknown manager with the Registry's honest miss error", () => {
     // The closed `PackageManager` union (laimk-mhg.6) makes a name outside the
     // Registry unrepresentable in well-typed code, so this case CASTS to exercise

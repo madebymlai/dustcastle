@@ -5,28 +5,24 @@ import { RUST_ECOSYSTEM, RUST_MANAGERS } from "./rust.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 export type {
-  BuildContext,
   Detection,
   Ecosystem,
   EcosystemDescriptor,
-  ExportFrontEnd,
-  HostResolveExecution,
-  ImpuritySignal,
-  LockOnlyResolve,
   LooseManifestInput,
   PackageManager,
   PackageManagerDescriptor,
-  ProvisionGate,
   SandboxStaging,
+  ToolchainBuild,
+  ToolchainContext,
   ToolchainVersionInput,
 } from "./types.js";
 
 /**
  * The Ecosystem Registry (ADR 0001 — internal curation, NOT a plugin system; the
- * single, closed, vetted set of descriptors the detect/store/impurity/pin/nix
+ * single, closed, vetted set of descriptors the detect/store/sandbox/egress
  * sites derive from). Adding an Ecosystem is dustcastle's deep, local change — the
- * user never configures one. A gated Package Manager (the bun gate) is a
- * first-class state in the Registry, not an ad-hoc throw.
+ * user never configures one. There are no gated managers: every Package Manager
+ * installs impurely in-Sandbox (ADR 0012), so the old bun gate is gone.
  *
  * The ordering of {@link ECOSYSTEMS} is detection precedence (ADR 0006d): Go
  * first, then Node, then Python, then Rust — matching today's hardcoded `detect()`
@@ -46,7 +42,7 @@ export const ECOSYSTEMS: readonly EcosystemDescriptor[] = [
  * the compile-time proof: every member of the closed {@link PackageManager} union
  * must have a descriptor here, or this assignment fails at `tsc`. A half-added
  * Ecosystem — a manager in the union with no descriptor — can no longer compile and
- * fail at provision time; the dispatch sites (store/impurity/pin) derive from this
+ * fail at provision time; the dispatch sites (store/sandbox/egress) derive from this
  * and are exhaustive without a runtime `default:` guard.
  */
 const BY_PACKAGE_MANAGER: Record<PackageManager, PackageManagerDescriptor> = {

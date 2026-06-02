@@ -83,43 +83,13 @@ export function recencyTailKeys(records: readonly RecencyRecord[], budgetBytes: 
   return keep;
 }
 
-/** What the policy decided: whether to sweep now (and why), and which closures to keep rooted. */
-export interface GarbageCollectionPlan {
-  /** Run a collect now? (The hybrid cap-OR-floor ceiling fired.) */
-  readonly sweep: boolean;
-  /** Which half of the hybrid ceiling fired (`"cap"`/`"floor"`/`"none"`). */
-  readonly reason: CeilingReason;
-  /** The project keys whose closures stay rooted through a sweep (the byte-budget tail). */
-  readonly keep: string[];
-}
-
 /**
- * The pure policy brain (ADR 0007's chosen stance): "keep what active projects root
- * + a byte-budget recently-used tail; collect the rest on a disk-derived hybrid
- * ceiling." Composes the hybrid cap-OR-floor trigger (`overCeiling`) with the
- * byte-budget recency tail (`recencyTailKeys`) into one decision the imperative
- * auto-trigger consumes — measure the store + disk, read recency, then act on this.
- * Every threshold is derived from the disk the caller measures; this function bakes
- * in no number.
+ * NOTE: the old `garbageCollectionPlan` (the bundled "ceiling decision + keep tail")
+ * was removed in ADR 0012 — the unified GC brain now composes `overCeiling` (the
+ * orchestrator's ceiling decision) and `recencyTailKeys` (the warm tail, inside
+ * `collectPool`) directly, over both the Store and deps-cache pools. Both pieces
+ * below/in `ceiling.ts` live on; only their wrapper is gone.
  */
-export function garbageCollectionPlan(opts: {
-  readonly storeBytes: number;
-  readonly freeBytes: number;
-  readonly totalBytes: number;
-  readonly records: readonly RecencyRecord[];
-  readonly budgetBytes: number;
-}): GarbageCollectionPlan {
-  const ceiling = overCeiling({
-    storeBytes: opts.storeBytes,
-    freeBytes: opts.freeBytes,
-    totalBytes: opts.totalBytes,
-  });
-  return {
-    sweep: ceiling.over,
-    reason: ceiling.reason,
-    keep: recencyTailKeys(opts.records, opts.budgetBytes),
-  };
-}
 
 /** `nix-store --add-root <link> --realise <path>` — register an (indirect) GC root. */
 export function addRootArgs(storePath: string, link: string): string[] {

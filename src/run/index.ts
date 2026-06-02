@@ -1,11 +1,11 @@
+import { spawnSync } from "node:child_process";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
-import { parseImpurityMode, type ImpurityDecision, type ImpurityMode } from "../impurity/index.js";
 import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtime.js";
-import { deriveEgress, type EgressDecision } from "../sandbox/egress.js";
-import { planSandbox, type SandboxPlan } from "../sandbox/plan.js";
+import { deriveEgress, gitRemoteHost, type EgressDecision } from "../sandbox/egress.js";
+import { planSandbox, type DepsCachePopulate, type EcosystemPlan, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore, type Provisioned } from "../store/index.js";
 import {
@@ -18,9 +18,9 @@ import {
 } from "../store/gc.js";
 import { closureSizeBytes } from "../store/ceiling.js";
 import { upsertRecency } from "../store/recency.js";
+import { depsCacheDecision, populateCacheCommand } from "../store/depsCache.js";
+import { defaultDepsCacheDir, depsCachePool } from "../store/depsCachePool.js";
 import { spawnAutoGc } from "../cli/autogc.js";
-import { gitRemoteHost, resolveImpurity, writeImpurityMarker } from "./impurity.js";
-import { exportRequirements, pinLooseManifest, type Exported, type Pinned, type ResolveRunner } from "./pin.js";
 import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
 
 export interface PrepareOptions {
@@ -34,14 +34,8 @@ export interface PrepareOptions {
   readonly depsHash?: string;
   /** Stream provisioning output (progress surfacing). */
   readonly onLine?: (line: string) => void;
-  /** Environment to source the impurity mode from (ADR 0005); defaults to process.env. */
-  readonly env?: NodeJS.ProcessEnv;
-  /** Force the impurity mode, bypassing env (tests / explicit callers). */
-  readonly impurityMode?: ImpurityMode;
-  /** Whether the run is unattended (no human to confirm `ask`). Defaults to true. */
-  readonly headless?: boolean;
   /**
-   * Override the egress proxy URL the impure container is routed through (ADR
+   * Override the egress proxy URL the in-Sandbox install is routed through (ADR
    * 0005). The orchestration layer supplies this after the proxy is up; defaults
    * to the production proxy container on the internal egress net.
    */
@@ -55,16 +49,11 @@ export interface PrepareOptions {
    */
   readonly agentModelHosts?: readonly string[];
   /**
-   * Inject the lock-only resolve runner for the pin-then-pure step (ADR 0006c).
-   * Tests/e2e override it; defaults to a real spawn of the manager's resolve.
+   * Override the deps-cache root (ADR 0012, dustcastle-8od). Tests/e2e inject a
+   * scratch dir; production defaults to `~/.dustcastle/deps-cache`. The assembled
+   * Project Deps are cached here, one entry per ecosystem keyed by its lockfile hash.
    */
-  readonly pin?: ResolveRunner;
-  /**
-   * Inject the export front-end runner (ADR 0006 amendment) — the `uv export` step
-   * that materialises the pip-FOD's requirements.txt from uv.lock. Tests/e2e
-   * override it; defaults to a real spawn.
-   */
-  readonly export?: ResolveRunner;
+  readonly depsCacheDir?: string;
   /**
    * Stand up the egress backend the moment the egress decision is known — BEFORE
    * the expensive Store provision (ADR 0005/0010). The bracket caller
@@ -77,97 +66,44 @@ export interface PrepareOptions {
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
 export interface PreparedRun {
+  /** The FIRST detected Ecosystem (the primary). The full set is {@link ecosystems}. */
   readonly detection: Detection;
+  /** The primary Ecosystem's provisioned Toolchain. The full set is {@link ecosystems}. */
   readonly provisioned: Provisioned;
+  /**
+   * Every detected Ecosystem paired with its provisioned Toolchain (ADR 0012). A
+   * polyglot repo has more than one; each installs its deps in-Sandbox. The first
+   * entry mirrors {@link detection}/{@link provisioned}.
+   */
+  readonly ecosystems: readonly EcosystemPlan[];
   readonly plan: SandboxPlan;
-  /** The impurity decision applied (ADR 0004), surfaced so callers can report it. */
-  readonly impurity: ImpurityDecision;
-  /**
-   * The lockfile pin-then-pure generated for a loose manifest (ADR 0006c),
-   * surfaced (never silent) so the CLI can report the new committed artifact.
-   * Undefined when the manifest was already lock-pinned.
-   */
-  readonly pinned?: Pinned;
-  /**
-   * The requirements.txt an export front-end produced from a richer lockfile (uv's
-   * `uv export`, poetry's `poetry export`; ADR 0006 amendment / laimk-hse.7),
-   * surfaced (never silent). Undefined for managers that consume their lockfile
-   * directly (pip) or are still gated (bun).
-   */
-  readonly exported?: Exported;
 }
 
 /**
- * The dustcastle contribution to `dustcastle run`: detect the Ecosystem (ADR
- * 0006), resolve the impurity policy (ADR 0004), realize the Toolchain + Project
- * Deps into the shared Store (ADR 0004/0008), and plan the Sandbox that mounts
- * the Store read-only with the derived egress (ADR 0002/0005). Everything here is
- * dustcastle's own work — before sandcastle's flow begins.
+ * The dustcastle contribution to `dustcastle run`: detect EVERY Ecosystem in the
+ * directory (ADR 0006/0012 — a polyglot repo surfaces more than one), realize each
+ * one's Toolchain into the shared Store (ADR 0008), and plan the Sandbox that mounts
+ * the Store read-only with the standing egress (ADR 0002/0005/0012). Deps install
+ * in-Sandbox via the sandcastle hook — there is no pure-vs-impure decision. Everything
+ * here is dustcastle's own work — before sandcastle's flow begins.
  */
 export function prepareRun(opts: PrepareOptions): PreparedRun {
-  let detection = detect(opts.cwd)[0];
-  if (detection === undefined) {
+  const resolved = detect(opts.cwd);
+  if (resolved.length === 0) {
     throw new Error(`no supported ecosystem detected in ${opts.cwd}`);
   }
 
-  // Pin-then-pure (ADR 0006c). A loose manifest (a package.json with no lockfile)
-  // is resolved ONCE into a generated, committed lockfile, then re-detected so the
-  // build runs pure/offline against that lock — strictly better than going impure.
-  let pinned: Pinned | undefined;
-  if (detection.loose === true) {
-    pinned = pinLooseManifest({
-      cwd: opts.cwd,
-      packageManager: detection.packageManager,
-      ...(opts.pin !== undefined ? { run: opts.pin } : {}),
-      ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
-    });
-    const repinned = detect(opts.cwd)[0];
-    if (repinned === undefined) {
-      throw new Error(`pin-then-pure: ${pinned.lockfile} was not generated in ${opts.cwd}`);
-    }
-    detection = repinned;
-  }
-
-  // Resolve impurity (ADR 0004). Pure ecosystems (Go) never need it; for Node it
-  // is read from the lockfile, then run through the allow/ask/deny state machine.
-  const mode = opts.impurityMode ?? parseImpurityMode(opts.env ?? process.env);
-  const impurity = resolveImpurity({
-    cwd: opts.cwd,
-    detection,
-    mode,
-    headless: opts.headless ?? true,
-    env: opts.env ?? process.env,
-  });
-  if (impurity.kind === "deny") throw new Error(impurity.reason);
-
-  const impure = impurity.kind === "impure";
-  if (impure && impurity.kind === "impure") {
-    // Asynchronous consent: record the visible, version-controlled marker.
-    writeImpurityMarker(opts.cwd, impurity.marker);
-  }
-
-  // Export front-end (ADR 0006 amendment). A manager whose own lockfile isn't the
-  // pip-FOD's input — uv (uv.lock) — materialises the hash-pinned requirements.txt
-  // IN PLACE before provisioning, so the staged source carries the file the
-  // importer reads. A no-op for pip (reads requirements.txt directly) and gated
-  // poetry. Surfaced (never silent), like the pin step.
-  const exported = exportRequirements({
-    cwd: opts.cwd,
-    packageManager: detection.packageManager,
-    ...(opts.export !== undefined ? { run: opts.export } : {}),
-    ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
-  });
-
-  // Derive the egress decision (ADR 0005/0010) BEFORE provisioning — it needs only
-  // detection/impurity, not the realized Store — so the enforcing proxy can be stood
-  // up (and fail fast) ahead of the expensive build via `beforeProvision`.
-  const remoteHost = impure ? gitRemoteHost(opts.cwd) : undefined;
+  // Derive the standing egress decision (ADR 0005/0010/0012) BEFORE provisioning —
+  // it needs only detection, not the realized Store — so the enforcing proxy can be
+  // stood up (and fail fast) ahead of the expensive build via `beforeProvision`. The
+  // allowlist is the UNION of every detected manager's registry + the git host (a
+  // polyglot repo opens both), with the agent's model host alongside.
+  const remoteHost = gitRemoteHost(opts.cwd);
   const egress: EgressDecision = deriveEgress({
-    packageManager: detection.packageManager,
-    impure,
+    packageManagers: resolved.map((d) => d.packageManager),
     ...(remoteHost !== undefined ? { gitRemoteHost: remoteHost } : {}),
     // Agent Egress (ADR 0010): the model host(s) carve a route for the agent's own
-    // LLM calls out of the build's network posture — even when the build is pure.
+    // LLM calls alongside the build's standing registry/git egress.
     ...(opts.agentModelHosts !== undefined ? { agentModelHosts: opts.agentModelHosts } : {}),
   });
 
@@ -175,28 +111,42 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
   // egress, abort BEFORE provisioning (no unconfined fallback — ADR 0005/0010).
   opts.beforeProvision?.(egress);
 
-  const provisioned = provisionStore({
-    projectDir: opts.cwd,
-    detection,
-    impure,
-    ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
-    ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
-    ...(opts.depsHash !== undefined ? { depsHash: opts.depsHash } : {}),
-    ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+  // The deps-cache root (ADR 0012, dustcastle-8od): the host-owned cache, one entry
+  // per ecosystem keyed by its lockfile hash.
+  const cacheDir = opts.depsCacheDir ?? defaultDepsCacheDir();
+
+  // Provision EACH detected Ecosystem's Toolchain into the shared Store (ADR 0012:
+  // the Store realizes only Toolchains; deps install in-Sandbox). A polyglot repo
+  // provisions every Toolchain. Decide each ecosystem's deps-cache hit/miss host-side
+  // (keyed by its lockfile hash), so the plan emits restore-vs-install per ecosystem.
+  const ecosystems: EcosystemPlan[] = resolved.map((detection) => {
+    const cache = depsCacheDecision(opts.cwd, detection, cacheDir);
+    return {
+      detection,
+      provisioned: provisionStore({
+        projectDir: opts.cwd,
+        detection,
+        ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
+        ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
+        ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+      }),
+      ...(cache !== undefined ? { cache } : {}),
+    };
   });
 
+  const primary = ecosystems[0]!;
   return {
-    detection,
-    provisioned,
+    detection: primary.detection,
+    provisioned: primary.provisioned,
+    ecosystems,
     plan: planSandbox({
-      provisioned,
-      detection,
+      provisioned: primary.provisioned,
+      detection: primary.detection,
+      ...(primary.cache !== undefined ? { cache: primary.cache } : {}),
+      ...(ecosystems.length > 1 ? { additionalEcosystems: ecosystems.slice(1) } : {}),
       egress,
       ...(opts.proxyUrl !== undefined ? { proxyUrl: opts.proxyUrl } : {}),
     }),
-    impurity,
-    ...(pinned !== undefined ? { pinned } : {}),
-    ...(exported !== undefined ? { exported } : {}),
   };
 }
 
@@ -217,7 +167,7 @@ export interface PreparedWorkspace {
 
 /**
  * Provision a workspace (ADR 0006d): enumerate the root's members and run the full
- * detect → pin → provision → plan pipeline for EACH (consistent with per-directory
+ * detect → provision → plan pipeline for EACH (consistent with per-directory
  * accumulation — a member is just another directory). Falls back to the single
  * root project when `root` declares no workspace, so callers can use this
  * uniformly. Members with no detected ecosystem (e.g. a docs-only package) are
@@ -340,6 +290,12 @@ export async function withProvisionedSandbox<T>(
   // the body throws after egress came up.
   let egress: ReturnType<typeof ensureEgress> = { teardown: () => {} };
   let roots: ReturnType<typeof registerScopedRoots> | undefined;
+  // The deps-cache pool + the keys this run pins in it (ADR 0012). A live run pins
+  // ALL its deps-cache entries so a concurrent GC sweep never evicts assembled deps
+  // out from under it; released on completion (the finally).
+  const cacheDir = opts.depsCacheDir ?? defaultDepsCacheDir();
+  const cachePool = depsCachePool({ cacheDir, ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}) });
+  const cachePinnedKeys: string[] = [];
 
   try {
     const prepared = prepareRun({
@@ -393,6 +349,19 @@ export async function withProvisionedSandbox<T>(
     // later cold rebuild, never the run.
     updateRecency(opts, prepared);
 
+    // Pin EVERY detected ecosystem's deps-cache entry (ADR 0012, dustcastle-8od), so a
+    // concurrent GC sweep never evicts assembled deps out from under the live run —
+    // the deps-cache analogue of the Store's scoped roots. A polyglot repo pins all of
+    // its entries; released on completion (the finally). Uncacheable (loose) ecosystems
+    // have no entry and contribute no pin.
+    for (const eco of prepared.ecosystems) {
+      const hash = eco.cache?.lockfileHash;
+      if (hash !== undefined) {
+        cachePool.pin(hash);
+        cachePinnedKeys.push(hash);
+      }
+    }
+
     // Ensure the dustcastle-owned agent image exists (built once from the shipped
     // Containerfile; idempotent thereafter), the way the Store provision ensures
     // nix-portable. The image carries the agent harness (git/bd/pi) + a writable,
@@ -408,14 +377,24 @@ export async function withProvisionedSandbox<T>(
       mounts: [...(prepared.plan.podmanOptions.mounts ?? []), ...authMounts],
     };
     const provider = podman(podmanOptions);
-    return await body({
+    const result = await body({
       prepared,
       provider,
-      withSetupHooks: (callerHooks) =>
-        withSetupHooks(callerHooks, prepared.plan.setupCommands),
+      withSetupHooks: (callerHooks) => withSetupHooks(callerHooks, prepared.plan),
     });
+
+    // Populate the deps cache for each cache-MISS ecosystem (ADR 0012, dustcastle-8od)
+    // AFTER the run completes — the unambiguous timing, since sandcastle runs
+    // `host.onSandboxReady` concurrently with the in-Sandbox install (not after it),
+    // so it cannot be relied on to land once the deps are assembled. Copies each
+    // worktree stage dir into its lockfile-hash entry. Best-effort: a failed populate
+    // only risks a later cache miss, never the run.
+    populateDepsCache(opts.cwd, prepared.plan.populate, opts.onLine);
+
+    return result;
   } finally {
     roots?.release(); // drop this run's scoped GC roots — closure becomes collectable
+    for (const key of cachePinnedKeys) cachePool.release(key); // unpin deps-cache entries
     egress.teardown();
     // Fire the detached auto-GC one-shot (ADR 0007), off the hot path. It runs
     // AFTER the scoped roots are released, so the just-finished closure is
@@ -467,18 +446,58 @@ function triggerAutoGc(opts: ProvisionOptions): void {
   }
 }
 
-/** Prepend dustcastle's per-project setup commands to any caller onSandboxReady hooks. */
+/**
+ * Prepend dustcastle's per-project hooks to any caller hooks (ADR 0002/0012):
+ *   - `sandbox.onSandboxReady` — the in-Sandbox install (or, on a cache hit, just the
+ *     git-exclude), ahead of the caller's hooks so `go test -mod=vendor` finds its dir;
+ *   - `host.onWorktreeReady` — the deps-cache RESTORE copies (cache hits), run on the
+ *     host BEFORE the Sandbox starts, so the assembled deps are already in the worktree.
+ * Populate (cache misses) is NOT a hook — it runs after `run()` returns (sandcastle
+ * runs `host.onSandboxReady` concurrently with the install, so it can't populate after).
+ */
 function withSetupHooks(
   existing: SandcastleHandoff["hooks"],
-  setupCommands: string[],
+  plan: SandboxPlan,
 ): NonNullable<SandcastleHandoff["hooks"]> {
-  const ours = setupCommands.map((command) => ({ command }));
+  const ourSandbox = plan.setupCommands.map((command) => ({ command }));
+  const ourHost = plan.hostWorktreeReady.map((command) => ({ command }));
   const callerSandbox = existing?.sandbox;
+  const callerHost = existing?.host;
   return {
     ...existing,
     sandbox: {
       ...callerSandbox,
-      onSandboxReady: [...ours, ...(callerSandbox?.onSandboxReady ?? [])],
+      onSandboxReady: [...ourSandbox, ...(callerSandbox?.onSandboxReady ?? [])],
+    },
+    host: {
+      ...callerHost,
+      onWorktreeReady: [...ourHost, ...(callerHost?.onWorktreeReady ?? [])],
     },
   };
+}
+
+/**
+ * Populate the deps cache after a run (ADR 0012, dustcastle-8od): for each cache-MISS
+ * ecosystem, copy the worktree's assembled stage dir into its lockfile-hash entry, so
+ * the next Sandbox on the same lockfile restores instead of re-installing. Runs on the
+ * host in the worktree (the bind-mount path's worktree IS the project dir). Best-effort
+ * per entry — a failed copy only risks a later cache miss, never the run.
+ */
+function populateDepsCache(
+  cwd: string,
+  populate: readonly DepsCachePopulate[],
+  onLine?: (line: string) => void,
+): void {
+  for (const entry of populate) {
+    try {
+      const result = spawnSync("sh", ["-c", populateCacheCommand(entry)], { cwd, encoding: "utf8" });
+      if (result.status === 0) {
+        onLine?.(`deps-cache: populated ${entry.lockfileHash} from ${entry.stageDir}`);
+      } else {
+        onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${result.stderr?.trim() ?? ""}`);
+      }
+    } catch (e) {
+      onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${(e as Error).message}`);
+    }
+  }
 }

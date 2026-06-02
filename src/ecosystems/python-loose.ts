@@ -1,6 +1,6 @@
 /**
  * The Python loose-manifest predicate (laimk-hse.5, ADR 0006c) — a standalone,
- * PURE module, the Python analogue of `python-version.ts` / `impurity/python.ts`.
+ * PURE module, the Python analogue of `python-version.ts`.
  *
  * In Python, `requirements.txt` is BOTH the Ecosystem's manifest marker AND pip's
  * lockfile, so the generic "manifest-present-but-no-lockfile" loose test (which

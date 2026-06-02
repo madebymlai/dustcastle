@@ -1,11 +1,7 @@
 #!/usr/bin/env node
-import { createInterface } from "node:readline/promises";
 import { configuredAgentModelHosts, loadModelSelection } from "../config/global.js";
-import { detect } from "../detect/index.js";
-import { parseImpurityMode } from "../impurity/index.js";
 import { prepareRun, type PreparedRun } from "../run/index.js";
 import { orchestrate } from "../run/orchestrate.js";
-import { parseYesNo, pendingImpurityAsk, writeImpurityMarker } from "../run/impurity.js";
 import { DUSTCASTLE_HOME } from "../config/global.js";
 import { readLastSweepLine } from "../store/autogc.js";
 import { join } from "node:path";
@@ -50,15 +46,6 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const cwd = process.cwd();
-
-  // Interactive `ask` (ADR 0004): only a real TTY can answer. Resolve the policy
-  // as if a human were present; if it lands on `ask`, prompt y/n and record the
-  // consent marker on yes (which `prepareRun` then reads as cached consent). A
-  // headless run skips this entirely — the decisive fallback handles it.
-  if (process.stdin.isTTY) {
-    const declined = await confirmImpurityIfAsked(cwd);
-    if (declined) return 1;
-  }
 
   // The agent model is a single global choice every project shares (no
   // project-local config). The first run with no model configured picks one
@@ -112,66 +99,31 @@ async function main(argv: string[]): Promise<number> {
 }
 
 /**
- * Print the provisioned posture — runtime mode, Store paths, purity, and egress
- * (distinguishing Build vs Agent Egress, ADR 0010, so a pure build that opens only
- * the model host never reads as "the build went online"), plus any pin step. Never
- * silent (ADR 0004/0005/0008).
+ * Print the provisioned posture — runtime mode, every detected Ecosystem's
+ * Toolchain, and the standing egress (distinguishing Build vs Agent Egress, ADR
+ * 0010). Deps always install in-Sandbox (ADR 0012). Never silent (ADR 0005/0008).
  */
 function printPosture(prepared: PreparedRun): void {
-  const { detection, provisioned, plan, impurity, pinned } = prepared;
+  const { plan, ecosystems } = prepared;
   const egressLine =
     plan.egress.kind === "none"
-      ? "closed (pure, no network)"
+      ? "closed (no network)"
       : `allowlist — build: ${plan.egress.buildHosts.length > 0 ? `[${plan.egress.buildHosts.join(", ")}]` : "(offline)"}` +
         `  agent: ${plan.egress.agentHosts.length > 0 ? `[${plan.egress.agentHosts.join(", ")}]` : "(none)"}`;
-  const purityLine =
-    impurity.kind === "impure"
-      ? "impure (marker written to .dustcastle/impure.json)"
-      : "pure / reproducible";
+  const provisioned = ecosystems.map(
+    (e) =>
+      `    ${e.detection.ecosystem.padEnd(7)}: ${e.detection.toolchainVersion ?? "(default)"}  ${e.provisioned.toolchainStorePath}`,
+  );
   console.error(
     [
-      `🏖️  dustcastle: provisioned ${detection.ecosystem}` +
-        (detection.toolchainVersion ? ` ${detection.toolchainVersion}` : ""),
-      `    store mode : ${provisioned.mode}  (rootless nix-portable)`,
-      `    toolchain  : ${provisioned.toolchainStorePath}`,
-      `    deps       : ${provisioned.depsStorePath || "(installed in container — impure)"}`,
-      `    build      : ${purityLine}`,
+      `🏖️  dustcastle: provisioned ${ecosystems.map((e) => e.detection.ecosystem).join(" + ")}`,
+      `    store mode : ${prepared.provisioned.mode}  (rootless nix-portable)`,
+      ...provisioned,
+      `    deps       : installed in-Sandbox (ADR 0012)`,
       `    egress     : ${egressLine}`,
-      ...(pinned ? [`    pinned     : generated ${pinned.lockfile} (commit it — pin-then-pure, pure offline)`] : []),
       `    /nix/store mounted read-only into the sandbox`,
     ].join("\n"),
   );
-}
-
-/**
- * If an interactive `ask` is pending for this project, prompt the human y/n.
- * Returns `true` when the build was declined (caller should exit non-zero). On
- * "yes" the consent marker is written so the downstream `prepareRun` builds
- * impurely without re-asking. No-op when nothing is pending.
- */
-async function confirmImpurityIfAsked(cwd: string): Promise<boolean> {
-  const detection = detect(cwd)[0];
-  if (detection === undefined) return false;
-  const ask = pendingImpurityAsk({
-    cwd,
-    detection,
-    mode: parseImpurityMode(process.env),
-    env: process.env,
-  });
-  if (ask === undefined) return false;
-
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  try {
-    const answer = await rl.question(ask.prompt);
-    if (!parseYesNo(answer)) {
-      console.error("dustcastle: impure build declined — nothing provisioned.");
-      return true;
-    }
-  } finally {
-    rl.close();
-  }
-  writeImpurityMarker(cwd, ask.marker);
-  return false;
 }
 
 main(process.argv.slice(2)).then(

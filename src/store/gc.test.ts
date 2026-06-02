@@ -6,7 +6,6 @@ import {
   addRootArgs,
   collectGarbage,
   collectGarbageArgs,
-  garbageCollectionPlan,
   gcQueryArgs,
   gcRootLink,
   optimiseArgs,
@@ -153,34 +152,6 @@ describe("recencyTailKeys (the byte-budget LRU warm set — ADR 0007)", () => {
     ];
     // The newest is oversize so it (and every older one, by LRU) cannot be kept.
     expect(recencyTailKeys(records, 1000)).toEqual([]);
-  });
-});
-
-describe("garbageCollectionPlan (the auto-trigger's pure brain, hybrid ceiling — ADR 0007)", () => {
-  const records = [
-    { projectKey: "npm-a", lastUsedAt: 100, closureBytes: 200 },
-    { projectKey: "npm-b", lastUsedAt: 300, closureBytes: 200 },
-    { projectKey: "npm-c", lastUsedAt: 200, closureBytes: 200 },
-  ];
-
-  it("over the size cap: sweep, keeping the byte-budget tail rooted", () => {
-    // total 1000 → cap 100; store 200 ≥ cap → sweep (reason cap). Budget 600 fits b+c+a (600).
-    expect(
-      garbageCollectionPlan({ storeBytes: 200, freeBytes: 500, totalBytes: 1000, records, budgetBytes: 600 }),
-    ).toEqual({ sweep: true, reason: "cap", keep: ["npm-b", "npm-c", "npm-a"] });
-  });
-
-  it("over the free-space floor: sweep (reason floor), bounding the tail by bytes", () => {
-    // store 50 (< cap 100), free 50 ≤ 100 floor → sweep. Budget 450 fits b+c (400); a (→600) overflows.
-    expect(
-      garbageCollectionPlan({ storeBytes: 50, freeBytes: 50, totalBytes: 1000, records, budgetBytes: 450 }),
-    ).toEqual({ sweep: true, reason: "floor", keep: ["npm-b", "npm-c"] });
-  });
-
-  it("under both thresholds: no sweep (the tail still stands)", () => {
-    expect(
-      garbageCollectionPlan({ storeBytes: 50, freeBytes: 500, totalBytes: 1000, records, budgetBytes: 600 }),
-    ).toEqual({ sweep: false, reason: "none", keep: ["npm-b", "npm-c", "npm-a"] });
   });
 });
 

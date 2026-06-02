@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -73,6 +73,40 @@ describe("autoGc (the detached sweep orchestration — ADR 0007)", () => {
     expect(existsSync(warmLink)).toBe(true);
     // The sweep appended a never-silent "freed X" line to the gc log.
     expect(readLastSweepLine(join(home, "gc.log"))).toContain("4300");
+  });
+
+  it("over the ceiling: cold deps-cache entries are evicted too (the cache is swept, not just the Store)", () => {
+    const home = dir();
+    const cacheDir = join(home, "deps-cache");
+    // Two lockfile-hash-keyed cache entries (30 bytes each → 60 total). cap (total/10)
+    // is 50, so the cache alone trips the cap; the byte-budget (35) keeps the recently
+    // -used "hot" entry and evicts the stale one.
+    const hot = join(cacheDir, "hotlockhash");
+    const stale = join(cacheDir, "stalelockhash");
+    mkdirSync(hot, { recursive: true });
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(hot, "node_modules"), "x".repeat(30));
+    writeFileSync(join(stale, "node_modules"), "x".repeat(30));
+    const t = 1_700_000_000;
+    utimesSync(stale, t - 10_000, t - 10_000); // older → cold
+    utimesSync(hot, t, t); // newer → warm
+
+    const report = autoGc({
+      run: (args) => (args.includes("--optimise") ? OK("", OPTIMISE_OUT) : OK(GC_OUT)),
+      measure: () => 0, // Store empty; the CACHE (60) pushes total over the cap (50)
+      disk: diskSeq([{ free: 300, total: 500 }]),
+      dir: home,
+      recencyRootsDir: join(home, "recency-roots"),
+      depsCacheDir: cacheDir,
+      now: () => t * 1000,
+    });
+
+    expect(report).not.toBe("skipped");
+    if (report === "skipped") return;
+    expect(report.swept).toBe(true);
+    // The stale (cold) cache entry was evicted; the recently-used one survives.
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(hot)).toBe(true);
   });
 
   it("optimise alone clears the free-space floor: gc is skipped", () => {

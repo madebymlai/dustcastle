@@ -1,96 +1,50 @@
-# Agent Instructions
+# tokf
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+🗜️ means this output was compressed by tokf.
+Run `tokf raw last` to see the full uncompressed output of the last command.
 
-> **Architecture in one line:** Issues live in a local Dolt database
-> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
-> git-compatible protocol), stored under `refs/dolt/data` on your git
-> remote — separate from `refs/heads/*` where your code lives.
-> `.beads/issues.jsonl` is a passive export, not the wire protocol.
->
-> See [SYNC_CONCEPTS.md](https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md)
-> for the one-screen overview and anti-patterns (don't treat JSONL as the
-> source of truth; don't `bd import` during normal operation; don't
-> reach for third-party Dolt hosting before trying the default).
+# Principles
 
-## Quick Reference
+<!-- Pick from the catalog: skills/agentstack/catalogs/PRINCIPLES.md
+     Copy the ones that apply to this project. Example:
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
-```
+- **SRP** — A module should have one, and only one, reason to change: responsible to one actor.
+- **OCP** — Software entities should be open for extension but closed for modification.
+- **KISS** — Every system works best when simplicity is a key goal and unnecessary complexity is avoided.
+- **YAGNI** — Do not introduce abstractions, parameters, or code paths that serve no current caller.
+- **Forward-First** — Design for the current and next contract version; never introduce backward-compatibility shims or legacy code paths.
+-->
 
-## Non-Interactive Shell Commands
+# Agent skills
 
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+## Issue tracker
 
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+  Use bd (beads) for issue tracking.
 
-**Use these forms instead:**
-```bash
-# Force overwrite without prompting
-cp -f source dest           # NOT: cp source dest
-mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
+  - Run `bd prime` for workflow context and command guidance.
+  - Use `bd ready`, `bd show <id>`, `bd update <id> --claim`, and `bd close <id>`.
+  - Use `bd remember "insight"` for persistent project memory; do not create MEMORY.md files.
+  - Use `bd dep add <blocked> --blocked-by <blocker>` for building dependecies trees across issues.
+  - Do not use markdown TODO lists for task tracking.
+  - `/to-prd` must create the PRD issue with `--type=epic`. Epics are containers — implement their children, not the epic itself.
 
-# For recursive operations
-rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
-```
+## Triage labels
 
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+Two **category** roles:
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
-## Beads Issue Tracker
+ - `bug` — something is broken
+ - `enhancement` — new feature or improvement
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+Five **state** roles:
 
-### Quick Reference
+ - `needs-triage` — maintainer needs to evaluate
+ - `needs-info` — waiting on reporter
+ - `ready-for-agent` — fully specified, AFK-ready (an agent can pick it up with no human context)
+ - `ready-for-human` — needs human implementation
+ - `wontfix` — will not be actioned
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
+## Domain docs
 
-### Rules
+Domain language and terminology defined in `CONTEXT.md` at the repo root.
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
-## Session Completion
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
+# Workflow

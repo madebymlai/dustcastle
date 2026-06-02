@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { DUSTCASTLE_HOME } from "../config/global.js";
 import { autoGc, type AutoGcOptions } from "../store/autogc.js";
 import { diskSpace, measureStoreBytes } from "../store/ceiling.js";
+import { defaultDepsCacheDir } from "../store/depsCachePool.js";
 import { defaultRecencyRootsDir, nixPortableRunner } from "../store/gc.js";
 
 /**
@@ -25,6 +26,7 @@ export async function runAutoGcCommand(
       disk: opts.disk ?? (() => diskSpace(diskProbePath())),
       dir: opts.dir ?? DUSTCASTLE_HOME,
       recencyRootsDir: opts.recencyRootsDir ?? defaultRecencyRootsDir(),
+      depsCacheDir: opts.depsCacheDir ?? defaultDepsCacheDir(),
       now: opts.now ?? (() => Date.now()),
       onLine: log,
       ...(opts.lockPath !== undefined ? { lockPath: opts.lockPath } : {}),

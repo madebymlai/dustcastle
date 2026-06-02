@@ -1,26 +1,26 @@
-import { generateGoBuild } from "../nix/go.js";
+import { generateGoToolchain } from "./toolchain-nix.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
  * The Go Ecosystem descriptors (ADR 0006). A single Package Manager (`go`) — still
- * a Package Manager, not a special case (CONTEXT.md). buildGoModule splits into a
- * vendor FOD + an offline build/test; the discovered hash lands in `depsHash`.
- *
- * Go has NO impuritySignal (only Node has impure install scripts in v1) and NO
- * lockOnlyResolve (go.mod/go.sum is already a real lockfile — nothing to pin).
+ * a Package Manager, not a special case (CONTEXT.md). Its Toolchain is nixpkgs' `go`;
+ * its modules are fetched in-Sandbox via `go mod download` (ADR 0012).
  */
 
 const go: PackageManagerDescriptor = {
   packageManager: "go",
   ecosystem: "go",
   lockfiles: ["go.sum", "go.mod"],
-  generateBuild: (ctx) =>
-    generateGoBuild({
-      pname: ctx.pname,
-      vendorHash: ctx.depsHash,
-      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
-    }),
-  // No impuritySignal, no lockOnlyResolve, no provisionGate — Go builds pure.
+  generateToolchain: generateGoToolchain,
+  // The Go module proxy — the standing Build Egress for a go repo (ADR 0012).
+  // registryHost is required on every descriptor now that egress no longer branches
+  // on purity.
+  registryHost: "proxy.golang.org",
+  // The in-Sandbox install (ADR 0012 always-impure): `go mod download` fetches the
+  // committed modules from the module proxy into GOMODCACHE, so `go test` runs
+  // against real deps. Every detected Ecosystem installs in-Sandbox now, so go
+  // carries an install command too.
+  installCommand: ["go mod download"],
 };
 
 // Keyed by Package Manager name so the Registry can prove — at tsc — that every
@@ -36,21 +36,18 @@ export const GO_ECOSYSTEM: EcosystemDescriptor = {
   // No declared-manager resolver: Go has a single Package Manager.
   // The Toolchain version comes from go.mod's `go` line (ADR 0006b).
   readToolchainVersion: ({ manifest }) => readGoVersion(manifest),
-  // Pure staging (ADR 0002): go's deps Store path IS the vendor dir, so there is
-  // no subpath — `stageCommands` copies the whole `depsStorePath` into the
-  // worktree's `vendor` (GOFLAGS=-mod=vendor reads it). The run env (spike-proven)
-  // reads vendored deps, turns the module proxy off, and points the build cache at
-  // /tmp since the Store is read-only.
+  // In-Sandbox install staging (ADR 0012): `go mod download` populates GOMODCACHE
+  // (vendor stays the conventional stage dir for the worktree git-exclude). The run
+  // env (spike-proven) leaves the module proxy ON so the in-Sandbox install reaches
+  // it, and points the module + build caches at writable /tmp off the read-only Store.
   sandbox: {
     stageDir: "vendor",
-    storeSubpath: "",
     env: (bin) => ({
       PATH: `${bin}:/usr/bin:/bin`,
-      GOFLAGS: "-mod=vendor",
-      GOPROXY: "off",
       GOTOOLCHAIN: "local",
       CGO_ENABLED: "0",
       GOCACHE: "/tmp/gocache",
+      GOMODCACHE: "/tmp/gomodcache",
       GOENV: "off",
     }),
   },

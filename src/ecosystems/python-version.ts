@@ -42,8 +42,9 @@ export interface AvailableInterpreter {
 /**
  * The interpreter set discovered from the pinned nixpkgs (the `python3X` attrs it
  * ships). DATA the descriptor wires into the resolver — NOT magic inside it. The
- * spike pins `python312` (src/nix/python.ts); this mirrors nixpkgs' stable set at
- * that pin, with `python314` marked pre-release so it is excluded by default.
+ * Toolchain defaults to `python312` (src/ecosystems/toolchain-nix.ts); this mirrors
+ * nixpkgs' stable set at that pin, with `python314` marked pre-release so it is
+ * excluded by default.
  *
  * This is the one maintenance row per the pinned nixpkgs bump (ADR 0006 §
  * Consequences: "the version-file list needs per-Ecosystem maintenance").

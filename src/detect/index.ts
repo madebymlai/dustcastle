@@ -4,7 +4,7 @@ import { join } from "node:path";
 // `Ecosystem` and `Detection` now live in the Ecosystem Registry's type module
 // (the Registry's output shape; ADR 0001) and are re-exported here so existing
 // import paths (`from "../detect/index.js"`) keep working unchanged. The Registry
-// types depend only on src/nix, so there is no import cycle back into detect.
+// types are self-contained, so there is no import cycle back into detect.
 import { ECOSYSTEMS, packageManagerDescriptor } from "../ecosystems/index.js";
 import type { Detection, EcosystemDescriptor, PackageManager } from "../ecosystems/types.js";
 export type { Detection, Ecosystem } from "../ecosystems/types.js";

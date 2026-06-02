@@ -1,17 +1,10 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { overCeiling, recencyBudgetBytes, type CeilingReason, type NixRunner } from "./ceiling.js";
-import {
-  collectGarbageArgs,
-  garbageCollectionPlan,
-  optimiseArgs,
-  parseGcReport,
-  parseOptimiseReport,
-  pruneRecencyRoots,
-  type GcReport,
-  type OptimiseReport,
-} from "./gc.js";
-import { loadRecency } from "./recency.js";
+import type { GcReport, OptimiseReport } from "./gc.js";
+import { collectPool } from "./pool.js";
+import { depsCachePool } from "./depsCachePool.js";
+import { storePool } from "./storePool.js";
 
 /**
  * The detached one-shot's orchestration (ADR 0007). After each `dustcastle run`,
@@ -59,6 +52,13 @@ export interface AutoGcOptions {
   readonly dir: string;
   /** Where the persistent recency roots live (pruned to the warm budget before collecting). */
   readonly recencyRootsDir: string;
+  /**
+   * The deps-cache root (ADR 0012): the second managed pool, swept by the SAME brain as
+   * the Store. The cache shares the disk, so its bytes count toward the ceiling, and its
+   * cold (byte-LRU) entries are evicted in the destructive phase. Absent ⇒ no cache pool
+   * (the Store is the sole pool, as before).
+   */
+  readonly depsCacheDir?: string;
   /** The clock (epoch ms), injected so the gc-log line is deterministic in tests. */
   readonly now: () => number;
   /** Surface progress (never silent — ADR 0007). */
@@ -109,45 +109,52 @@ export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
 
 /** The sweep body (runs under the lock): plan → optimise-first → re-check → conditional gc → prune → log. */
 function sweep(opts: AutoGcOptions, log: (line: string) => void): AutoGcReport {
+  // The two managed pools behind ONE brain (ADR 0012): the Store (Toolchain closures)
+  // and the deps cache (assembled Project Deps, lockfile-hash-keyed). The Store keeps
+  // the injected `measure` as its ceiling input (the nix accounting the child wires);
+  // its mechanism (optimise / prune cold roots + `nix-store --gc`) lives in `storePool`.
+  // The cache shares the disk, so its bytes count toward the cap and its cold tail is
+  // evicted alongside the Store. Absent ⇒ the Store is the sole pool, as before.
+  const store = storePool({ run: opts.run, dir: opts.dir, recencyRootsDir: opts.recencyRootsDir, onLine: log });
+  const cache = opts.depsCacheDir !== undefined ? depsCachePool({ cacheDir: opts.depsCacheDir, onLine: log }) : undefined;
+  const cacheBytes = (): number => cache?.measure() ?? 0;
+
   const storeBytes = opts.measure();
   const { free, total } = opts.disk();
-  const records = loadRecency(opts.dir);
   const budgetBytes = recencyBudgetBytes({ totalBytes: total });
-  const plan = garbageCollectionPlan({ storeBytes, freeBytes: free, totalBytes: total, records, budgetBytes });
 
-  if (!plan.sweep) {
-    log(`gc: store within ceiling (${storeBytes} bytes) — nothing to sweep`);
-    return { swept: false, reason: plan.reason, storeBytes, freedBytes: 0 };
+  const before = overCeiling({ storeBytes: storeBytes + cacheBytes(), freeBytes: free, totalBytes: total });
+  if (!before.over) {
+    log(`gc: store+cache within ceiling (${storeBytes + cacheBytes()} bytes) — nothing to sweep`);
+    return { swept: false, reason: before.reason, storeBytes, freedBytes: 0 };
   }
-  log(`gc: over ceiling (${plan.reason}; ${storeBytes} bytes) — sweeping`);
+  log(`gc: over ceiling (${before.reason}; ${storeBytes + cacheBytes()} bytes) — sweeping`);
 
-  // Prune the cold recency roots BEFORE collecting, so their closures become
-  // collectable; the warm tail (`plan.keep`) stays rooted and survives the gc.
-  pruneRecencyRoots({ recencyRootsDir: opts.recencyRootsDir, keepKeys: plan.keep, onLine: log });
+  // optimise-first: the Store's non-destructive hard-link dedup (the cache has none).
+  // It cannot cause a cold rebuild, so it runs before any destructive eviction.
+  const optimise = store.optimise!();
 
-  // optimise-first: the non-destructive lever (file-level hard-link dedup) that
-  // cannot cause a cold rebuild. Try it before the destructive collect.
-  const opt = opts.run(optimiseArgs());
-  const optimise = parseOptimiseReport(opt.stdout + opt.stderr);
-  log(`gc: optimise freed ${optimise.bytesFreed} bytes by hard-linking ${optimise.filesLinked} files`);
-
-  // Re-check against fresh readings — optimise frees disk space (the floor half)
-  // even though it leaves the logical store size (the cap half) unchanged.
+  // Re-check against fresh readings — optimise frees disk (the floor half) without
+  // shrinking the logical store+cache size (the cap half).
   const after = opts.disk();
-  const still = overCeiling({ storeBytes: opts.measure(), freeBytes: after.free, totalBytes: after.total });
+  const still = overCeiling({ storeBytes: opts.measure() + cacheBytes(), freeBytes: after.free, totalBytes: after.total });
 
   let gc: GcReport | undefined;
+  let cacheFreed = 0;
   if (still.over) {
-    const gcRes = opts.run(collectGarbageArgs());
-    gc = parseGcReport(gcRes.stdout + gcRes.stderr);
-    log(`gc: collected ${gc.pathsDeleted} unrooted path(s), freed ${gc.bytesFreed} bytes`);
+    // Evict each pool's cold byte-LRU tail through the SAME brain (`collectPool`): the
+    // Store prunes its cold recency roots + `nix-store --gc`; the cache removes its cold
+    // entry dirs. A recently-used (warm) entry survives in either pool.
+    const storeSweep = collectPool(store, { budgetBytes });
+    gc = { pathsDeleted: storeSweep.entriesEvicted, bytesFreed: storeSweep.bytesFreed };
+    if (cache !== undefined) cacheFreed = collectPool(cache, { budgetBytes }).bytesFreed;
   } else {
     log("gc: optimise alone cleared the ceiling — skipping collect");
   }
 
-  const freedBytes = optimise.bytesFreed + (gc?.bytesFreed ?? 0);
+  const freedBytes = optimise.bytesFreed + (gc?.bytesFreed ?? 0) + cacheFreed;
   appendSweepLog(opts, freedBytes, gc);
-  return { swept: true, reason: plan.reason, storeBytes, freedBytes, optimise, ...(gc !== undefined ? { gc } : {}) };
+  return { swept: true, reason: before.reason, storeBytes, freedBytes, optimise, ...(gc !== undefined ? { gc } : {}) };
 }
 
 /** Append the never-silent one-line "freed X" record the next run surfaces. */

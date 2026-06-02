@@ -1,43 +1,23 @@
-import { generateNodeBuild } from "../nix/node.js";
-import { generatePnpmBuild } from "../nix/pnpm.js";
-import { generateYarnBuild } from "../nix/yarn.js";
-import { npmLockNeedsImpurity, pnpmLockNeedsImpurity } from "../impurity/index.js";
+import { generateNodeToolchain } from "./toolchain-nix.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
 /**
- * The Node Ecosystem descriptors (ADR 0006). One Ecosystem, four Package Managers
- * (npm/pnpm/yarn/bun). Each manager's descriptor encodes — in one place — its
- * Importer, lockfile(s), impurity signal, and pin-then-pure resolve, exactly
- * reproducing today's per-site switches.
+ * The Node Ecosystem descriptors (ADR 0006/0012). One Ecosystem, four Package
+ * Managers (npm/pnpm/yarn/bun). Each manager's descriptor encodes — in one place —
+ * its Toolchain expression, lockfile(s), in-Sandbox install command, and registry
+ * host. Every manager installs impurely in-Sandbox; bun has no gate any more.
  */
 
 const npm: PackageManagerDescriptor = {
   packageManager: "npm",
   ecosystem: "node",
   lockfiles: ["package-lock.json"],
-  generateBuild: (ctx) =>
-    generateNodeBuild({
-      pname: ctx.pname,
-      npmDepsHash: ctx.depsHash,
-      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
-    }),
-  // npm's lockfile (v2/v3) records `hasInstallScript: true` on any package with an
-  // install/preinstall/postinstall script (ADR 0004).
-  impuritySignal: {
-    lockfile: "package-lock.json",
-    needsImpurity: (lockText) => npmLockNeedsImpurity(parseJsonOr(lockText)),
-  },
-  // npm exposes a first-class lockfile-only resolve (ADR 0006c).
-  lockOnlyResolve: {
-    kind: "command",
-    command: "npm",
-    args: ["install", "--package-lock-only"],
-    lockfile: "package-lock.json",
-  },
-  // The impure in-container install (ADR 0004/0005): `npm ci` installs strictly
-  // from the committed package-lock.json (frozen), running postinstall under scoped egress.
-  impureInstall: ["npm ci"],
-  // Build Egress (ADR 0005): the registry `npm ci` fetches from on the impure path.
+  // Node's Toolchain is nixpkgs' `nodejs`; the manager name does not change it.
+  generateToolchain: generateNodeToolchain,
+  // The in-Sandbox install (ADR 0012): `npm ci` installs strictly from the committed
+  // package-lock.json (frozen), running postinstall under the standing egress.
+  installCommand: ["npm ci"],
+  // Build Egress (ADR 0012): the registry `npm ci` fetches from.
   registryHost: "registry.npmjs.org",
 };
 
@@ -45,27 +25,11 @@ const pnpm: PackageManagerDescriptor = {
   packageManager: "pnpm",
   ecosystem: "node",
   lockfiles: ["pnpm-lock.yaml"],
-  generateBuild: (ctx) =>
-    generatePnpmBuild({
-      pname: ctx.pname,
-      depsHash: ctx.depsHash,
-      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
-    }),
-  // pnpm's equivalent of hasInstallScript is `requiresBuild: true` (ADR 0004).
-  impuritySignal: {
-    lockfile: "pnpm-lock.yaml",
-    needsImpurity: (lockText) => pnpmLockNeedsImpurity(lockText),
-  },
-  // pnpm exposes a first-class lockfile-only resolve (ADR 0006c).
-  lockOnlyResolve: {
-    kind: "command",
-    command: "pnpm",
-    args: ["install", "--lockfile-only"],
-    lockfile: "pnpm-lock.yaml",
-  },
-  // The impure in-container install (ADR 0004/0005): frozen to pnpm-lock.yaml.
-  impureInstall: ["pnpm install --frozen-lockfile"],
-  // Build Egress (ADR 0005): pnpm fetches from the npm registry too.
+  // pnpm shares Node's `nodejs` Toolchain — the manager only changes the install.
+  generateToolchain: generateNodeToolchain,
+  // The in-Sandbox install (ADR 0012): frozen to pnpm-lock.yaml.
+  installCommand: ["pnpm install --frozen-lockfile"],
+  // Build Egress (ADR 0012): pnpm fetches from the npm registry too.
   registryHost: "registry.npmjs.org",
 };
 
@@ -73,33 +37,11 @@ const yarn: PackageManagerDescriptor = {
   packageManager: "yarn",
   ecosystem: "node",
   lockfiles: ["yarn.lock"],
-  generateBuild: (ctx) =>
-    generateYarnBuild({
-      pname: ctx.pname,
-      depsHash: ctx.depsHash,
-      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
-    }),
-  // yarn.lock (v1) carries NO install-script metadata — yarn's build policy lives
-  // in package.json#dependenciesMeta.built / .yarnrc, not the lockfile — so a yarn
-  // project always resolves pure. Present-but-always-false: honest, not a gap
-  // (faking a signal the lockfile can't carry would be worse). ADR 0004.
-  impuritySignal: {
-    lockfile: "yarn.lock",
-    needsImpurity: () => false,
-  },
-  // yarn classic has no clean lockfile-only resolve, so it is gated honestly
-  // rather than running a full install just to pin (ADR 0006c, the bun-gate pattern).
-  lockOnlyResolve: {
-    kind: "gated",
-    reason:
-      "pin-then-pure: yarn has no clean lockfile-only resolve — commit a yarn.lock, or use " +
-      "npm/pnpm, to build pure (ADR 0006c). dustcastle won't run a full yarn install just to pin.",
-  },
-  // The impure in-container install (ADR 0004/0005): frozen to yarn.lock. (yarn's
-  // signal is present-but-always-false, but the install is carried for uniformity.)
-  impureInstall: ["yarn install --frozen-lockfile"],
-  // Build Egress (ADR 0005): yarn classic's own registry. Carried for uniformity
-  // alongside impureInstall, though yarn's always-false signal keeps it pure today.
+  // yarn shares Node's `nodejs` Toolchain — the manager only changes the install.
+  generateToolchain: generateNodeToolchain,
+  // The in-Sandbox install (ADR 0012): frozen to yarn.lock.
+  installCommand: ["yarn install --frozen-lockfile"],
+  // Build Egress (ADR 0012): yarn classic's own registry.
   registryHost: "registry.yarnpkg.com",
 };
 
@@ -107,36 +49,13 @@ const bun: PackageManagerDescriptor = {
   packageManager: "bun",
   ecosystem: "node",
   lockfiles: ["bun.lockb", "bun.lock"],
-  // bun has no canonical nixpkgs importer (provisionGate fires before this runs);
-  // we still wire a generator so the dispatch surface stays uniform. It reuses the
-  // npm build shape — never actually realized in v1.
-  generateBuild: (ctx) =>
-    generateNodeBuild({
-      pname: ctx.pname,
-      npmDepsHash: ctx.depsHash,
-      ...(ctx.src !== undefined ? { src: ctx.src } : {}),
-    }),
-  // bun is gated at provision; the lockfile carries no script signal either, so
-  // the signal is present-but-always-false (settled by design, ADR 0004).
-  impuritySignal: {
-    lockfile: "bun.lock",
-    needsImpurity: () => false,
-  },
-  // The honest provision gate (ADR 0001/0006): nixpkgs has no canonical bun deps
-  // importer (no fetchBunDeps analogue to fetchPnpmDeps/fetchYarnDeps), so there's
-  // no hermetic, hash-pinned way to assemble node_modules from bun.lock yet.
-  provisionGate: {
-    reason:
-      "store: the bun importer is not yet supported — nixpkgs has no canonical " +
-      "bun deps importer (slice 2b: pnpm and yarn are supported). Use npm, pnpm, " +
-      "or yarn, or track the bun-importer follow-up.",
-  },
-  // The impure in-container install (ADR 0004/0005): frozen to bun.lock. Carried
-  // for uniformity though bun's provisionGate fires first (exactly like its
-  // never-realized generateBuild) — a half-added manager stays honest.
-  impureInstall: ["bun install --frozen-lockfile"],
-  // Build Egress (ADR 0005): bun uses the npm registry. Carried for uniformity
-  // alongside impureInstall, though bun's provisionGate fires before any build.
+  // bun shares Node's `nodejs` Toolchain.
+  generateToolchain: generateNodeToolchain,
+  // The in-Sandbox install (ADR 0012): frozen to bun.lock. bun installs through the
+  // normal path like every other manager — no gate, because there is no FOD importer
+  // to be missing any more (the real install runs in-Sandbox).
+  installCommand: ["bun install --frozen-lockfile"],
+  // Build Egress (ADR 0012): bun uses the npm registry.
   registryHost: "registry.npmjs.org",
 };
 
@@ -158,14 +77,13 @@ export const NODE_ECOSYSTEM: EcosystemDescriptor = {
   // contract wins, then the version files (.nvmrc, .node-version).
   readToolchainVersion: ({ manifest, readVersionFile }) =>
     readDevEnginesNodeVersion(manifest) ?? readNodeVersion(readVersionFile),
-  // Pure staging (ADR 0002): the deps FOD publishes `node_modules`, copied into
-  // the worktree's `node_modules` (manager-agnostic — every JS importer publishes
-  // the same layout). The run env puts the node Toolchain on PATH ahead of the
-  // agent harness (/usr/local/bin: bd/pi) and points npm's cache + home at /tmp,
-  // since the Store is read-only.
+  // In-Sandbox install staging (ADR 0002/0012): the install assembles
+  // `node_modules` in the worktree (manager-agnostic — every JS manager uses the
+  // same layout). The run env puts the node Toolchain on PATH ahead of the agent
+  // harness (/usr/local/bin: bd/pi) and points npm's cache + home at /tmp, since
+  // the Store is read-only.
   sandbox: {
     stageDir: "node_modules",
-    storeSubpath: "node_modules",
     env: (bin) => ({
       // Nix Toolchain first (the PROJECT's node wins), then /usr/local/bin where
       // the image's agent harness lives (bd/pi — the implement phase shells `bd`).
