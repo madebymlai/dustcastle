@@ -545,7 +545,7 @@ export function withSetupHooks(
 
 function classifyPopulateLine(line: string): StreamingLogLevel {
   // cp errors and shell diagnostics are debug detail; the progress prefix is info.
-  if (line.startsWith("populating")) return "info";
+  if (line.startsWith("caching")) return "info";
   return "debug";
 }
 
@@ -569,7 +569,7 @@ export async function populateDepsCache(
 
     try {
       const command = populateCommand({ cacheDir, ...entry });
-      const verboseCommand = `echo "populating ${entry.lockfileHash.slice(0, 12)}/${entry.stageDir}" >&2; ${command}`;
+      const verboseCommand = `echo "caching ${entry.stageDir} deps (key ${entry.lockfileHash.slice(0, 12)})" >&2; ${command}`;
       const result = await runStreamingAsync("sh", ["-c", verboseCommand], {
         cwd,
         logger,

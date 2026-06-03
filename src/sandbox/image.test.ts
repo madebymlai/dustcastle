@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
 import { runStreamingAsync } from "../process/streaming.js";
-import { ensureImage, imageRef, buildArgs, classifyPodmanLine, type ImageSpec, type PodmanRunner } from "./image.js";
+import { ensureImage, imageRef, buildArgs, type ImageSpec, type PodmanRunner } from "./image.js";
 
 // ensureImage is the deep core both dustcastle-owned images run through: a
 // built-once, idempotent `podman build` driven by an ImageSpec (tag, Containerfile,
@@ -116,7 +116,6 @@ describe("ensureImage (the dustcastle-owned image build core)", () => {
         {
           logger,
           label: "podman",
-          classifyLine: classifyPodmanLine,
         },
       );
       promise.then(() => {

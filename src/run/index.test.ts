@@ -119,10 +119,10 @@ describe("populateDepsCache", () => {
 
     await populateDepsCache(dir, cacheDir, populate, logger);
 
-    // The streamed "populating <hash>/<dir>" line reaches the logger at info, with
-    // the lockfile hash trimmed to 12 chars (the message IS the line — see emitLine).
+    // The streamed "caching <dir> deps (key <hash>)" line reaches the logger at info,
+    // with the lockfile hash trimmed to 12 chars (the message IS the line — see emitLine).
     expect(
-      logger.records.some((r) => r.level === "info" && r.msg?.startsWith("populating abc123/") === true),
+      logger.records.some((r) => r.level === "info" && r.msg?.includes("deps (key abc123)") === true),
     ).toBe(true);
   });
 });

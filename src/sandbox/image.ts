@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { noopLogger, type Logger } from "../log/index.js";
-import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
+import { runStreamingAsync } from "../process/streaming.js";
 import { dustcastleVersion } from "../version.js";
 
 /**
@@ -107,17 +107,6 @@ export function buildArgs(image: string, containerfile: string): string[] {
 }
 
 /**
- * Classify a podman build output line into a {@link StreamingLogLevel} for the
- * curation seam: only the `STEP x/y` progression is user-facing progress (info).
- * Cache-hit (`-->`) and `Successfully tagged` lines are detail (debug) — the
- * "built dustcastle image" log already signals success, and a fully-cached build
- * lists every historical version tag, which is pure noise. Tunable by tests.
- */
-export function classifyPodmanLine(line: string): StreamingLogLevel {
-  return /^STEP \d+\/\d+/i.test(line) ? "info" : "debug";
-}
-
-/**
  * Ensure a dustcastle-owned image exists, building it once from its shipped
  * Containerfile if missing (idempotent: a second run is a no-op `podman image
  * exists` hit). Returns the image tag for the consumer to run by name.
@@ -148,12 +137,12 @@ function defaultImageExists(image: string): boolean {
   return spawnSync("podman", ["image", "exists", image]).status === 0;
 }
 
-/** Default runner: a real `podman` spawn, streaming stderr live via the shared helper. */
+/**
+ * Default runner: a real `podman` spawn. Build output streams live via the shared
+ * helper, but at debug — image builds are cached ~99% of the time, so per-STEP lines
+ * are noise on a normal run (the "built dustcastle image" milestone is the info
+ * signal). `DUSTCASTLE_LOG=debug` surfaces the full build, like `--progress=plain`.
+ */
 function defaultPodmanRun(logger: Logger): PodmanRunner {
-  return (args) =>
-    runStreamingAsync("podman", args, {
-      logger,
-      label: "podman",
-      classifyLine: classifyPodmanLine,
-    });
+  return (args) => runStreamingAsync("podman", args, { logger, label: "podman" });
 }
