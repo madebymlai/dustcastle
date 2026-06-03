@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { configuredAgentModelHosts, loadModelSelection } from "../config/global.js";
+import { createLogger } from "../log/pino.js";
 import { prepareRun, type PreparedRun } from "../run/index.js";
 import { orchestrate } from "../run/orchestrate.js";
 import { DUSTCASTLE_HOME } from "../config/global.js";
@@ -69,6 +70,7 @@ async function main(argv: string[]): Promise<number> {
   // ⇒ no model ⇒ no agent egress.
   const agentModelHosts = configuredAgentModelHosts();
   const selection = loadModelSelection();
+  const rootLogger = createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
   const onLine = (l: string) => process.stderr.write(`${l}\n`);
 
   // No agent model: nothing runs in the Sandbox, so there's no egress to confine.
@@ -89,6 +91,7 @@ async function main(argv: string[]): Promise<number> {
   await orchestrate({
     cwd,
     onLine,
+    logger: rootLogger.child({ mod: "orchestrate" }),
     ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
     onPrepared: (prepared) => {
       printPosture(prepared);

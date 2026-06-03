@@ -4,6 +4,7 @@ import { join } from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { orchestrationPromptPath, type PromptPhase } from "../agent/prompts.js";
 import { buildPiAgent, loadModelSelection } from "../config/global.js";
+import { noopLogger, type Logger } from "../log/index.js";
 import { ensureBeads, realBeadsPreflightDeps, type BeadsPreflightDeps } from "./beads.js";
 import {
   withProvisionedSandbox,
@@ -124,7 +125,42 @@ export interface OrchestrateOptions extends ProvisionOptions {
   readonly targetBranch?: string;
   /** Override the beads preflight checks (tests). */
   readonly beads?: BeadsPreflightDeps;
+  /** Structured logs for this subsystem; defaults to noop in library/deep-module use. */
+  readonly logger?: Logger;
+  /** Override the live sandcastle/model/provisioning seams (tests). */
+  readonly deps?: Partial<OrchestrateDeps>;
 }
+
+interface PlannerResult {
+  readonly output: { readonly issues: PlannedIssue[] };
+}
+
+interface PhaseResult {
+  readonly commits: readonly unknown[];
+}
+
+interface IssueSandbox {
+  run(args: Record<string, unknown>): Promise<PhaseResult>;
+  close(): Promise<void>;
+}
+
+export interface OrchestrateDeps {
+  loadModelSelection(): ReturnType<typeof loadModelSelection>;
+  buildPiAgent(selection: NonNullable<ReturnType<typeof loadModelSelection>>): sandcastle.AgentProvider;
+  currentGitBranch(cwd: string): string;
+  withProvisionedSandbox<T>(opts: ProvisionOptions, body: (sandbox: ProvisionedSandbox) => Promise<T>): Promise<T>;
+  run(args: Record<string, unknown>): Promise<PlannerResult>;
+  createSandbox(args: Record<string, unknown>): Promise<IssueSandbox>;
+}
+
+const liveOrchestrateDeps: OrchestrateDeps = {
+  loadModelSelection,
+  buildPiAgent,
+  currentGitBranch,
+  withProvisionedSandbox,
+  run: sandcastle.run as unknown as OrchestrateDeps["run"],
+  createSandbox: sandcastle.createSandbox as unknown as OrchestrateDeps["createSandbox"],
+};
 
 /**
  * The parallel-planner-with-review loop, ported from agentstack's `.sandcastle`
@@ -143,25 +179,26 @@ export interface OrchestrateOptions extends ProvisionOptions {
 export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   ensureBeads(opts.beads ?? realBeadsPreflightDeps(opts.cwd));
 
-  const selection = loadModelSelection();
+  const deps: OrchestrateDeps = { ...liveOrchestrateDeps, ...opts.deps };
+  const selection = deps.loadModelSelection();
   if (selection === undefined) {
     throw new Error("orchestrate: no model configured. Run `dustcastle model` first.");
   }
-  const agent = buildPiAgent(selection);
-  const targetBranch = opts.targetBranch ?? currentGitBranch(opts.cwd);
+  const agent = deps.buildPiAgent(selection);
+  const targetBranch = opts.targetBranch ?? deps.currentGitBranch(opts.cwd);
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
-  const log = opts.onLine ?? (() => {});
+  const log = opts.logger ?? noopLogger;
 
   // `.beads` + any agent-context docs the isolated worktrees must carry past the
   // git checkout (computed once from the host project root).
   const copyToWorktree = worktreeCopies(opts.cwd);
 
-  await withProvisionedSandbox(opts, async ({ provider, withSetupHooks }) => {
+  await deps.withProvisionedSandbox(opts, async ({ provider, withSetupHooks }) => {
     const hooks = withSetupHooks();
 
     for (let loop = 1; loop <= maxLoops; loop++) {
-      log(`orchestrate: planning (loop ${loop}/${maxLoops})`);
-      const planned = await sandcastle.run({
+      log.info({ event: "planning", loop, maxLoops }, "planning");
+      const planned = await deps.run({
         sandbox: provider,
         agent,
         name: "Planner",
@@ -176,25 +213,42 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
       // run() overload (it widens to any).
       const issues: PlannedIssue[] = planned.output.issues;
       if (issues.length === 0) {
-        log("orchestrate: nothing left to do — exiting");
+        log.info({ event: "idle", loop, maxLoops }, "nothing left to do");
         return;
       }
 
-      log(`orchestrate: ${issues.length} unblocked issue(s) → implement + review`);
+      log.info(
+        { event: "implement_review", loop, issueCount: issues.length },
+        "implement + review",
+      );
       const outcomes = await Promise.allSettled(
         issues.map((issue) =>
-          executeIssue({ issue, provider, agent, hooks, targetBranch, copyToWorktree }),
+          executeIssue({
+            issue,
+            provider,
+            agent,
+            hooks,
+            targetBranch,
+            copyToWorktree,
+            createSandbox: deps.createSandbox,
+          }),
         ),
       );
 
       const completed = completedFrom(outcomes);
       if (completed.length === 0) {
-        log("orchestrate: no branch produced commits this loop — skipping merge");
+        log.info(
+          { event: "skip_merge", loop, completedCount: 0 },
+          "no branch produced commits; skipping merge",
+        );
         continue;
       }
 
-      log(`orchestrate: merging ${completed.length} branch(es)`);
-      await sandcastle.run({
+      log.info(
+        { event: "merge", loop, completedCount: completed.length },
+        "merging branches",
+      );
+      await deps.run({
         sandbox: provider,
         agent,
         name: "Merger",
@@ -215,6 +269,7 @@ interface ExecuteIssueArgs {
   readonly targetBranch: string;
   /** `.beads` + existing agent-context docs to copy into the per-issue worktree. */
   readonly copyToWorktree: string[];
+  readonly createSandbox: OrchestrateDeps["createSandbox"];
 }
 
 /**
@@ -223,8 +278,9 @@ interface ExecuteIssueArgs {
  * if the implementer committed; both share the one sandbox/branch.
  */
 async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
-  const { issue, provider, agent, hooks, targetBranch, copyToWorktree } = args;
-  const sandbox = await sandcastle.createSandbox({
+  const { issue, provider, agent, hooks, targetBranch, copyToWorktree, createSandbox } =
+    args;
+  const sandbox = await createSandbox({
     sandbox: provider,
     branch: issue.branch,
     baseBranch: targetBranch,

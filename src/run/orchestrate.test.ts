@@ -2,16 +2,18 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createMemoryLogger } from "../log/fake.js";
 import {
   branchForIssue,
   completedFrom,
   implementArgs,
   mergeArgs,
+  orchestrate,
   phaseConfig,
   reviewArgs,
   worktreeCopies,
 } from "./orchestrate.js";
-import type { IssueOutcome } from "./orchestrate.js";
+import type { IssueOutcome, OrchestrateDeps } from "./orchestrate.js";
 import type { PlannedIssue } from "./plan-schema.js";
 
 function issue(id: string): PlannedIssue {
@@ -94,6 +96,63 @@ describe("mergeArgs", () => {
       BRANCHES: "- sandcastle/issue-42\n- sandcastle/issue-7",
       ISSUES: "- 42: Fix auth bug\n- 7: Add logging",
     });
+  });
+});
+
+describe("orchestrate logging", () => {
+  it("emits structured loop records through the caller-named child logger", async () => {
+    const root = createMemoryLogger();
+    const runNames: string[] = [];
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      run: async (args) => {
+        runNames.push(String(args.name));
+        if (args.name === "Planner") return { output: { issues: [issue("42")] } };
+        return { output: { issues: [] } };
+      },
+      createSandbox: async () => ({
+        run: async (args) => ({ commits: args.name === "Worker" ? [{ sha: "a" }] : [{ sha: "b" }] }),
+        close: async () => {},
+      }),
+    };
+
+    await orchestrate({
+      cwd: "/repo",
+      maxLoops: 1,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: root.child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    expect(runNames).toEqual(["Planner", "Merger"]);
+    expect(root.records).toEqual([
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
+        msg: "planning",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "implement_review", loop: 1, issueCount: 1 },
+        msg: "implement + review",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "merge", loop: 1, completedCount: 1 },
+        msg: "merging branches",
+        args: [],
+      },
+    ]);
   });
 });
 
