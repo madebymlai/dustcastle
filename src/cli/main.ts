@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { configuredAgentModelHosts, DUSTCASTLE_HOME, loadModelSelection } from "../config/global.js";
 import { createLogger } from "../log/pino.js";
-import { prepareRun, type PreparedRun } from "../run/index.js";
+import { logPosture, logSweep } from "./posture.js";
+import { prepareRun } from "../run/index.js";
 import { orchestrate } from "../run/orchestrate.js";
 import { readLastSweepLine } from "../store/autogc.js";
 import { join } from "node:path";
@@ -57,11 +58,13 @@ async function main(argv: string[]): Promise<number> {
   // re-picks. Headless with no model just provisions and says so below.
   await ensureModel();
 
+  const rootLogger = createCliLogger();
+
   // Never-silent reconciled with never-worry (ADR 0007): the auto-GC sweep is quiet
   // by default and the NEXT run surfaces the last "freed X" line here. Degrades
   // silently when no sweep has happened yet (no gc.log).
   const lastSweep = readLastSweepLine(join(DUSTCASTLE_HOME, "gc.log"));
-  if (lastSweep !== undefined) console.error(`🧹 dustcastle: ${lastSweep}`);
+  if (lastSweep !== undefined) logSweep(rootLogger, lastSweep);
 
   // dustcastle's half: detect → realize the Store → plan the Sandbox. Surface
   // the active runtime mode (ADR 0008 — never silent) and what was provisioned.
@@ -70,7 +73,6 @@ async function main(argv: string[]): Promise<number> {
   // ⇒ no model ⇒ no agent egress.
   const agentModelHosts = configuredAgentModelHosts();
   const selection = loadModelSelection();
-  const rootLogger = createCliLogger();
 
   // No agent model: nothing runs in the Sandbox, so there's no egress to confine.
   // Provision the Store, print the posture, and stop — the user picks a model and
@@ -81,8 +83,9 @@ async function main(argv: string[]): Promise<number> {
       logger: rootLogger.child({ mod: "store" }),
       ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
     });
-    printPosture(prepared);
-    console.error("    (sandbox provisioned and ready; run `dustcastle model` to choose an agent model)");
+    logPosture(rootLogger, prepared, {
+      note: "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
+    });
     return 0;
   }
 
@@ -96,39 +99,12 @@ async function main(argv: string[]): Promise<number> {
     logger: rootLogger.child({ mod: "orchestrate" }),
     ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
     onPrepared: (prepared) => {
-      printPosture(prepared);
-      console.error(`    agent      : pi @ ${selection.model}  (~/.pi/agent mounted)`);
+      logPosture(rootLogger, prepared, {
+        agent: { runner: "pi", model: selection.model, mount: "~/.pi/agent" },
+      });
     },
   });
   return 0;
-}
-
-/**
- * Print the provisioned posture — runtime mode, every detected Ecosystem's
- * Toolchain, and the standing egress (distinguishing Build vs Agent Egress, ADR
- * 0010). Deps always install in-Sandbox (ADR 0012). Never silent (ADR 0005/0008).
- */
-function printPosture(prepared: PreparedRun): void {
-  const { plan, ecosystems } = prepared;
-  const egressLine =
-    plan.egress.kind === "none"
-      ? "closed (no network)"
-      : `allowlist — build: ${plan.egress.buildHosts.length > 0 ? `[${plan.egress.buildHosts.join(", ")}]` : "(offline)"}` +
-        `  agent: ${plan.egress.agentHosts.length > 0 ? `[${plan.egress.agentHosts.join(", ")}]` : "(none)"}`;
-  const provisioned = ecosystems.map(
-    (e) =>
-      `    ${e.detection.ecosystem.padEnd(7)}: ${e.detection.toolchainVersion ?? "(default)"}  ${e.provisioned.toolchainStorePath}`,
-  );
-  console.error(
-    [
-      `🏖️  dustcastle: provisioned ${ecosystems.map((e) => e.detection.ecosystem).join(" + ")}`,
-      `    store mode : ${prepared.provisioned.mode}  (rootless nix-portable)`,
-      ...provisioned,
-      `    deps       : installed in-Sandbox (ADR 0012)`,
-      `    egress     : ${egressLine}`,
-      `    /nix/store mounted read-only into the sandbox`,
-    ].join("\n"),
-  );
 }
 
 main(process.argv.slice(2)).then(

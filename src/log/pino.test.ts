@@ -2,6 +2,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loggerConfig, stderrLogSetting } from "./pino.js";
 
+const prettyTransport = expect.stringMatching(/pretty-transport\.(?:ts|js)$/);
+
 describe("loggerConfig", () => {
   const now = new Date("2026-06-03T04:05:06.007Z");
 
@@ -12,9 +14,9 @@ describe("loggerConfig", () => {
       transport: {
         targets: [
           {
-            target: "pino-pretty",
+            target: prettyTransport,
             level: "info",
-            options: { destination: 2, colorize: false, translateTime: "SYS:standard" },
+            options: { destination: 2, colorize: false, include: "msg" },
           },
           {
             target: "pino/file",
@@ -33,8 +35,8 @@ describe("loggerConfig", () => {
     const debug = loggerConfig({ homeDir: "/dust", now, env: { DUSTCASTLE_LOG: "debug" } });
     const silent = loggerConfig({ homeDir: "/dust", now, env: { DUSTCASTLE_LOG: "silent" } });
 
-    expect(debug.transport.targets[0]).toMatchObject({ target: "pino-pretty", level: "debug" });
-    expect(silent.transport.targets[0]).toMatchObject({ target: "pino-pretty", level: "silent" });
+    expect(debug.transport.targets[0]).toMatchObject({ target: prettyTransport, level: "debug" });
+    expect(silent.transport.targets[0]).toMatchObject({ target: prettyTransport, level: "silent" });
     expect(debug.transport.targets[1]).toEqual(silent.transport.targets[1]);
     expect(debug.transport.targets[1]).toMatchObject({ target: "pino/file", level: "trace" });
   });
