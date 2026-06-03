@@ -1,6 +1,7 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { noopLogger, type Logger } from "../log/index.js";
+import { pruneRunLogs, type PruneRunLogsReport } from "../log/retention.js";
 import { overCeiling, recencyBudgetBytes, type CeilingReason, type NixRunner } from "./ceiling.js";
 import type { GcReport, OptimiseReport } from "./gc.js";
 import { collectPool } from "./pool.js";
@@ -34,8 +35,10 @@ export interface AutoGcReport {
   readonly reason: CeilingReason;
   /** The Store size measured before the sweep (bytes). */
   readonly storeBytes: number;
-  /** Total bytes reclaimed (optimise + gc). */
+  /** Total bytes reclaimed from Store/deps-cache (optimise + gc/cache eviction). */
   readonly freedBytes: number;
+  /** Flight-recorder retention report from the same locked post-run sweep. */
+  readonly runLogs?: PruneRunLogsReport;
   /** The optimise pass result, when one ran. */
   readonly optimise?: OptimiseReport;
   /** The collect-garbage result, when gc ran (skipped if optimise alone cleared the ceiling). */
@@ -68,6 +71,10 @@ export interface AutoGcOptions {
   readonly lockPath?: string;
   /** Override the gc-log path (defaults to `<dir>/gc.log`). */
   readonly gcLogPath?: string;
+  /** Override the flight-recorder runs dir (defaults to `<dir>/runs`). */
+  readonly runLogDir?: string;
+  /** Override the flight-recorder retention ceiling (defaults to 16 MiB). */
+  readonly runLogCeilingBytes?: number;
 }
 
 const NOOP: AutoGcReport = { swept: false, reason: "none", storeBytes: 0, freedBytes: 0 };
@@ -95,9 +102,11 @@ export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
   try {
     return sweep(opts, logger);
   } catch (e) {
-    // Best-effort: a failed/hung sweep must never throw out of the detached child.
+    // Best-effort: a failed/hung Store/cache sweep must never throw out of the detached child.
+    // Still run the flight-recorder prune under the lock; the two cleanups share the
+    // one post-run lifecycle, but recorder retention is independent of pool GC.
     logger.warn({ err: (e as Error).message }, "sweep failed (best-effort, run unaffected)");
-    return NOOP;
+    return { ...NOOP, runLogs: pruneFlightRecorder(opts, logger) };
   } finally {
     try {
       closeSync(fd);
@@ -127,7 +136,8 @@ function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
   const before = overCeiling({ storeBytes: storeBytes + cacheBytes(), freeBytes: free, totalBytes: total });
   if (!before.over) {
     logger.info({ storeBytes: storeBytes + cacheBytes() }, "store+cache within ceiling — nothing to sweep");
-    return { swept: false, reason: before.reason, storeBytes, freedBytes: 0 };
+    const runLogs = pruneFlightRecorder(opts, logger);
+    return { swept: false, reason: before.reason, storeBytes, freedBytes: 0, runLogs };
   }
   logger.info({ reason: before.reason, storeBytes: storeBytes + cacheBytes() }, "over ceiling — sweeping");
 
@@ -155,7 +165,21 @@ function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
 
   const freedBytes = optimise.bytesFreed + (gc?.bytesFreed ?? 0) + cacheFreed;
   appendSweepLog(opts, freedBytes, gc);
-  return { swept: true, reason: before.reason, storeBytes, freedBytes, optimise, ...(gc !== undefined ? { gc } : {}) };
+  const runLogs = pruneFlightRecorder(opts, logger);
+  return { swept: true, reason: before.reason, storeBytes, freedBytes, runLogs, optimise, ...(gc !== undefined ? { gc } : {}) };
+}
+
+function pruneFlightRecorder(opts: AutoGcOptions, logger: Logger): PruneRunLogsReport {
+  try {
+    return pruneRunLogs({
+      runsDir: opts.runLogDir ?? join(opts.dir, "runs"),
+      logger,
+      ...(opts.runLogCeilingBytes !== undefined ? { ceilingBytes: opts.runLogCeilingBytes } : {}),
+    });
+  } catch (e) {
+    logger.warn({ err: (e as Error).message }, "flight-recorder prune failed (best-effort)");
+    return { bytesBefore: 0, bytesAfter: 0, bytesFreed: 0, runsDeleted: 0 };
+  }
 }
 
 /** Append the never-silent one-line "freed X" record the next run surfaces. */

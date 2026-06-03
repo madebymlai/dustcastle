@@ -139,8 +139,20 @@ describe("autoGc (the detached sweep orchestration — ADR 0007)", () => {
     expect(report.gc).toBeUndefined();
   });
 
-  it("under the ceiling: no sweep, no nix invocations at all", () => {
+  it("under the ceiling: no store sweep, but the same locked post-run pass prunes flight-recorder logs", () => {
     const home = dir();
+    const runsDir = join(home, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    const oldRun = join(runsDir, "old.jsonl");
+    const midRun = join(runsDir, "mid.jsonl");
+    const newRun = join(runsDir, "new.jsonl");
+    writeFileSync(oldRun, "x".repeat(8));
+    writeFileSync(midRun, "x".repeat(4));
+    writeFileSync(newRun, "x".repeat(6));
+    utimesSync(oldRun, 100, 100);
+    utimesSync(midRun, 200, 200);
+    utimesSync(newRun, 300, 300);
+
     const calls: string[][] = [];
     const run = (args: readonly string[]): NixResult => {
       calls.push([...args]);
@@ -154,13 +166,18 @@ describe("autoGc (the detached sweep orchestration — ADR 0007)", () => {
       dir: home,
       recencyRootsDir: join(home, "recency-roots"),
       now: () => 1,
+      runLogCeilingBytes: 10,
     });
 
     expect(report).not.toBe("skipped");
     if (report === "skipped") return;
     expect(report.swept).toBe(false);
     expect(report.reason).toBe("none");
-    expect(calls).toEqual([]); // nothing swept
+    expect(calls).toEqual([]); // store/cache GC did not run
+    expect(existsSync(oldRun)).toBe(false); // oldest was evicted to fit the run-log budget
+    expect(existsSync(midRun)).toBe(true);
+    expect(existsSync(newRun)).toBe(true);
+    expect(report.runLogs).toEqual({ bytesBefore: 18, bytesAfter: 10, bytesFreed: 8, runsDeleted: 1 });
   });
 
   it("skips entirely (returns 'skipped') when another sweep holds the lock", () => {
