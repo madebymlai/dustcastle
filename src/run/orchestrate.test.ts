@@ -44,17 +44,20 @@ describe("worktreeCopies (what the per-issue worktree carries past the git check
   });
 
   it("adds the agent-context docs that exist at the project root", () => {
-    expect(worktreeCopies(proj("CONTEXT.md", "AGENTS.md"))).toEqual([
+    expect(worktreeCopies(proj("CONTEXT.md", "CODING_STANDARDS.md"))).toEqual([
       ".beads",
       "CONTEXT.md",
-      "AGENTS.md",
+      "CODING_STANDARDS.md",
     ]);
   });
 
+  it("never copies AGENTS.md (intentionally excluded)", () => {
+    expect(worktreeCopies(proj("AGENTS.md"))).toEqual([".beads"]);
+  });
+
   it("never lists a context doc the project doesn't have (no missing-path copy)", () => {
-    const copies = worktreeCopies(proj("AGENTS.md"));
-    expect(copies).toContain("AGENTS.md");
-    expect(copies).not.toContain("CONTEXT.md");
+    const copies = worktreeCopies(proj("CONTEXT.md"));
+    expect(copies).toContain("CONTEXT.md");
     expect(copies).not.toContain("CODING_STANDARDS.md");
   });
 });

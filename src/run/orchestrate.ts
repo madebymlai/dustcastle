@@ -50,7 +50,8 @@ export function branchForIssue(id: string): string {
 // gitignores them. The worktree is a clean checkout (tracked files only), so
 // gitignored/uncommitted context never lands there — `copyToWorktree` is
 // sandcastle's seam to opt those in, the same one that already carries `.beads`.
-const WORKTREE_CONTEXT_DOCS: readonly string[] = ["CONTEXT.md", "AGENTS.md", "CODING_STANDARDS.md"];
+// AGENTS.md is intentionally excluded.
+const WORKTREE_CONTEXT_DOCS: readonly string[] = ["CONTEXT.md", "CODING_STANDARDS.md"];
 
 /**
  * What the per-issue worktree must carry beyond the git checkout: the host's live
@@ -184,7 +185,7 @@ const liveOrchestrateDeps: OrchestrateDeps = {
  *
  * Plan and merge run on the host checkout (`sandcastle.run`) so `bd close`
  * persists to the real `.beads`; execute runs in isolated worktrees that carry a
- * copy of `.beads` and the agent-context docs (CONTEXT.md/AGENTS.md/…) via
+ * copy of `.beads` and the agent-context docs (CONTEXT.md/CODING_STANDARDS.md/…) via
  * `copyToWorktree` — sandcastle's seam for files a clean git checkout omits
  * (the Dolt DB is git-excluded; context docs may be gitignored).
  */
