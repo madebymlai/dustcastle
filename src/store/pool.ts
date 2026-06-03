@@ -114,8 +114,9 @@ export function collectPool(pool: Pool, opts: CollectPoolOptions): PoolSweepRepo
     optimise = pool.optimise();
   }
 
-  const warm = new Set(recencyTailKeys(pool.entries(), opts.budgetBytes));
-  const cold = pool.entries().map((e) => e.key).filter((key) => !warm.has(key));
+  const entries = pool.entries();
+  const warm = new Set(recencyTailKeys(entries, opts.budgetBytes));
+  const cold = entries.map((e) => e.key).filter((key) => !warm.has(key));
   const evicted = pool.evict(cold);
 
   return optimise !== undefined ? { ...evicted, optimise } : evicted;
@@ -144,5 +145,4 @@ export function collectPools(pools: readonly Pool[], opts: CollectPoolOptions): 
   }
   return optimise !== undefined ? { entriesEvicted, bytesFreed, optimise } : { entriesEvicted, bytesFreed };
 }
-
 

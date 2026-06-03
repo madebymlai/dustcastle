@@ -35,8 +35,6 @@ export function rootStorePaths(provisioned: { readonly toolchainStorePath: strin
   return [{ kind: "toolchain", path: provisioned.toolchainStorePath }];
 }
 
-
-
 /**
  * NOTE: the old `garbageCollectionPlan` (the bundled "ceiling decision + keep tail")
  * was removed in ADR 0012 — the unified GC brain now composes `overCeiling` (the
