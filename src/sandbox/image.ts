@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { noopLogger, type Logger } from "../log/index.js";
+import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
 import { dustcastleVersion } from "../version.js";
 
 /**
@@ -24,8 +25,8 @@ export interface PodmanBuildResult {
   readonly stderr: string;
 }
 
-/** Runs a `podman <args>` command. Injected in tests; defaults to a real spawn. */
-export type PodmanRunner = (args: readonly string[]) => PodmanBuildResult;
+/** Runs a `podman <args>` command. Injected in tests; defaults to a real streaming spawn. */
+export type PodmanRunner = (args: readonly string[]) => Promise<PodmanBuildResult>;
 
 /**
  * A dustcastle-owned image, as data: everything that distinguishes one built-once
@@ -106,11 +107,23 @@ export function buildArgs(image: string, containerfile: string): string[] {
 }
 
 /**
+ * Classify a podman build stderr line into a {@link StreamingLogLevel} for the
+ * curation seam: progress lines (STEP, COMMIT/-->, Successfully) surface at info;
+ * the rest routes to debug. Tunable by tests that inject a runner.
+ */
+export function classifyPodmanStderrLine(line: string): StreamingLogLevel {
+  if (/^STEP \d+\/\d+/i.test(line) || line.startsWith("-->") || /successfully/i.test(line)) {
+    return "info";
+  }
+  return "debug";
+}
+
+/**
  * Ensure a dustcastle-owned image exists, building it once from its shipped
  * Containerfile if missing (idempotent: a second run is a no-op `podman image
  * exists` hit). Returns the image tag for the consumer to run by name.
  */
-export function ensureImage(spec: ImageSpec, opts: EnsureImageOptions = {}): string {
+export async function ensureImage(spec: ImageSpec, opts: EnsureImageOptions = {}): Promise<string> {
   const image = opts.imageName ?? imageRef(spec, opts.version ?? dustcastleVersion());
   const exists = opts.exists ?? defaultImageExists;
   if (exists(image)) return image;
@@ -119,7 +132,7 @@ export function ensureImage(spec: ImageSpec, opts: EnsureImageOptions = {}): str
   const logger = opts.logger ?? noopLogger;
   const run = opts.run ?? defaultPodmanRun(logger);
   logger.info({ image, label: spec.label }, "building dustcastle image");
-  const result = run(buildArgs(image, containerfile));
+  const result = await run(buildArgs(image, containerfile));
   if (result.status !== 0) {
     logger.error(
       { image, label: spec.label, stderr: result.stderr.slice(-2000) },
@@ -136,15 +149,12 @@ function defaultImageExists(image: string): boolean {
   return spawnSync("podman", ["image", "exists", image]).status === 0;
 }
 
-/** Default runner: a real `podman` spawn, streaming stderr as debug detail. */
+/** Default runner: a real `podman` spawn, streaming stderr live via the shared helper. */
 function defaultPodmanRun(logger: Logger): PodmanRunner {
-  return (args) => {
-    const r = spawnSync("podman", [...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    if (r.stderr) {
-      for (const line of r.stderr.split("\n").filter((l) => l.length > 0)) {
-        logger.debug({ line }, "podman stderr");
-      }
-    }
-    return { status: r.status, stderr: r.stderr ?? "" };
-  };
+  return (args) =>
+    runStreamingAsync("podman", [...args], {
+      logger,
+      label: "podman",
+      classifyStderrLine: classifyPodmanStderrLine,
+    });
 }

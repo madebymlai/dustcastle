@@ -18,22 +18,22 @@ describe("the dustcastle-owned agent image (AGENT_SPEC)", () => {
     expect(existsSync(AGENT_SPEC.containerfile)).toBe(true);
   });
 
-  it("builds the agent image through ensureImage under its version-derived tag", () => {
+  it("builds the agent image through ensureImage under its version-derived tag", async () => {
     let args: readonly string[] | undefined;
-    const run: PodmanRunner = (a) => {
+    const run: PodmanRunner = async (a) => {
       args = a;
       return { status: 0, stderr: "" };
     };
     const ref = imageRef(AGENT_SPEC, "1.0.0");
-    const image = ensureImage(AGENT_SPEC, { version: "1.0.0", exists: () => false, run });
+    const image = await ensureImage(AGENT_SPEC, { version: "1.0.0", exists: () => false, run });
     expect(image).toBe(ref);
     expect(args?.slice(0, 3)).toEqual(["build", "-t", ref]);
     expect(args?.some((a) => a.endsWith("agent.Containerfile"))).toBe(true);
   });
 
-  it("renders the agent prefix and noun in the build-failure error (real strings, not synthetic)", () => {
-    const run: PodmanRunner = () => ({ status: 1, stderr: "boom: no base image" });
-    expect(() => ensureImage(AGENT_SPEC, { exists: () => false, run })).toThrowError(
+  it("renders the agent prefix and noun in the build-failure error (real strings, not synthetic)", async () => {
+    const run: PodmanRunner = async () => ({ status: 1, stderr: "boom: no base image" });
+    await expect(ensureImage(AGENT_SPEC, { exists: () => false, run })).rejects.toThrowError(
       /failed to build the agent image .*boom/s,
     );
   });

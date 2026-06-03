@@ -336,13 +336,13 @@ export async function withProvisionedSandbox<T>(
       // BEFORE the Store provision (ADR 0005/0010). A host that can't enforce scoped
       // egress fails fast here, before any build work; dustcastle has no unconfined
       // fallback. Torn down in the finally whatever the outcome.
-      beforeProvision: (decision) => {
+      beforeProvision: async (decision) => {
         // Only the allowlist (impure) path runs a proxy, so build its image lazily
         // there — the dustcastle-owned image that actually carries the proxy code
         // (stock node:20-alpine has none, which left the proxy dead-on-arrival).
         let image = opts.proxyImage;
         if (image === undefined && decision.kind === "allowlist") {
-          image = ensureImage(PROXY_SPEC, { logger: egressLogger });
+          image = await ensureImage(PROXY_SPEC, { logger: egressLogger });
         }
         // The proxy resolves allowlisted hosts through external resolvers, not the
         // --internal net's aardvark (which would NXDOMAIN-poison resolution).
@@ -396,7 +396,7 @@ export async function withProvisionedSandbox<T>(
     // Containerfile; idempotent thereafter), the way the Store provision ensures
     // nix-portable. The image carries the agent harness (git/bd/pi) + a writable,
     // keep-id-aligned `agent` user that sandcastle's provider maps the host user onto.
-    ensureImage(AGENT_SPEC, { logger: sandboxLogger });
+    await ensureImage(AGENT_SPEC, { logger: sandboxLogger });
 
     // Mount the pi login into the sandbox (~/.pi/agent), so the agent
     // authenticates in-container off the developer's existing `pi login` — no
