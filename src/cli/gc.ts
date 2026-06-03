@@ -62,12 +62,12 @@ export async function runGcCommand(opts: {
   // Budget 0 ⇒ an empty warm tail ⇒ every (unpinned) entry is cold in both pools.
   const report = collectPools([store, cache], { budgetBytes: 0, optimise: true });
 
-  const freed = report.bytesFreed + (report.optimise?.bytesFreed ?? 0);
+  const totalBytesFreed = report.bytesFreed + (report.optimise?.bytesFreed ?? 0);
   logger.info(
     {
       entriesEvicted: report.entriesEvicted,
       filesLinked: report.optimise?.filesLinked ?? 0,
-      freedBytes: freed,
+      freedBytes: totalBytesFreed,
     },
     "gc done",
   );

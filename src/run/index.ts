@@ -280,6 +280,10 @@ export interface ProvisionedSandbox {
   ): NonNullable<SandcastleHandoff["hooks"]>;
 }
 
+function subsystemLogger(logger: Logger | undefined, mod: string): Logger {
+  return (logger ?? noopLogger).child({ mod });
+}
+
 /**
  * Provision from the shared Store, stand up the egress backend the plan routes
  * through, and pin the closure with scoped GC roots — then run `body` with the
@@ -307,12 +311,11 @@ export async function withProvisionedSandbox<T>(
   // ALL its deps-cache entries so a concurrent GC sweep never evicts assembled deps
   // out from under it; released on completion (the finally).
   const cacheDir = opts.depsCacheDir ?? defaultDepsCacheDir();
-  const rootLogger = opts.logger ?? noopLogger;
-  const gcLogger = rootLogger.child({ mod: "gc" });
-  const storeLogger = rootLogger.child({ mod: "store" });
-  const depsLogger = rootLogger.child({ mod: "deps-cache" });
-  const egressLogger = rootLogger.child({ mod: "egress" });
-  const sandboxLogger = rootLogger.child({ mod: "sandbox" });
+  const gcLogger = subsystemLogger(opts.logger, "gc");
+  const storeLogger = subsystemLogger(opts.logger, "store");
+  const depsLogger = subsystemLogger(opts.logger, "deps-cache");
+  const egressLogger = subsystemLogger(opts.logger, "egress");
+  const sandboxLogger = subsystemLogger(opts.logger, "sandbox");
   const cachePool = depsCachePool({ cacheDir, logger: depsLogger });
   const cachePinnedKeys: string[] = [];
 
@@ -330,11 +333,10 @@ export async function withProvisionedSandbox<T>(
         // Only the allowlist (impure) path runs a proxy, so build its image lazily
         // there — the dustcastle-owned image that actually carries the proxy code
         // (stock node:20-alpine has none, which left the proxy dead-on-arrival).
-        const image =
-          opts.proxyImage ??
-          (decision.kind === "allowlist"
-            ? ensureImage(PROXY_SPEC, { logger: egressLogger })
-            : undefined);
+        let image = opts.proxyImage;
+        if (image === undefined && decision.kind === "allowlist") {
+          image = ensureImage(PROXY_SPEC, { logger: egressLogger });
+        }
         // The proxy resolves allowlisted hosts through external resolvers, not the
         // --internal net's aardvark (which would NXDOMAIN-poison resolution).
         const resolvConfPath = decision.kind === "allowlist" ? provisionProxyResolvConf() : undefined;
@@ -434,7 +436,7 @@ export async function withProvisionedSandbox<T>(
  */
 function updateRecency(opts: ProvisionOptions, prepared: PreparedRun): void {
   if (opts.autoGc?.disabled === true) return;
-  const gcLogger = (opts.logger ?? noopLogger).child({ mod: "gc" });
+  const gcLogger = subsystemLogger(opts.logger, "gc");
   try {
     const dir = opts.autoGc?.recencyDir ?? DUSTCASTLE_HOME;
     const recencyRootsDir = opts.autoGc?.recencyRootsDir ?? defaultRecencyRootsDir();
@@ -460,7 +462,7 @@ function triggerAutoGc(opts: ProvisionOptions): void {
   if (opts.autoGc?.disabled === true) return;
   try {
     if (opts.autoGc?.spawn !== undefined) opts.autoGc.spawn();
-    else spawnAutoGc({ logger: (opts.logger ?? noopLogger).child({ mod: "gc" }) });
+    else spawnAutoGc({ logger: subsystemLogger(opts.logger, "gc") });
   } catch {
     /* best-effort: a failed spawn must never break a run */
   }
@@ -510,18 +512,20 @@ function populateDepsCache(
   logger: Logger,
 ): void {
   for (const entry of populate) {
+    const warnPopulateFailed = (detail: string): void => {
+      logger.warn({ lockfileHash: entry.lockfileHash, detail }, "populate deps-cache entry failed (best-effort)");
+    };
+
     try {
       const command = populateCommand({ cacheDir, ...entry });
       const result = spawnSync("sh", ["-c", command], { cwd, encoding: "utf8" });
       if (result.status === 0) {
         logger.debug({ lockfileHash: entry.lockfileHash, stageDir: entry.stageDir }, "populated deps-cache entry");
       } else {
-        const detail = result.stderr?.trim() ?? "";
-        logger.warn({ lockfileHash: entry.lockfileHash, detail }, "populate deps-cache entry failed (best-effort)");
+        warnPopulateFailed(result.stderr?.trim() ?? "");
       }
     } catch (e) {
-      const detail = (e as Error).message;
-      logger.warn({ lockfileHash: entry.lockfileHash, detail }, "populate deps-cache entry failed (best-effort)");
+      warnPopulateFailed((e as Error).message);
     }
   }
 }

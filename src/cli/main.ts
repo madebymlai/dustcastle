@@ -23,6 +23,10 @@ Usage:
   Toolchain into the shared Store, provisions the Sandbox from it, and drives
   the plan → execute+review → merge loop (ADR 0002).`;
 
+function createCliLogger() {
+  return createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
+}
+
 async function main(argv: string[]): Promise<number> {
   const command = argv[0] ?? "run";
   if (command === "-h" || command === "--help" || command === "help") {
@@ -33,14 +37,12 @@ async function main(argv: string[]): Promise<number> {
     return runModelCommand();
   }
   if (command === "gc") {
-    const rootLogger = createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
-    return runGcCommand({ logger: rootLogger.child({ mod: "gc" }) });
+    return runGcCommand({ logger: createCliLogger().child({ mod: "gc" }) });
   }
   if (command === "__autogc") {
     // Hidden internal entry: the detached one-shot `run()` spawns after every run
     // (ADR 0007). Not in USAGE — it is invisible maintenance, never user-invoked.
-    const rootLogger = createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
-    return runAutoGcCommand({ logger: rootLogger.child({ mod: "gc" }) });
+    return runAutoGcCommand({ logger: createCliLogger().child({ mod: "gc" }) });
   }
   if (command !== "run") {
     console.error(`dustcastle: unknown command '${command}'.\n\n${USAGE}`);
@@ -63,21 +65,22 @@ async function main(argv: string[]): Promise<number> {
 
   // dustcastle's half: detect → realize the Store → plan the Sandbox. Surface
   // the active runtime mode (ADR 0008 — never silent) and what was provisioned.
-  // Resolve Agent Egress (ADR 0010) so the printed posture matches the run's: the
-  // agent's model host carves a route out of even a pure build. Throws actionably
-  // on an unknown provider (caught at the top), before anything is provisioned.
   // Resolve Agent Egress (ADR 0010) up front: the configured model's API host(s),
   // so an unknown provider throws here — before anything is provisioned. Undefined
   // ⇒ no model ⇒ no agent egress.
   const agentModelHosts = configuredAgentModelHosts();
   const selection = loadModelSelection();
-  const rootLogger = createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
+  const rootLogger = createCliLogger();
 
   // No agent model: nothing runs in the Sandbox, so there's no egress to confine.
   // Provision the Store, print the posture, and stop — the user picks a model and
   // re-runs. (ADR 0010: agent egress only matters when an agent will actually run.)
   if (selection === undefined) {
-    const prepared = prepareRun({ cwd, logger: rootLogger.child({ mod: "store" }), ...(agentModelHosts !== undefined ? { agentModelHosts } : {}) });
+    const prepared = prepareRun({
+      cwd,
+      logger: rootLogger.child({ mod: "store" }),
+      ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
+    });
     printPosture(prepared);
     console.error("    (sandbox provisioned and ready; run `dustcastle model` to choose an agent model)");
     return 0;
