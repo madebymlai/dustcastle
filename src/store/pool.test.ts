@@ -1,11 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { collectPool, collectPools, type Pool, type PoolEntry } from "./pool.js";
+import { collectPool, collectPools, recencyTailKeys, type Pool, type PoolEntry } from "./pool.js";
 
 // The pool interface (ADR 0012) generalizes the Store GC into a reusable seam: the
 // pure recency/ceiling/warm-set brain (`collectPool`) drives ANY pool implementation
 // through `measure` · `entries` · `pin`/`release` · `evict` · optional `optimise`.
 // In this slice the Store is the sole pool; these tests pin the interface contract
 // pool-agnostically (no nix, no disk) so a second pool can plug into the same brain.
+
+describe("recencyTailKeys (the byte-budget LRU warm set in PoolEntry vocabulary — ADR 0007)", () => {
+  it("keeps the newest entries that fit the byte budget, dropping the older rest", () => {
+    const entries = [
+      { key: "npm-old", lastUsedAt: 100, bytes: 300 },
+      { key: "npm-new", lastUsedAt: 300, bytes: 400 },
+      { key: "npm-mid", lastUsedAt: 200, bytes: 400 },
+    ];
+    // Budget 900: newest (400) + mid (400) = 800 fit; old (→1100) overflows → cold.
+    expect(recencyTailKeys(entries, 900)).toEqual(["npm-new", "npm-mid"]);
+  });
+
+  it("keeps nothing under a zero budget", () => {
+    const entries = [{ key: "npm-a", lastUsedAt: 1, bytes: 10 }];
+    expect(recencyTailKeys(entries, 0)).toEqual([]);
+  });
+
+  it("drops a single entry larger than the whole budget (size-bounded, not count)", () => {
+    const entries = [
+      { key: "huge-new", lastUsedAt: 300, bytes: 5000 },
+      { key: "small-old", lastUsedAt: 100, bytes: 100 },
+    ];
+    // The newest is oversize so it (and every older one, by LRU) cannot be kept.
+    expect(recencyTailKeys(entries, 1000)).toEqual([]);
+  });
+});
 
 /**
  * An in-memory pool fake: entries are a key→bytes map, pins are a set, and `evict`

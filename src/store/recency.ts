@@ -1,7 +1,16 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DUSTCASTLE_HOME } from "../config/global.js";
-import type { RecencyRecord } from "./gc.js";
+
+/** A project's last-use timestamp + closure size, the input to the recency tail (ADR 0007). */
+export interface RecencyRecord {
+  /** The project's GC key (mirrors `gcProjectKey`). */
+  readonly projectKey: string;
+  /** When this project's closure was last used by a run (epoch ms). */
+  readonly lastUsedAt: number;
+  /** The on-disk size of this project's closure (bytes) — the byte-budget unit. */
+  readonly closureBytes: number;
+}
 
 /**
  * The recency index (ADR 0007) — a derived-STATE record of when each project's

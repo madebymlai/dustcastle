@@ -13,7 +13,6 @@ import {
   pruneRecencyRoots,
   registerRecencyRoot,
   registerScopedRoots,
-  recencyTailKeys,
   rootStorePaths,
   type NixResult,
 } from "./gc.js";
@@ -116,32 +115,6 @@ describe("registerScopedRoots (per-run roots, released on completion — ADR 000
     // Releasing the scoped root removes the link symlink (closure becomes collectable).
     handle.release();
     expect(handle.links.some((l) => existsSync(l))).toBe(false);
-  });
-});
-
-describe("recencyTailKeys (the byte-budget LRU warm set — ADR 0007)", () => {
-  it("keeps the newest closures that fit the byte budget, dropping the older rest", () => {
-    const records = [
-      { projectKey: "npm-old", lastUsedAt: 100, closureBytes: 300 },
-      { projectKey: "npm-new", lastUsedAt: 300, closureBytes: 400 },
-      { projectKey: "npm-mid", lastUsedAt: 200, closureBytes: 400 },
-    ];
-    // Budget 900: newest (400) + mid (400) = 800 fit; old (→1100) overflows → cold.
-    expect(recencyTailKeys(records, 900)).toEqual(["npm-new", "npm-mid"]);
-  });
-
-  it("keeps nothing under a zero budget", () => {
-    const records = [{ projectKey: "npm-a", lastUsedAt: 1, closureBytes: 10 }];
-    expect(recencyTailKeys(records, 0)).toEqual([]);
-  });
-
-  it("drops a single closure larger than the whole budget (size-bounded, not count)", () => {
-    const records = [
-      { projectKey: "huge-new", lastUsedAt: 300, closureBytes: 5000 },
-      { projectKey: "small-old", lastUsedAt: 100, closureBytes: 100 },
-    ];
-    // The newest is oversize so it (and every older one, by LRU) cannot be kept.
-    expect(recencyTailKeys(records, 1000)).toEqual([]);
   });
 });
 
