@@ -6,10 +6,11 @@ import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtim
 import { deriveEgress, gitRemoteHost, type EgressDecision } from "../sandbox/egress.js";
 import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
-import { provisionStore, storeHashOf, type Provisioned } from "../store/index.js";
+import { provisionStore, type Provisioned } from "../store/index.js";
 import { nixPortableRunner, type NixRunner } from "../store/nix.js";
 import { storePool, type StorePoolOptions } from "../store/storePool.js";
 import type { Pool } from "../store/pool.js";
+import { storeClosures } from "./storeClosures.js";
 import {
   depsCacheDecision,
   populateCommand,
@@ -21,6 +22,8 @@ import { spawnAutoGc } from "../cli/autogc.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
 import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
+
+export { gcProjectKey, storeClosures, type GcProjectKeyInput } from "./storeClosures.js";
 
 export interface PrepareOptions {
   /** The project directory to run in (defaults to the process cwd at the CLI). */
@@ -244,21 +247,6 @@ export interface RunOptions extends ProvisionOptions {
   readonly handoff: SandcastleHandoff;
 }
 
-export interface GcProjectKeyInput {
-  readonly detection: Pick<Detection, "packageManager">;
-  readonly provisioned: Pick<Provisioned, "toolchainStorePath">;
-}
-
-/**
- * A stable key for the realized Toolchain closure this run pins (ADR 0007/0012).
- * The Store realizes only Toolchains now, so the key names the physical closure by
- * package manager plus the Toolchain store hash. Projects sharing one Toolchain
- * share one recency/root record; different Toolchains no longer collide.
- */
-export function gcProjectKey(prepared: GcProjectKeyInput): string {
-  return `${prepared.detection.packageManager}-${storeHashOf(prepared.provisioned.toolchainStorePath)}`;
-}
-
 /**
  * `dustcastle run` (single agent): provision from the shared Store, then hand the
  * Store-mounted Sandbox to sandcastle's flow (ADR 0002). dustcastle owns the
@@ -313,7 +301,7 @@ export async function withProvisionedSandbox<T>(
   // the body throws after egress came up.
   let egress: ReturnType<typeof ensureEgress> = { teardown: () => {} };
   let pool: ReturnType<typeof storePool> | undefined;
-  let projectKey: string | undefined;
+  const storePinnedKeys: string[] = [];
   // The deps-cache pool + the keys this run pins in it (ADR 0012). A live run pins
   // ALL its deps-cache entries so a concurrent GC sweep never evicts assembled deps
   // out from under it; released on completion (the finally).
@@ -365,31 +353,37 @@ export async function withProvisionedSandbox<T>(
     // Route the Store's pin/warm/release through the one Pool seam (ADR 0012/0015),
     // symmetric with the deps-cache pool below. The pool owns the GC-root lifecycle
     // and the recency index; no out-of-band registerScopedRoots/registerRecencyRoot
-    // /upsertRecency calls remain.
-    projectKey = gcProjectKey(prepared);
+    // /upsertRecency calls remain. A polyglot run contributes one closure per
+    // active Toolchain key, deduped by the Store pool key.
+    const closures = storeClosures(prepared.ecosystems);
     const makeStorePool = opts.makeStorePool ?? storePool;
     pool = makeStorePool({
       run: opts.gcRoots?.run ?? opts.autoGc?.run ?? nixPortableRunner(),
       dir: opts.autoGc?.recencyDir ?? DUSTCASTLE_HOME,
       ...(opts.gcRoots?.gcrootsDir !== undefined ? { gcrootsDir: opts.gcRoots.gcrootsDir } : {}),
       ...(opts.autoGc?.recencyRootsDir !== undefined ? { recencyRootsDir: opts.autoGc.recencyRootsDir } : {}),
-      closures: new Map([[projectKey, prepared.provisioned]]),
+      closures,
       logger: gcLogger,
     });
 
-    // Pin this run's Toolchain closure with scoped GC roots (ADR 0007/0012), so a
+    // Pin every active Toolchain closure with scoped GC roots (ADR 0007/0012), so a
     // concurrent collect-garbage never deletes paths the live run still needs. Roots
     // are released on completion (below), scoping them to the active run.
-    pool.pin(projectKey);
+    for (const key of closures.keys()) {
+      pool.pin(key);
+      storePinnedKeys.push(key);
+    }
 
-    // Warm this project in the recency index + persistent recency root (ADR 0007),
-    // so its Toolchain stays warm across runs — distinct from the scoped root above,
-    // which is released on completion. Best-effort: a failure only risks a later
-    // cold rebuild, never the run.
-    try {
-      pool.warm?.(projectKey);
-    } catch (e) {
-      gcLogger.warn({ err: (e as Error).message }, "recency update failed (best-effort)");
+    // Warm every active Toolchain in the recency index + persistent recency root
+    // (ADR 0007), so polyglot secondary Toolchains stay warm across runs — distinct
+    // from the scoped roots above, which are released on completion. Best-effort per
+    // key: a failure only risks a later cold rebuild for that key, never the run.
+    for (const key of closures.keys()) {
+      try {
+        pool.warm?.(key);
+      } catch (e) {
+        gcLogger.warn({ key, err: (e as Error).message }, "recency update failed (best-effort)");
+      }
     }
 
     // Pin EVERY detected ecosystem's deps-cache entry (ADR 0012, dustcastle-8od), so a
@@ -436,7 +430,7 @@ export async function withProvisionedSandbox<T>(
 
     return result;
   } finally {
-    pool?.release(projectKey!); // drop this run's scoped GC roots — closure becomes collectable
+    for (const key of storePinnedKeys) pool?.release(key); // drop scoped Store roots — closures become collectable
     for (const key of cachePinnedKeys) cachePool.release(key); // unpin deps-cache entries
     egress.teardown();
     // Fire the detached auto-GC one-shot (ADR 0007), off the hot path. It runs
