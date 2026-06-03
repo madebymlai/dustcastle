@@ -49,8 +49,8 @@ describe("dustcastle run (laimk-hse.2: Python in-Sandbox install, ADR 0002/0005/
         const projectDir = stage(root);
 
         const prepared = await prepareRun({ cwd: projectDir });
-        expect(prepared.detection.ecosystem).toBe("python");
-        expect(prepared.detection.packageManager).toBe(manager);
+        expect(prepared.ecosystems[0].detection.ecosystem).toBe("python");
+        expect(prepared.ecosystems[0].detection.packageManager).toBe(manager);
         expect(prepared.plan.egress.kind).toBe("allowlist");
         expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
         expect(egressHosts(prepared.plan.egress)).toContain("pypi.org");

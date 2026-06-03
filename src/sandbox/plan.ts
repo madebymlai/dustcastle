@@ -21,27 +21,19 @@ export interface EcosystemPlan {
   readonly cache?: DepsCacheDecision;
 }
 
+export type EcosystemPlans = readonly [EcosystemPlan, ...EcosystemPlan[]];
+
 export interface SandboxPlanSpec {
-  readonly provisioned: Provisioned;
-  readonly detection: Detection;
+  /**
+   * Every detected Ecosystem in this run, paired with its provisioned Toolchain.
+   * The non-empty tuple captures prepareRun's zero-detection guard at the type level.
+   */
+  readonly ecosystems: EcosystemPlans;
   /**
    * The deps-cache root (under the dustcastle home) shared by every ecosystem in this
    * run. Required when any cache decision with a stable lockfile hash is supplied.
    */
   readonly cacheDir?: string;
-  /**
-   * The primary ecosystem's deps-cache decision (ADR 0012, dustcastle-8od). Absent
-   * for a caller that does not cache (the prior always-install behavior).
-   */
-  readonly cache?: DepsCacheDecision;
-  /**
-   * The OTHER Ecosystems a polyglot repo detected (ADR 0012). Each one's Toolchain
-   * is provisioned and its deps install in-Sandbox alongside the primary's, into its
-   * own stage dir (`node_modules`/`site`/`vendor`). Absent/empty for a single-
-   * Ecosystem repo. `provisioned`/`detection` above is the FIRST detected Ecosystem;
-   * these are the rest, so a Node+Python repo installs both in one Sandbox.
-   */
-  readonly additionalEcosystems?: readonly EcosystemPlan[];
   /**
    * The egress decision (ADR 0005/0012). A standing allowlist that no longer branches
    * on purity — every detected manager's registry is open and deps install in-Sandbox.
@@ -112,19 +104,10 @@ const DEFAULT_IMAGE = imageRef(AGENT_SPEC);
  * no patch.
  */
 export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
-  const { provisioned } = spec;
-  const primaryEcosystem: EcosystemPlan = {
-    provisioned,
-    detection: spec.detection,
-    ...(spec.cache !== undefined ? { cache: spec.cache } : {}),
-  };
-  // Every detected Ecosystem (ADR 0012): the primary plus any polyglot siblings.
-  // Each provisions its Toolchain and either restores its deps from the cache (hit)
-  // or installs them in-Sandbox (miss / uncacheable).
-  const ecosystems: readonly EcosystemPlan[] = [
-    primaryEcosystem,
-    ...(spec.additionalEcosystems ?? []),
-  ];
+  // Every detected Ecosystem (ADR 0012): each provisions its Toolchain and either
+  // restores its deps from the cache (hit) or installs them in-Sandbox (miss /
+  // uncacheable).
+  const ecosystems = spec.ecosystems;
   const cacheDir = spec.cacheDir;
   const egress =
     spec.egress ?? deriveEgress({ packageManagers: ecosystems.map((e) => e.detection.packageManager) });
@@ -139,7 +122,7 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     mounts: [
       // THE SEAM: the shared Store, read-only, at its canonical path. Every
       // Ecosystem's Toolchain lives in this one content-addressed Store.
-      { hostPath: provisioned.physStoreRoot, sandboxPath: "/nix/store", readonly: true },
+      { hostPath: ecosystems[0].provisioned.physStoreRoot, sandboxPath: "/nix/store", readonly: true },
     ],
     env: {
       // Merge each Ecosystem's run env (PATH + cache vars). A polyglot repo puts

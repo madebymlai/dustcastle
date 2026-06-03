@@ -34,8 +34,8 @@ describe("dustcastle (3a-ii: per-workspace monorepo in-Sandbox install, ADR 0006
     expect(ws.members.map((m) => m.dir).sort()).toEqual([...members].sort());
 
     for (const member of ws.members) {
-      expect(member.prepared.detection.ecosystem).toBe("node");
-      expect(member.prepared.provisioned.toolchainStorePath).toContain("/nix/store/");
+      expect(member.prepared.ecosystems[0].detection.ecosystem).toBe("node");
+      expect(member.prepared.ecosystems[0].provisioned.toolchainStorePath).toContain("/nix/store/");
 
       await runInSandbox({
         prepared: member.prepared,

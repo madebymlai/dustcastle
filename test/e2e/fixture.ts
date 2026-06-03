@@ -117,7 +117,7 @@ export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
   });
   const proxyUrl = `http://${PROXY_MAP_ADDR}:${proxy.port}`;
 
-  const storeRoot = spec.prepared.provisioned.physStoreRoot;
+  const storeRoot = spec.prepared.ecosystems[0].provisioned.physStoreRoot;
   // The plan env carries the Toolchain on PATH + writable cache vars; override the
   // proxy env to the LIVE ephemeral proxy (the plan baked the production proxy URL).
   const env = {

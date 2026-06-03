@@ -82,7 +82,7 @@ describe("dustcastle run (slice 3: impure-allow egress enforcement, ADR 0004/000
         proxyUrl: PROXY_URL,
         onLine: log,
       });
-      expect(prepared.detection.ecosystem).toBe("node");
+      expect(prepared.ecosystems[0].detection.ecosystem).toBe("node");
       expect(prepared.plan.egress.kind).toBe("allowlist");
       // The standing allowlist the proxy enforces: the npm registry (no git remote on
       // a temp fixture). `egressHosts` is the flat union the proxy consumes.
@@ -103,7 +103,7 @@ describe("dustcastle run (slice 3: impure-allow egress enforcement, ADR 0004/000
         onDecision: (h, allowed) => log(`proxy ${allowed ? "ALLOW" : "DENY "} ${h}`),
       });
 
-      const storeRoot = prepared.provisioned.physStoreRoot;
+      const storeRoot = prepared.ecosystems[0].provisioned.physStoreRoot;
       // The plan's PATH (Store toolchain + /usr/bin:/bin) wins for `node`/`npm`;
       // append the sbin dirs so the harness's confine step finds busybox `ip`.
       const planPath = prepared.plan.podmanOptions.env?.PATH ?? "/usr/bin:/bin";

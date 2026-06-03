@@ -4,9 +4,9 @@ import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
 import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtime.js";
 import { deriveEgress, gitRemoteHost, type EgressDecision } from "../sandbox/egress.js";
-import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/plan.js";
+import { planSandbox, type EcosystemPlan, type EcosystemPlans, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
-import { provisionStore, type Provisioned } from "../store/index.js";
+import { provisionStore } from "../store/index.js";
 import { nixPortableRunner, type NixRunner } from "../store/nix.js";
 import { storePool, type StorePoolOptions } from "../store/storePool.js";
 import type { Pool } from "../store/pool.js";
@@ -66,17 +66,25 @@ export interface PrepareOptions {
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
 export interface PreparedRun {
-  /** The FIRST detected Ecosystem (the primary). The full set is {@link ecosystems}. */
-  readonly detection: Detection;
-  /** The primary Ecosystem's provisioned Toolchain. The full set is {@link ecosystems}. */
-  readonly provisioned: Provisioned;
   /**
    * Every detected Ecosystem paired with its provisioned Toolchain (ADR 0012). A
-   * polyglot repo has more than one; each installs its deps in-Sandbox. The first
-   * entry mirrors {@link detection}/{@link provisioned}.
+   * polyglot repo has more than one; each installs its deps in-Sandbox.
    */
-  readonly ecosystems: readonly EcosystemPlan[];
+  readonly ecosystems: EcosystemPlans;
   readonly plan: SandboxPlan;
+}
+
+function assertNonEmpty<T>(items: readonly T[], message: string): asserts items is readonly [T, ...T[]] {
+  if (items.length === 0) throw new Error(message);
+}
+
+async function mapNonEmptySequential<T, U>(
+  items: readonly [T, ...T[]],
+  map: (item: T) => Promise<U>,
+): Promise<readonly [U, ...U[]]> {
+  const mapped: U[] = [];
+  for (const item of items) mapped.push(await map(item));
+  return mapped as unknown as readonly [U, ...U[]];
 }
 
 /**
@@ -89,9 +97,8 @@ export interface PreparedRun {
  */
 export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   const resolved = detect(opts.cwd);
-  if (resolved.length === 0) {
-    throw new Error(`no supported ecosystem detected in ${opts.cwd}`);
-  }
+  assertNonEmpty(resolved, `no supported ecosystem detected in ${opts.cwd}`);
+  const detections = resolved;
 
   // Derive the standing egress decision (ADR 0005/0010/0012) BEFORE provisioning —
   // it needs only detection, not the realized Store — so the enforcing proxy can be
@@ -123,8 +130,7 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   // provisions every Toolchain. Decide each ecosystem's deps-cache hit/miss host-side
   // (keyed by its lockfile hash), so the plan emits restore-vs-install per ecosystem.
   const logger = opts.logger ?? noopLogger;
-  const ecosystems: EcosystemPlan[] = [];
-  for (const detection of resolved) {
+  const ecosystems = await mapNonEmptySequential(detections, async (detection): Promise<EcosystemPlan> => {
     const cache = depsCacheDecision(opts.cwd, detection, cacheDir);
     const provisioned = await provisionStore({
       projectDir: opts.cwd,
@@ -133,24 +139,18 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
       ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
       logger,
     });
-    ecosystems.push({
+    return {
       detection,
       provisioned,
       ...(cache !== undefined ? { cache } : {}),
-    });
-  }
+    };
+  });
 
-  const primary = ecosystems[0]!;
   return {
-    detection: primary.detection,
-    provisioned: primary.provisioned,
     ecosystems,
     plan: planSandbox({
-      provisioned: primary.provisioned,
-      detection: primary.detection,
+      ecosystems,
       cacheDir,
-      ...(primary.cache !== undefined ? { cache: primary.cache } : {}),
-      ...(ecosystems.length > 1 ? { additionalEcosystems: ecosystems.slice(1) } : {}),
       egress,
       ...(opts.proxyUrl !== undefined ? { proxyUrl: opts.proxyUrl } : {}),
     }),

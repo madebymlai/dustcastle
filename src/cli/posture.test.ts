@@ -3,11 +3,10 @@ import { createMemoryLogger } from "../log/fake.js";
 import { logPosture, logSweep, type PreparedPosture } from "./posture.js";
 
 const prepared = {
-  provisioned: { mode: "proot" },
   ecosystems: [
     {
       detection: { ecosystem: "node", toolchainVersion: "20.18.1" },
-      provisioned: { toolchainStorePath: "/nix/store/node-toolchain" },
+      provisioned: { mode: "proot", toolchainStorePath: "/nix/store/node-toolchain" },
     },
   ],
 } satisfies PreparedPosture;

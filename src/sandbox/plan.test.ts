@@ -28,7 +28,7 @@ const detection: Detection = {
 
 describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
   it("bind-mounts the physical Store read-only at the canonical /nix/store", () => {
-    const plan = planSandbox({ provisioned, detection });
+    const plan = planSandbox({ ecosystems: [{ provisioned, detection }] });
 
     expect(plan.podmanOptions.mounts).toContainEqual({
       hostPath: provisioned.physStoreRoot,
@@ -38,7 +38,7 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
   });
 
   it("puts the Toolchain on PATH and configures Go to fetch its modules in-Sandbox", () => {
-    const env = planSandbox({ provisioned, detection }).podmanOptions.env ?? {};
+    const env = planSandbox({ ecosystems: [{ provisioned, detection }] }).podmanOptions.env ?? {};
 
     // The `go` binary comes from the shared Store, at its canonical path.
     expect(env.PATH).toContain(`${provisioned.toolchainStorePath}/bin`);
@@ -54,13 +54,13 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
     // Egress is a standing allowlist that no longer branches on purity — every
     // detected manager opens its registry (the install runs in-Sandbox). A go repo
     // gets the module proxy, so the plan attaches the egress network, not `none`.
-    expect(planSandbox({ provisioned, detection }).podmanOptions.network).not.toBe("none");
+    expect(planSandbox({ ecosystems: [{ provisioned, detection }] }).podmanOptions.network).not.toBe("none");
   });
 
   it("installs Project Deps in-Sandbox (no staging from a deps Store path)", () => {
     // `go test` reads its modules; always-impure fetches them in-Sandbox via the
     // standing egress, never `cp -RL` from the Store.
-    const setup = planSandbox({ provisioned, detection }).setupCommands.join("\n");
+    const setup = planSandbox({ ecosystems: [{ provisioned, detection }] }).setupCommands.join("\n");
 
     expect(setup).not.toContain("cp -RL");
     expect(setup).toContain("go mod download");
@@ -69,7 +69,7 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
   it("surfaces the egress decision on the plan — never silent (ADR 0005)", () => {
     // The standing allowlist for a go repo: the Go module proxy (ADR 0012). go.sum is
     // committed, so the checksum DB is verified locally and never on the allowlist.
-    expect(planSandbox({ provisioned, detection }).egress).toEqual({
+    expect(planSandbox({ ecosystems: [{ provisioned, detection }] }).egress).toEqual({
       kind: "allowlist",
       buildHosts: ["proxy.golang.org"],
       agentHosts: [],
@@ -100,7 +100,7 @@ const rustDetection: Detection = { ecosystem: "rust", packageManager: "cargo" };
 
 describe("planSandbox — Rust path (dustcastle-gy5.2)", () => {
   it("fetches cargo deps in-Sandbox while the standing allowlist opens the crates index", () => {
-    const plan = planSandbox({ provisioned: rustProvisioned, detection: rustDetection });
+    const plan = planSandbox({ ecosystems: [{ provisioned: rustProvisioned, detection: rustDetection }] });
     const setup = plan.setupCommands.join("\n");
     const env = plan.podmanOptions.env ?? {};
 
@@ -118,7 +118,7 @@ describe("planSandbox — Rust path (dustcastle-gy5.2)", () => {
 
 describe("planSandbox — Node always-impure path (ADR 0012)", () => {
   it("puts the nodejs Toolchain on PATH with a writable npm cache off the RO Store", () => {
-    const env = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection })
+    const env = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] })
       .podmanOptions.env ?? {};
 
     expect(env.PATH).toContain(`${nodeProvisioned.toolchainStorePath}/bin`);
@@ -129,14 +129,14 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
   it("keeps the agent harness (/usr/local/bin: bd, pi) on PATH, after the Toolchain", () => {
     // The image installs bd/pi to /usr/local/bin; the implement phase shells `bd show`.
     // The Nix Toolchain must still win for the PROJECT, so /usr/local/bin comes AFTER it.
-    const env = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).podmanOptions.env ?? {};
+    const env = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] }).podmanOptions.env ?? {};
     const path = env.PATH ?? "";
     expect(path).toContain("/usr/local/bin");
     expect(path.indexOf(`${nodeProvisioned.toolchainStorePath}/bin`)).toBeLessThan(path.indexOf("/usr/local/bin"));
   });
 
   it("installs node_modules in-Sandbox via the detected manager (npm install), under the standing allowlist", () => {
-    const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection });
+    const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] });
     const setup = plan.setupCommands.join("\n");
 
     // Egress no longer branches on purity (ADR 0012): a node repo's standing
@@ -151,8 +151,7 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
   it("installs with the detected manager's resolving command (pnpm/yarn, no --frozen-lockfile)", () => {
     const cmd = (packageManager: PackageManager) =>
       planSandbox({
-        provisioned: nodeProvisioned,
-        detection: { ecosystem: "node", packageManager },
+        ecosystems: [{ provisioned: nodeProvisioned, detection: { ecosystem: "node", packageManager } }],
       }).setupCommands.at(-1);
 
     expect(cmd("pnpm")).toBe("pnpm install");
@@ -160,7 +159,7 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
   });
 
   it("points the container's tooling at the egress proxy (production proxy by default)", () => {
-    const env = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).podmanOptions.env ?? {};
+    const env = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] }).podmanOptions.env ?? {};
 
     // npm (and any HTTP tooling) is routed through the proxy, which enforces the
     // allowlist; the default targets the production proxy container by name.
@@ -170,8 +169,7 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
 
   it("lets the orchestration layer override the proxy url (the e2e's host proxy)", () => {
     const env = planSandbox({
-      provisioned: nodeProvisioned,
-      detection: nodeDetection,
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }],
       proxyUrl: "http://169.254.7.7:8118",
     }).podmanOptions.env ?? {};
 
@@ -182,7 +180,7 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
     // Standing egress means a detected Ecosystem always opens an allowlist, so the
     // closed case is forced explicitly here — the runtime invariant still holds: a
     // `none` decision gets no proxy env and no network at all.
-    const env = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection, egress: { kind: "none" } })
+    const env = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }], egress: { kind: "none" } })
       .podmanOptions.env ?? {};
     expect(env.HTTPS_PROXY).toBeUndefined();
   });
@@ -197,7 +195,7 @@ describe("planSandbox — staging dir excluded from the worktree's git (dustcast
   // them on merge. We register it in the worktree's `.git/info/exclude` (NOT the
   // project's tracked .gitignore) as the first setup step, before installing.
   it("excludes node_modules in the worktree's git before installing it", () => {
-    const setup = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).setupCommands;
+    const setup = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] }).setupCommands;
     const joined = setup.join("\n");
 
     // Targets the worktree's git exclude file, not the project's tracked .gitignore.
@@ -209,28 +207,32 @@ describe("planSandbox — staging dir excluded from the worktree's git (dustcast
   });
 
   it("excludes vendor for a go build (the staging dir is read from the Registry)", () => {
-    const setup = planSandbox({ provisioned, detection }).setupCommands;
+    const setup = planSandbox({ ecosystems: [{ provisioned, detection }] }).setupCommands;
     expect(setup[0]).toContain("info/exclude");
     expect(setup[0]).toContain("vendor");
   });
 
   it("excludes site for a python build", () => {
     const setup = planSandbox({
-      provisioned: { ...nodeProvisioned, toolchainStorePath: "/nix/store/pppp-python3-3.12" },
-      detection: { ecosystem: "python", packageManager: "pip" },
+      ecosystems: [
+        {
+          provisioned: { ...nodeProvisioned, toolchainStorePath: "/nix/store/pppp-python3-3.12" },
+          detection: { ecosystem: "python", packageManager: "pip" },
+        },
+      ],
     }).setupCommands;
     expect(setup[0]).toContain("info/exclude");
     expect(setup[0]).toContain("site");
   });
 
   it("excludes the staged CARGO_HOME basename for a rust build", () => {
-    const setup = planSandbox({ provisioned: rustProvisioned, detection: rustDetection }).setupCommands;
+    const setup = planSandbox({ ecosystems: [{ provisioned: rustProvisioned, detection: rustDetection }] }).setupCommands;
     expect(setup[0]).toContain("info/exclude");
     expect(setup[0]).toContain(CARGO_HOME_BASENAME);
   });
 
   it("appends idempotently — only when the entry is not already present", () => {
-    const setup = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection }).setupCommands;
+    const setup = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] }).setupCommands;
     expect(setup[0]).toMatch(/grep -qxF '[^']+'[^|]*\|\|[^>]*>>/);
   });
 });
@@ -247,8 +249,7 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
 
   const setup = (packageManager: PackageManager) =>
     planSandbox({
-      provisioned: pythonProvisioned,
-      detection: { ecosystem: "python", packageManager },
+      ecosystems: [{ provisioned: pythonProvisioned, detection: { ecosystem: "python", packageManager } }],
     }).setupCommands;
 
   it("a loose / unpinned requirements.txt installs by resolving — no --require-hashes (dustcastle-6ta)", () => {
@@ -257,8 +258,9 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
     // must RESOLVE it, not demand `--require-hashes` — which hard-fails on an
     // unpinned file ("all requirements must have their versions pinned with ==").
     const cmds = planSandbox({
-      provisioned: pythonProvisioned,
-      detection: { ecosystem: "python", packageManager: "pip", loose: true },
+      ecosystems: [
+        { provisioned: pythonProvisioned, detection: { ecosystem: "python", packageManager: "pip", loose: true } },
+      ],
     }).setupCommands;
     expect(cmds.join("\n")).not.toContain("--require-hashes");
     expect(cmds.at(-1)).toBe("pip install -r requirements.txt --target site");
@@ -287,8 +289,7 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
 
   it("opens scoped egress and points PYTHONPATH at the installed site", () => {
     const plan = planSandbox({
-      provisioned: pythonProvisioned,
-      detection: { ecosystem: "python", packageManager: "uv" },
+      ecosystems: [{ provisioned: pythonProvisioned, detection: { ecosystem: "python", packageManager: "uv" } }],
     });
     expect(plan.podmanOptions.network).not.toBe("none");
     expect((plan.podmanOptions.env ?? {}).PYTHONPATH).toBe("site");
@@ -306,9 +307,8 @@ describe("planSandbox — polyglot Node + Python (ADR 0012 multi-ecosystem)", ()
   };
 
   const plan = planSandbox({
-    provisioned: nodeProvisioned,
-    detection: nodeDetection,
-    additionalEcosystems: [
+    ecosystems: [
+      { provisioned: nodeProvisioned, detection: nodeDetection },
       { provisioned: pythonProvisioned, detection: { ecosystem: "python", packageManager: "pip" } },
     ],
   });
@@ -346,10 +346,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
   it("a cache HIT restores via host.onWorktreeReady and runs NO install", () => {
     const plan = planSandbox({
-      provisioned: nodeProvisioned,
-      detection: nodeDetection,
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc123", hit: true } }],
       cacheDir: "/home/u/.dustcastle/deps-cache",
-      cache: { lockfileHash: "abc123", hit: true },
     });
 
     // Restore copies the assembled deps from the cache entry into the worktree's
@@ -371,10 +369,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
   it("a cache HIT bumps the entry's recency so a frequently-used entry stays warm under GC", () => {
     const plan = planSandbox({
-      provisioned: nodeProvisioned,
-      detection: nodeDetection,
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc123", hit: true } }],
       cacheDir: "/home/u/.dustcastle/deps-cache",
-      cache: { lockfileHash: "abc123", hit: true },
     });
 
     // The GC pool reads each entry's recency from the ENTRY dir's mtime, but `cp -RL`
@@ -386,10 +382,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
   it("a cache MISS installs in-Sandbox, then populates the cache entry after the run", () => {
     const plan = planSandbox({
-      provisioned: nodeProvisioned,
-      detection: nodeDetection,
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "def456", hit: false } }],
       cacheDir: "/home/u/.dustcastle/deps-cache",
-      cache: { lockfileHash: "def456", hit: false },
     });
 
     // No restore copy on a miss.
@@ -411,11 +405,15 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
   it("a loose / no-lockfile ecosystem is never cached — always installs, never restores or populates", () => {
     const plan = planSandbox({
-      provisioned: nodeProvisioned,
-      detection: { ...nodeDetection, loose: true },
-      // No lockfile hash ⇒ no stable key ⇒ not cacheable.
+      ecosystems: [
+        {
+          provisioned: nodeProvisioned,
+          detection: { ...nodeDetection, loose: true },
+          // No lockfile hash ⇒ no stable key ⇒ not cacheable.
+          cache: { lockfileHash: undefined, hit: false },
+        },
+      ],
       cacheDir: "/home/u/.dustcastle/deps-cache",
-      cache: { lockfileHash: undefined, hit: false },
     });
 
     expect(plan.hostWorktreeReady).toEqual([]);
@@ -426,9 +424,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
   it("requires the run-level cache root for cacheable decisions", () => {
     expect(() =>
       planSandbox({
-        provisioned: nodeProvisioned,
-        detection: nodeDetection,
-        cache: { lockfileHash: "abc123", hit: true },
+        ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc123", hit: true } }],
       }),
     ).toThrow("cacheDir is required when a deps-cache decision has a lockfile hash");
   });
@@ -436,7 +432,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
   it("with no cache info at all (default), behaves like a miss with no caching", () => {
     // Backward-compatible default: existing callers that don't supply cache info get
     // the install (no restore, no populate) — the prior always-install behavior.
-    const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection });
+    const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] });
     expect(plan.hostWorktreeReady).toEqual([]);
     expect(plan.populate).toEqual([]);
     expect(plan.setupCommands.join("\n")).toContain("npm install");
@@ -450,17 +446,15 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     };
     // Node HITS its cache; Python MISSES its.
     const plan = planSandbox({
-      provisioned: nodeProvisioned,
-      detection: nodeDetection,
-      cacheDir: "/c",
-      cache: { lockfileHash: "nodehash", hit: true },
-      additionalEcosystems: [
+      ecosystems: [
+        { provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "nodehash", hit: true } },
         {
           provisioned: pythonProvisioned,
           detection: { ecosystem: "python", packageManager: "pip" },
           cache: { lockfileHash: "pyhash", hit: false },
         },
       ],
+      cacheDir: "/c",
     });
 
     const restore = plan.hostWorktreeReady.join("\n");
@@ -480,10 +474,8 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
   it("a restore self-heals permissions the way the old Store staging did (chmod)", () => {
     const plan = planSandbox({
-      provisioned: nodeProvisioned,
-      detection: nodeDetection,
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc", hit: true } }],
       cacheDir: "/c",
-      cache: { lockfileHash: "abc", hit: true },
     });
     expect(plan.hostWorktreeReady.join("\n")).toContain("chmod");
   });
@@ -499,14 +491,14 @@ describe("planSandbox — pure build with Agent Egress (ADR 0010 carve-out)", ()
   } as const;
 
   it("attaches the egress network and routes the agent through the proxy", () => {
-    const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection, egress: agentEgress });
+    const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }], egress: agentEgress });
     expect(plan.podmanOptions.network).not.toBe("none");
     expect(plan.podmanOptions.network).toBeDefined();
     expect((plan.podmanOptions.env ?? {}).HTTPS_PROXY).toBe("http://dustcastle-egress-proxy:8118");
   });
 
   it("surfaces the agent-only allowlist on the plan", () => {
-    const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection, egress: agentEgress });
+    const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }], egress: agentEgress });
     expect(plan.egress).toEqual(agentEgress);
   });
 });

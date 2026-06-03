@@ -74,7 +74,7 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
     // On a MISS the plan installs in-Sandbox (`npm install`) and schedules a populate;
     // nothing is restored on the host. (A committed lockfile is still honoured by the
     // resolving install — and a lock-grade repo still caches by its lockfile hash.)
-    const missPlan = planSandbox({ provisioned: toolchainOnly(), detection, cacheDir, cache: miss });
+    const missPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: miss }], cacheDir });
     expect(missPlan.setupCommands.join("\n")).toContain("npm install");
     expect(missPlan.hostWorktreeReady).toEqual([]);
     expect(missPlan.populate).toHaveLength(1);
@@ -87,7 +87,7 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
 
     // On a HIT the plan restores from the cache on the host (host.onWorktreeReady),
     // runs no install (`npm install` absent — just the git-exclude), and no populate.
-    const hitPlan = planSandbox({ provisioned: toolchainOnly(), detection, cacheDir, cache: hit });
+    const hitPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: hit }], cacheDir });
     expect(hitPlan.hostWorktreeReady.join("\n")).toContain(join(cacheDir, hit.lockfileHash!));
     expect(hitPlan.setupCommands.join("\n")).not.toContain("npm install");
     expect(hitPlan.populate).toEqual([]);

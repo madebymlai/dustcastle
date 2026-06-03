@@ -14,13 +14,12 @@ export interface LogPostureOptions {
 }
 
 export interface PreparedPosture {
-  readonly provisioned: Pick<PreparedRun["provisioned"], "mode">;
-  readonly ecosystems: readonly PreparedPostureEcosystem[];
+  readonly ecosystems: readonly [PreparedPostureEcosystem, ...PreparedPostureEcosystem[]];
 }
 
 interface PreparedPostureEcosystem {
   readonly detection: Pick<PreparedRun["ecosystems"][number]["detection"], "ecosystem" | "toolchainVersion">;
-  readonly provisioned: Pick<PreparedRun["ecosystems"][number]["provisioned"], "toolchainStorePath">;
+  readonly provisioned: Pick<PreparedRun["ecosystems"][number]["provisioned"], "mode" | "toolchainStorePath">;
 }
 
 /**
@@ -34,7 +33,7 @@ interface PreparedPostureEcosystem {
  * the JSON flight recorder via these same records.
  */
 export function logPosture(logger: Logger, prepared: PreparedPosture, opts: LogPostureOptions = {}): void {
-  logger.info({ mode: prepared.provisioned.mode }, "store provisioned (rootless nix-portable)");
+  logger.info({ mode: prepared.ecosystems[0].provisioned.mode }, "store provisioned (rootless nix-portable)");
   for (const ecosystem of prepared.ecosystems) {
     logger.info(toolchainFields(ecosystem), `${ecosystem.detection.ecosystem} toolchain ready`);
   }
