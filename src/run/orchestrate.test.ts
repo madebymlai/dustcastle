@@ -206,6 +206,46 @@ describe("orchestrate logging", () => {
     ]);
   });
 
+  it("stays quiet about the reap when nothing was close-eligible (no count:0 noise)", async () => {
+    const root = createMemoryLogger();
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      run: async () => ({ output: { issues: [] } }),
+      closeEligibleEpics: () => ({ closed: [], count: 0 }),
+    };
+
+    await orchestrate({
+      cwd: "/repo",
+      maxLoops: 1,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: root.child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    expect(root.records).toEqual([
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
+        msg: "planning",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "idle", loop: 1, maxLoops: 1 },
+        msg: "nothing left to do",
+        args: [],
+      },
+    ]);
+  });
+
   it("warns and still declares idle when the reap fails (a reap hiccup never fails a finished run)", async () => {
     const root = createMemoryLogger();
     const deps: Partial<OrchestrateDeps> = {

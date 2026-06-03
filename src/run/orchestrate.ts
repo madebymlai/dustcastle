@@ -231,7 +231,9 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
         // and leave them for the next run rather than throwing.
         try {
           const { closed, count } = deps.closeEligibleEpics(opts.cwd);
-          logger.info({ event: "epic_close_eligible", closed: closed.join(", "), count }, "reaped finished epics");
+          if (count > 0) {
+            logger.info({ event: "epic_close_eligible", closed: closed.join(", "), count }, "reaped finished epics");
+          }
         } catch (error) {
           const err = error instanceof Error ? error.message : String(error);
           logger.warn(
