@@ -238,13 +238,13 @@ function runNixBuild(
     logger,
     label: "nix-build",
     env: { ...process.env, NP_RUNTIME: mode },
-    classifyStderrLine: classifyNixBuildStderrLine,
+    classifyLine: classifyNixBuildLine,
   });
 }
 
 const NIX_BUILD_PROGRESS_LINE = /^these \d+ derivations? will be built/;
 
-function classifyNixBuildStderrLine(line: string): StreamingLogLevel {
+function classifyNixBuildLine(line: string): StreamingLogLevel {
   if (
     line.startsWith("building") ||
     NIX_BUILD_PROGRESS_LINE.test(line) ||
@@ -262,7 +262,7 @@ function sanitizePname(name: string): string {
   return cleaned.length > 0 ? cleaned : "project";
 }
 
-function classifyCurlStderrLine(line: string): StreamingLogLevel {
+function classifyCurlLine(line: string): StreamingLogLevel {
   // curl progress bars and status lines are info; the rest is debug.
   if (line.includes("%") || line.startsWith("downloading") || line.startsWith("curl")) return "info";
   return "debug";
@@ -283,7 +283,7 @@ export async function ensureNixPortable(logger?: Logger): Promise<string> {
   const dl = await runStreamingAsync("curl", ["-fsSL", url, "-o", bin], {
     logger: logger ?? noopLogger,
     label: "nix-portable-dl",
-    classifyStderrLine: classifyCurlStderrLine,
+    classifyLine: classifyCurlLine,
   });
   if (dl.status !== 0) throw new Error(`store: failed to download nix-portable:\n${dl.stderr.slice(-2000)}`);
   chmodSync(bin, 0o755);

@@ -543,7 +543,7 @@ export function withSetupHooks(
   };
 }
 
-function classifyPopulateStderrLine(line: string): StreamingLogLevel {
+function classifyPopulateLine(line: string): StreamingLogLevel {
   // cp errors and shell diagnostics are debug detail; the progress prefix is info.
   if (line.startsWith("populating")) return "info";
   return "debug";
@@ -574,7 +574,7 @@ export async function populateDepsCache(
         cwd,
         logger,
         label: "populate",
-        classifyStderrLine: classifyPopulateStderrLine,
+        classifyLine: classifyPopulateLine,
       });
       if (result.status === 0) {
         logger.debug({ lockfileHash: entry.lockfileHash, stageDir: entry.stageDir }, "populated deps-cache entry");

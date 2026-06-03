@@ -24,7 +24,7 @@ describe("runStreamingAsync", () => {
       {
         logger,
         label: "nix-build",
-        classifyStderrLine: (line) => (line.startsWith("building") ? "info" : "debug"),
+        classifyLine: (line) => (line.startsWith("building") ? "info" : "debug"),
       },
     ).finally(() => {
       settled = true;
@@ -38,5 +38,28 @@ describe("runStreamingAsync", () => {
     expect(result.stdout).toContain("/nix/store/abc-toolchain");
     expect(result.stderr).toContain("building toolchain");
     expect(logger.records.find((record) => record.fields.line === "building toolchain")?.level).toBe("info");
+  });
+
+  // Regression (dustcastle-muw): podman writes its STEP progress to STDOUT, not
+  // stderr — so streaming only stderr left image builds silent. The classifier must
+  // apply to stdout too.
+  it("logs a STDOUT line live (podman-style progress lands on stdout)", async () => {
+    const logger = createMemoryLogger();
+
+    const result = await runStreamingAsync(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write('STEP 1/4: FROM node:20-alpine\\n'); setTimeout(() => process.exit(0), 50);",
+      ],
+      {
+        logger,
+        label: "podman",
+        classifyLine: (line) => (line.startsWith("STEP") ? "info" : "debug"),
+      },
+    );
+
+    expect(result.stdout).toContain("STEP 1/4"); // still accumulated for parsing/error-tails
+    expect(logger.records.some((r) => r.fields.line === "STEP 1/4: FROM node:20-alpine")).toBe(true);
   });
 });

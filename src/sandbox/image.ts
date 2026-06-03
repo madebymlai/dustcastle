@@ -111,7 +111,7 @@ export function buildArgs(image: string, containerfile: string): string[] {
  * curation seam: progress lines (STEP, -->, Successfully) surface at info; the
  * rest routes to debug. Tunable by tests that inject a runner.
  */
-export function classifyPodmanStderrLine(line: string): StreamingLogLevel {
+export function classifyPodmanLine(line: string): StreamingLogLevel {
   if (/^STEP \d+\/\d+/i.test(line) || line.startsWith("-->") || /successfully/i.test(line)) {
     return "info";
   }
@@ -155,6 +155,6 @@ function defaultPodmanRun(logger: Logger): PodmanRunner {
     runStreamingAsync("podman", args, {
       logger,
       label: "podman",
-      classifyStderrLine: classifyPodmanStderrLine,
+      classifyLine: classifyPodmanLine,
     });
 }
