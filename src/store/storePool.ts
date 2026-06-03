@@ -10,6 +10,7 @@ import {
 } from "./gc.js";
 import { closureSizeBytes, measureStoreBytes } from "./ceiling.js";
 import { loadRecency } from "./recency.js";
+import { noopLogger, type Logger } from "../log/index.js";
 import type { Pool, PoolEntry, PoolEvictReport } from "./pool.js";
 
 /**
@@ -49,13 +50,13 @@ export interface StorePoolOptions {
    * its own entry here; pinning a key with no closure is a no-op (best-effort).
    */
   readonly closures?: ReadonlyMap<string, StoreClosure>;
-  /** Surface progress (never silent — ADR 0007). */
-  readonly onLine?: (line: string) => void;
+  /** Structured progress logs. */
+  readonly logger?: Logger;
 }
 
 /** Construct the Store pool over the existing Store mechanism (ADR 0007/0012). */
 export function storePool(opts: StorePoolOptions): Pool {
-  const log = opts.onLine ?? (() => {});
+  const logger = opts.logger ?? noopLogger;
   // Track scoped roots per key so `release(key)` can drop exactly that run's roots.
   const pinned = new Map<string, ReturnType<typeof registerScopedRoots>>();
 
@@ -76,7 +77,7 @@ export function storePool(opts: StorePoolOptions): Pool {
           gcrootsDir: opts.gcrootsDir,
           projectKey: key,
           run: opts.run,
-          onLine: log,
+          logger,
         }),
       );
     },
@@ -96,17 +97,17 @@ export function storePool(opts: StorePoolOptions): Pool {
       const keep = loadRecency(opts.dir)
         .map((r) => r.projectKey)
         .filter((key) => !cold.has(key));
-      pruneRecencyRoots({ recencyRootsDir: opts.recencyRootsDir, keepKeys: keep, onLine: log });
+      pruneRecencyRoots({ recencyRootsDir: opts.recencyRootsDir, keepKeys: keep, logger });
       const gcRes = opts.run(collectGarbageArgs());
       const gc = parseGcReport(gcRes.stdout + gcRes.stderr);
-      log(`gc: collected ${gc.pathsDeleted} unrooted path(s), freed ${gc.bytesFreed} bytes`);
+      logger.debug({ pathsDeleted: gc.pathsDeleted, bytesFreed: gc.bytesFreed }, "collected unrooted store paths");
       return { entriesEvicted: gc.pathsDeleted, bytesFreed: gc.bytesFreed };
     },
 
     optimise: (): OptimiseReport => {
       const opt = opts.run(optimiseArgs());
       const optimise = parseOptimiseReport(opt.stdout + opt.stderr);
-      log(`gc: optimise freed ${optimise.bytesFreed} bytes by hard-linking ${optimise.filesLinked} files`);
+      logger.debug({ bytesFreed: optimise.bytesFreed, filesLinked: optimise.filesLinked }, "optimise hard-linked store files");
       return optimise;
     },
   };

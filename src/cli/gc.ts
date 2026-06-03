@@ -1,4 +1,5 @@
 import { DUSTCASTLE_HOME } from "../config/global.js";
+import { noopLogger, type Logger } from "../log/index.js";
 import { collectPools } from "../store/pool.js";
 import { defaultDepsCacheDir, depsCachePool } from "../store/depscache/index.js";
 import { defaultRecencyRootsDir, nixPortableRunner, type NixRunner } from "../store/gc.js";
@@ -36,33 +37,39 @@ export async function runGcCommand(opts: {
   readonly dir?: string;
   readonly recencyRootsDir?: string;
   readonly depsCacheDir?: string;
-  readonly onLine?: (line: string) => void;
+  readonly logger?: Logger;
 } = {}): Promise<number> {
-  const log = opts.onLine ?? ((l: string) => process.stderr.write(`${l}\n`));
-  log("dustcastle: sweeping the shared Nix Store + deps cache (optimise → collect-garbage)…");
+  const logger = opts.logger ?? noopLogger;
+  logger.info("sweeping the shared Nix Store + deps cache (optimise → collect-garbage)…");
 
   const run = opts.run ?? nixPortableRunner();
   const store = storePool({
     run,
     dir: opts.dir ?? DUSTCASTLE_HOME,
     recencyRootsDir: opts.recencyRootsDir ?? defaultRecencyRootsDir(),
-    onLine: log,
+    logger: logger.child({ mod: "gc" }),
   });
-  const cache = depsCachePool({ cacheDir: opts.depsCacheDir ?? defaultDepsCacheDir(), onLine: log });
+  const cache = depsCachePool({
+    cacheDir: opts.depsCacheDir ?? defaultDepsCacheDir(),
+    logger: logger.child({ mod: "deps-cache" }),
+  });
 
   // The deps cache is swept whole: its pins are in-memory, so this separate process
   // can't see a concurrent run's pins (the Store's on-disk roots ARE seen). Flag it
   // up front so a re-install on a running sandbox's next start is never a surprise.
-  log("dustcastle: the deps cache is reclaimed in full; a concurrent run will re-install its deps next time.");
+  logger.warn("the deps cache is reclaimed in full; a concurrent run will re-install its deps next time");
 
   // Budget 0 ⇒ an empty warm tail ⇒ every (unpinned) entry is cold in both pools.
   const report = collectPools([store, cache], { budgetBytes: 0, optimise: true });
 
   const freed = report.bytesFreed + (report.optimise?.bytesFreed ?? 0);
-  log(
-    `dustcastle: gc done — collected ${report.entriesEvicted} unrooted path(s)/entry(ies)` +
-      (report.optimise ? `, hard-linked ${report.optimise.filesLinked} file(s)` : "") +
-      `, freed ${freed} bytes total.`,
+  logger.info(
+    {
+      entriesEvicted: report.entriesEvicted,
+      filesLinked: report.optimise?.filesLinked ?? 0,
+      freedBytes: freed,
+    },
+    "gc done",
   );
   return 0;
 }

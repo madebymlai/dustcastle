@@ -1,6 +1,7 @@
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { noopLogger, type Logger } from "../../log/index.js";
 import type { Pool, PoolEntry, PoolEvictReport } from "../pool.js";
 import { entryDir } from "./layout.js";
 
@@ -37,13 +38,13 @@ export interface DepsCachePoolOptions {
    * dir's mtime (the install/restore touches it), which is the LRU order on disk.
    */
   readonly lastUsedAt?: Readonly<Record<string, number>>;
-  /** Surface progress (never silent — ADR 0007/0012). */
-  readonly onLine?: (line: string) => void;
+  /** Structured progress logs. */
+  readonly logger?: Logger;
 }
 
 /** Construct the deps-cache pool over lockfile-hash-keyed directories (ADR 0012). */
 export function depsCachePool(opts: DepsCachePoolOptions): Pool {
-  const log = opts.onLine ?? (() => {});
+  const logger = opts.logger ?? noopLogger;
   // A live run pins ALL its deps-cache entries; a pinned key is never evicted.
   const pinned = new Set<string>();
 
@@ -91,10 +92,10 @@ export function depsCachePool(opts: DepsCachePoolOptions): Pool {
           entriesEvicted += 1;
           bytesFreed += bytes;
         } catch (e) {
-          log(`gc: WARNING could not evict deps-cache entry ${key}: ${(e as Error).message}`);
+          logger.warn({ key, err: (e as Error).message }, "could not evict deps-cache entry");
         }
       }
-      log(`gc: deps-cache evicted ${entriesEvicted} cold entry(ies), freed ${bytesFreed} bytes`);
+      logger.debug({ entriesEvicted, bytesFreed }, "deps-cache evicted cold entries");
       return { entriesEvicted, bytesFreed };
     },
     // No `optimise`: the deps cache keys whole assembled-dep sets by lockfile hash;

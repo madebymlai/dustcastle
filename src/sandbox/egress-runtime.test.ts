@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createMemoryLogger } from "../log/fake.js";
 import { EGRESS_NETWORK, EGRESS_PROXY_CONTAINER, productionProxyUrl } from "./confine.js";
 import type { EgressDecision } from "./egress.js";
 import { ensureEgress, provisionProxyResolvConf, type PodmanResult } from "./egress-runtime.js";
@@ -74,6 +75,25 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     expect(calls.indexOf(runCall!)).toBeGreaterThan(0);
     // The sandbox addresses the proxy by its production URL (matches the plan).
     expect(handle.proxyUrl).toBe(productionProxyUrl());
+  });
+
+  it("logs egress progress through the caller-named child logger", () => {
+    const root = createMemoryLogger();
+    const { run } = recorder();
+    ensureEgress({
+      egress: allow(["registry.npmjs.org"]),
+      proxyEntrypoint: "/p.js",
+      run,
+      logger: root.child({ mod: "egress" }),
+    });
+
+    expect(root.records).toContainEqual({
+      level: "info",
+      fields: { mod: "egress", network: EGRESS_NETWORK },
+      msg: "internal network ready",
+      args: [],
+    });
+    expect(root.records.some((r) => r.fields.mod === "egress" && r.msg === "proxy enforcing allowlist")).toBe(true);
   });
 
   it("enforces the deduped Build∪Agent allowlist on the proxy (ADR 0010)", () => {

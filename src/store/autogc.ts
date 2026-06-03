@@ -1,5 +1,6 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { noopLogger, type Logger } from "../log/index.js";
 import { overCeiling, recencyBudgetBytes, type CeilingReason, type NixRunner } from "./ceiling.js";
 import type { GcReport, OptimiseReport } from "./gc.js";
 import { collectPool } from "./pool.js";
@@ -20,7 +21,7 @@ import { storePool } from "./storePool.js";
  * gated. Safety is structural:
  *   - a `gc.lock` serializes sweeps — an existing lock means another sweep (or a
  *     live run) is active, so this one returns `"skipped"`;
- *   - the whole sweep is best-effort: any failure surfaces a WARNING and returns a
+ *   - the whole sweep is best-effort: any failure surfaces a warn record and returns a
  *     no-op report — it can never throw out of the child (and the child is detached
  *     from the run, so it can never break a run either).
  */
@@ -61,8 +62,8 @@ export interface AutoGcOptions {
   readonly depsCacheDir?: string;
   /** The clock (epoch ms), injected so the gc-log line is deterministic in tests. */
   readonly now: () => number;
-  /** Surface progress (never silent — ADR 0007). */
-  readonly onLine?: (line: string) => void;
+  /** Structured progress logs. */
+  readonly logger?: Logger;
   /** Override the lock path (defaults to `<dir>/gc.lock`). */
   readonly lockPath?: string;
   /** Override the gc-log path (defaults to `<dir>/gc.log`). */
@@ -72,7 +73,7 @@ export interface AutoGcOptions {
 const NOOP: AutoGcReport = { swept: false, reason: "none", storeBytes: 0, freedBytes: 0 };
 
 export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
-  const log = opts.onLine ?? (() => {});
+  const logger = opts.logger ?? noopLogger;
   const lockPath = opts.lockPath ?? join(opts.dir, "gc.lock");
   mkdirSync(opts.dir, { recursive: true });
 
@@ -84,18 +85,18 @@ export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
     fd = openSync(lockPath, "wx");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "EEXIST") {
-      log("gc: another sweep is active — skipping");
+      logger.info({ event: "skipped", reason: "lock-held" }, "another sweep is active — skipping");
     } else {
-      log(`gc: WARNING could not acquire lock: ${(e as Error).message}`);
+      logger.warn({ err: (e as Error).message }, "could not acquire lock");
     }
     return "skipped";
   }
 
   try {
-    return sweep(opts, log);
+    return sweep(opts, logger);
   } catch (e) {
     // Best-effort: a failed/hung sweep must never throw out of the detached child.
-    log(`gc: WARNING sweep failed (best-effort, run unaffected): ${(e as Error).message}`);
+    logger.warn({ err: (e as Error).message }, "sweep failed (best-effort, run unaffected)");
     return NOOP;
   } finally {
     try {
@@ -108,15 +109,15 @@ export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
 }
 
 /** The sweep body (runs under the lock): plan → optimise-first → re-check → conditional gc → prune → log. */
-function sweep(opts: AutoGcOptions, log: (line: string) => void): AutoGcReport {
+function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
   // The two managed pools behind ONE brain (ADR 0012): the Store (Toolchain closures)
   // and the deps cache (assembled Project Deps, lockfile-hash-keyed). The Store keeps
   // the injected `measure` as its ceiling input (the nix accounting the child wires);
   // its mechanism (optimise / prune cold roots + `nix-store --gc`) lives in `storePool`.
   // The cache shares the disk, so its bytes count toward the cap and its cold tail is
   // evicted alongside the Store. Absent ⇒ the Store is the sole pool, as before.
-  const store = storePool({ run: opts.run, dir: opts.dir, recencyRootsDir: opts.recencyRootsDir, onLine: log });
-  const cache = opts.depsCacheDir !== undefined ? depsCachePool({ cacheDir: opts.depsCacheDir, onLine: log }) : undefined;
+  const store = storePool({ run: opts.run, dir: opts.dir, recencyRootsDir: opts.recencyRootsDir, logger });
+  const cache = opts.depsCacheDir !== undefined ? depsCachePool({ cacheDir: opts.depsCacheDir, logger }) : undefined;
   const cacheBytes = (): number => cache?.measure() ?? 0;
 
   const storeBytes = opts.measure();
@@ -125,10 +126,10 @@ function sweep(opts: AutoGcOptions, log: (line: string) => void): AutoGcReport {
 
   const before = overCeiling({ storeBytes: storeBytes + cacheBytes(), freeBytes: free, totalBytes: total });
   if (!before.over) {
-    log(`gc: store+cache within ceiling (${storeBytes + cacheBytes()} bytes) — nothing to sweep`);
+    logger.info({ storeBytes: storeBytes + cacheBytes() }, "store+cache within ceiling — nothing to sweep");
     return { swept: false, reason: before.reason, storeBytes, freedBytes: 0 };
   }
-  log(`gc: over ceiling (${before.reason}; ${storeBytes + cacheBytes()} bytes) — sweeping`);
+  logger.info({ reason: before.reason, storeBytes: storeBytes + cacheBytes() }, "over ceiling — sweeping");
 
   // optimise-first: the Store's non-destructive hard-link dedup (the cache has none).
   // It cannot cause a cold rebuild, so it runs before any destructive eviction.
@@ -149,7 +150,7 @@ function sweep(opts: AutoGcOptions, log: (line: string) => void): AutoGcReport {
     gc = { pathsDeleted: storeSweep.entriesEvicted, bytesFreed: storeSweep.bytesFreed };
     if (cache !== undefined) cacheFreed = collectPool(cache, { budgetBytes }).bytesFreed;
   } else {
-    log("gc: optimise alone cleared the ceiling — skipping collect");
+    logger.info("optimise alone cleared the ceiling — skipping collect");
   }
 
   const freedBytes = optimise.bytesFreed + (gc?.bytesFreed ?? 0) + cacheFreed;

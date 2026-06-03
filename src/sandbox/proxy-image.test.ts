@@ -13,7 +13,6 @@ describe("the dustcastle-owned egress-proxy image (PROXY_SPEC)", () => {
   it("names the local proxy tag, prefix, and noun, and ships its Containerfile beside the module", () => {
     expect(PROXY_SPEC.tag).toBe("localhost/dustcastle-egress-proxy:node20");
     expect(PROXY_SPEC.containerfile).toMatch(/proxy\.Containerfile$/);
-    expect(PROXY_SPEC.logPrefix).toBe("egress");
     expect(PROXY_SPEC.label).toBe("proxy image");
   });
 
@@ -36,7 +35,7 @@ describe("the dustcastle-owned egress-proxy image (PROXY_SPEC)", () => {
   it("renders the egress prefix and noun in the build-failure error (real strings, not synthetic)", () => {
     const run: PodmanRunner = () => ({ status: 1, stderr: "boom: no base image" });
     expect(() => ensureImage(PROXY_SPEC, { exists: () => false, run })).toThrowError(
-      /egress: failed to build the proxy image .*boom/s,
+      /failed to build the proxy image .*boom/s,
     );
   });
 });

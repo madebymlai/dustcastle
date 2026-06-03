@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createMemoryLogger } from "../log/fake.js";
 import { spawnAutoGc } from "./autogc.js";
 
 // The detached-spawn helper (ADR 0007). The orchestration is exercised in
@@ -31,13 +32,19 @@ describe("spawnAutoGc (the detached one-shot launcher)", () => {
   });
 
   it("swallows a spawn failure as a surfaced warning (never throws)", () => {
-    const lines: string[] = [];
+    const root = createMemoryLogger();
+    const logger = root.child({ mod: "gc" });
     const spawnFn = vi.fn(() => {
       throw new Error("no exec");
     });
     expect(() =>
-      spawnAutoGc({ cliEntry: "/x.js", spawnFn, onLine: (l) => lines.push(l) }),
+      spawnAutoGc({ cliEntry: "/x.js", spawnFn, logger }),
     ).not.toThrow();
-    expect(lines.some((l) => l.includes("WARNING"))).toBe(true);
+    expect(root.records).toContainEqual({
+      level: "warn",
+      fields: { mod: "gc", err: "no exec" },
+      msg: "could not spawn autogc child",
+      args: [],
+    });
   });
 });

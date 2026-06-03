@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createMemoryLogger } from "../log/fake.js";
 import { ensureImage, buildArgs, type ImageSpec, type PodmanRunner } from "./image.js";
 
 // ensureImage is the deep core both dustcastle-owned images run through: a
@@ -11,7 +12,6 @@ import { ensureImage, buildArgs, type ImageSpec, type PodmanRunner } from "./ima
 const SPEC: ImageSpec = {
   tag: "localhost/test-image:latest",
   containerfile: "/x/sandbox/test.Containerfile",
-  logPrefix: "test",
   label: "test image",
 };
 
@@ -33,18 +33,37 @@ describe("ensureImage (the dustcastle-owned image build core)", () => {
       args = a;
       return { status: 0, stderr: "" };
     };
-    const image = ensureImage(SPEC, { exists: () => false, run });
+    const root = createMemoryLogger();
+    const logger = root.child({ mod: "test" });
+    const image = ensureImage(SPEC, { exists: () => false, run, logger });
     expect(image).toBe(SPEC.tag);
     expect(args?.slice(0, 3)).toEqual(["build", "-t", SPEC.tag]);
     expect(args).toContain("-f");
     expect(args).toContain(SPEC.containerfile);
+    expect(root.records).toEqual([
+      {
+        level: "info",
+        fields: { mod: "test", image: SPEC.tag, label: "test image" },
+        msg: "building dustcastle image",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { mod: "test", image: SPEC.tag, label: "test image" },
+        msg: "built dustcastle image",
+        args: [],
+      },
+    ]);
   });
 
-  it("throws an actionable error tagged with the spec's prefix and label when the build fails", () => {
+  it("logs and throws an actionable error tagged with the bound module and label when the build fails", () => {
+    const root = createMemoryLogger();
+    const logger = root.child({ mod: "test" });
     const run: PodmanRunner = () => ({ status: 1, stderr: "boom: no base image" });
-    expect(() => ensureImage(SPEC, { exists: () => false, run })).toThrowError(
-      /test: failed to build the test image .*boom/s,
+    expect(() => ensureImage(SPEC, { exists: () => false, run, logger })).toThrowError(
+      /failed to build the test image .*boom/s,
     );
+    expect(root.records.some((r) => r.level === "error" && r.msg === "failed to build dustcastle image")).toBe(true);
   });
 
   it("builds with the Containerfile's own directory as the context", () => {

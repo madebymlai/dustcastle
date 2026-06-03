@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createMemoryLogger } from "../log/fake.js";
 import { autoGc, readLastSweepLine } from "./autogc.js";
 import { gcRootLink, type NixResult } from "./gc.js";
 import { upsertRecency } from "./recency.js";
@@ -10,7 +11,7 @@ import { upsertRecency } from "./recency.js";
 // optimise-first → re-check → conditional gc → prune the cold recency roots → log.
 // Fully injected (nix runner, store-size measure, disk statfs, clock), so the whole
 // command sequence is unit-tested and the real `nix-store --gc` stays gated. Every
-// failure is best-effort: it surfaces a WARNING and never throws out of a run.
+// failure is best-effort: it surfaces a warn record and never throws out of a run.
 
 const OK = (stdout = "", stderr = ""): NixResult => ({ status: 0, stdout, stderr });
 const OPTIMISE_OUT = "100 bytes (0.00 MiB) freed by hard-linking 5 files;\n";
@@ -178,9 +179,10 @@ describe("autoGc (the detached sweep orchestration — ADR 0007)", () => {
     expect(report).toBe("skipped");
   });
 
-  it("is best-effort: a throwing runner surfaces a WARNING and never throws", () => {
+  it("is best-effort: a throwing runner surfaces a warn record and never throws", () => {
     const home = dir();
-    const lines: string[] = [];
+    const root = createMemoryLogger();
+    const logger = root.child({ mod: "gc" });
     const throwing = (): NixResult => {
       throw new Error("nix exploded");
     };
@@ -192,11 +194,11 @@ describe("autoGc (the detached sweep orchestration — ADR 0007)", () => {
       dir: home,
       recencyRootsDir: join(home, "recency-roots"),
       now: () => 1,
-      onLine: (l) => lines.push(l),
+      logger,
     });
 
     expect(report).not.toBe("skipped"); // it ran, it just failed mid-sweep
-    expect(lines.some((l) => l.includes("WARNING"))).toBe(true);
+    expect(root.records.some((r) => r.level === "warn" && r.msg === "sweep failed (best-effort, run unaffected)")).toBe(true);
     // The lock was released despite the failure (a later sweep is not blocked).
     expect(existsSync(join(home, "gc.lock"))).toBe(false);
   });

@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DUSTCASTLE_HOME } from "../config/global.js";
+import { noopLogger, type Logger } from "../log/index.js";
 import {
   EGRESS_NETWORK,
   EGRESS_PROXY_CONTAINER,
@@ -69,8 +70,8 @@ export interface EnsureEgressOptions {
    * success (ADR 0005 "never silent"). Injected in tests.
    */
   readonly verifyAlive?: (run: PodmanRunner, container: string) => ProxyLiveness;
-  /** Surface progress lines (never silent — ADR 0005). */
-  readonly onLine?: (line: string) => void;
+  /** Structured progress logs. */
+  readonly logger?: Logger;
 }
 
 /** Whether the proxy came up, with the container output that proves/explains it. */
@@ -99,7 +100,7 @@ const NOOP: EgressHandle = { teardown: () => {} };
 export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   if (opts.egress.kind !== "allowlist") return NOOP; // closed/pure: no network, no proxy
   const run = opts.run ?? defaultPodman;
-  const log = opts.onLine ?? (() => {});
+  const logger = opts.logger ?? noopLogger;
   // The proxy enforces the deduped union of Build + Agent Egress (ADR 0010).
   const hosts = egressHosts(opts.egress);
 
@@ -108,11 +109,12 @@ export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   const created = run(egressNetworkCreateArgs());
   const weCreatedNetwork = isOk(created);
   if (!weCreatedNetwork && !isAlreadyExists(created)) {
+    logger.error({ network: EGRESS_NETWORK, stderr: created.stderr.trim() }, "could not create egress network");
     throw new Error(
       `dustcastle: could not create egress network ${EGRESS_NETWORK}: ${created.stderr.trim()}`,
     );
   }
-  log(`egress: internal network ${EGRESS_NETWORK} ready`);
+  logger.info({ network: EGRESS_NETWORK }, "internal network ready");
 
   // 2. Clear a stale proxy from a prior run (best-effort), then start the
   //    dual-homed proxy: it alone bridges the internal net to the outside world.
@@ -134,6 +136,7 @@ export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   const fail = (reason: string): never => {
     run(["rm", "-f", EGRESS_PROXY_CONTAINER]); // remove the dead/half-started container
     if (weCreatedNetwork) run(["network", "rm", EGRESS_NETWORK]); // roll back our own network
+    logger.error({ hosts, reason }, "could not establish scoped egress proxy");
     throw new Error(
       `dustcastle: could not establish the scoped egress proxy enforcing [${hosts.join(", ")}]. ${reason}`,
     );
@@ -147,7 +150,7 @@ export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   if (!liveness.alive) {
     fail(`The proxy container started but is not serving:\n${liveness.detail.trim()}`);
   }
-  log(`egress: proxy ${EGRESS_PROXY_CONTAINER} enforcing allowlist [${hosts.join(", ")}]`);
+  logger.info({ container: EGRESS_PROXY_CONTAINER, hosts }, "proxy enforcing allowlist");
 
   return {
     proxyUrl: productionProxyUrl(),

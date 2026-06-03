@@ -11,7 +11,6 @@ describe("the dustcastle-owned agent image (AGENT_SPEC)", () => {
   it("names the local agent tag, prefix, and noun, and ships its Containerfile beside the module", () => {
     expect(AGENT_SPEC.tag).toBe("localhost/dustcastle-agent:bookworm");
     expect(AGENT_SPEC.containerfile).toMatch(/agent\.Containerfile$/);
-    expect(AGENT_SPEC.logPrefix).toBe("sandbox");
     expect(AGENT_SPEC.label).toBe("agent image");
   });
 
@@ -34,7 +33,7 @@ describe("the dustcastle-owned agent image (AGENT_SPEC)", () => {
   it("renders the agent prefix and noun in the build-failure error (real strings, not synthetic)", () => {
     const run: PodmanRunner = () => ({ status: 1, stderr: "boom: no base image" });
     expect(() => ensureImage(AGENT_SPEC, { exists: () => false, run })).toThrowError(
-      /sandbox: failed to build the agent image .*boom/s,
+      /failed to build the agent image .*boom/s,
     );
   });
 });

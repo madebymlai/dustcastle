@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { noopLogger, type Logger } from "../log/index.js";
 import { overCeiling, type CeilingReason } from "./ceiling.js";
 import { ensureNixPortable } from "./index.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
@@ -169,8 +170,8 @@ export interface RegisterScopedRootsOptions {
   readonly projectKey: string;
   /** Inject a nix runner (tests); defaults to a real nix-portable spawn. */
   readonly run?: NixRunner;
-  /** Surface progress (never silent — ADR 0007). */
-  readonly onLine?: (line: string) => void;
+  /** Structured progress logs. */
+  readonly logger?: Logger;
 }
 
 /**
@@ -182,19 +183,19 @@ export interface RegisterScopedRootsOptions {
  */
 export function registerScopedRoots(opts: RegisterScopedRootsOptions): ScopedRootsHandle {
   const run = opts.run ?? nixPortableRunner();
-  const log = opts.onLine ?? (() => {});
+  const logger = opts.logger ?? noopLogger;
   const links = addClosureRoots({
     provisioned: opts.provisioned,
     rootsDir: opts.gcrootsDir,
     projectKey: opts.projectKey,
     run,
-    log,
+    logger,
   });
   return {
     links,
     release: () => {
       for (const link of links) rmSync(link, { force: true });
-      log(`gc: released ${links.length} scoped root(s)`);
+      logger.debug({ roots: links.length }, "released scoped roots");
     },
   };
 }
@@ -202,7 +203,7 @@ export function registerScopedRoots(opts: RegisterScopedRootsOptions): ScopedRoo
 /**
  * Add an (indirect) GC root for each path in a provision's closure under `rootsDir`,
  * keyed by `projectKey` + kind. Best-effort per root: a root that fails to register
- * is surfaced (a WARNING) but never aborts — a missing root only risks a cold
+ * is surfaced as a warn record but never aborts — a missing root only risks a cold
  * rebuild. Shared by the scoped (released on completion) and recency (persistent)
  * roots; the only difference is the directory and the lifecycle around it.
  */
@@ -211,7 +212,7 @@ function addClosureRoots(opts: {
   readonly rootsDir: string;
   readonly projectKey: string;
   readonly run: NixRunner;
-  readonly log: (line: string) => void;
+  readonly logger: Logger;
 }): string[] {
   mkdirSync(opts.rootsDir, { recursive: true });
   const links: string[] = [];
@@ -220,9 +221,9 @@ function addClosureRoots(opts: {
     const result = opts.run(addRootArgs(root.path, link));
     if (result.status === 0) {
       links.push(link);
-      opts.log(`gc: rooted ${root.kind} ${root.path} → ${link}`);
+      opts.logger.debug({ kind: root.kind, storePath: root.path, link }, "rooted store path");
     } else {
-      opts.log(`gc: WARNING could not root ${root.kind} ${root.path}: ${result.stderr.trim()}`);
+      opts.logger.warn({ kind: root.kind, storePath: root.path, stderr: result.stderr.trim() }, "could not root store path");
     }
   }
   return links;
@@ -235,7 +236,7 @@ export interface RegisterRecencyRootOptions {
   /** Identifies the Store root entry — the same key as the scoped root. */
   readonly projectKey: string;
   readonly run?: NixRunner;
-  readonly onLine?: (line: string) => void;
+  readonly logger?: Logger;
 }
 
 /**
@@ -247,13 +248,13 @@ export interface RegisterRecencyRootOptions {
  */
 export function registerRecencyRoot(opts: RegisterRecencyRootOptions): { readonly links: string[] } {
   const run = opts.run ?? nixPortableRunner();
-  const log = opts.onLine ?? (() => {});
+  const logger = opts.logger ?? noopLogger;
   const links = addClosureRoots({
     provisioned: opts.provisioned,
     rootsDir: opts.recencyRootsDir,
     projectKey: opts.projectKey,
     run,
-    log,
+    logger,
   });
   return { links };
 }
@@ -269,9 +270,9 @@ export function registerRecencyRoot(opts: RegisterRecencyRootOptions): { readonl
 export function pruneRecencyRoots(opts: {
   readonly recencyRootsDir: string;
   readonly keepKeys: readonly string[];
-  readonly onLine?: (line: string) => void;
+  readonly logger?: Logger;
 }): { readonly pruned: number } {
-  const log = opts.onLine ?? (() => {});
+  const logger = opts.logger ?? noopLogger;
   const keep = new Set(opts.keepKeys.map(sanitizeKey));
   let files: string[];
   try {
@@ -287,10 +288,10 @@ export function pruneRecencyRoots(opts: {
       rmSync(join(opts.recencyRootsDir, file), { force: true });
       pruned += 1;
     } catch (e) {
-      log(`gc: WARNING could not prune recency root ${file}: ${(e as Error).message}`);
+      logger.warn({ file, err: (e as Error).message }, "could not prune recency root");
     }
   }
-  if (pruned > 0) log(`gc: pruned ${pruned} recency root(s) outside the warm budget`);
+  if (pruned > 0) logger.debug({ pruned }, "pruned recency roots outside warm budget");
   return { pruned };
 }
 

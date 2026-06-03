@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Detection } from "../detect/index.js";
+import { noopLogger, type Logger } from "../log/index.js";
 import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
 import { parseStorePath } from "./parse.js";
@@ -21,8 +22,8 @@ export interface ProvisionSpec {
   readonly nixPortable?: string;
   /** Physical rootless store root (defaults to ~/.nix-portable/nix/store). */
   readonly physStoreRoot?: string;
-  /** Stream build output line-by-line (e.g. to surface progress). */
-  readonly onLine?: (line: string) => void;
+  /** Structured build progress logs. */
+  readonly logger?: Logger;
 }
 
 /** The realized Toolchain Store path for a project (ADR 0001/0008/0012). */
@@ -50,8 +51,9 @@ export function provisionStore(spec: ProvisionSpec): Provisioned {
   const buildDir = mkdtempSync(join(tmpdir(), "dustcastle-build-"));
   stageSource(spec.projectDir, join(buildDir, "src"));
 
-  const run = (args: string[]) => runNixBuild(nixPortable, mode, [buildDir, ...args], spec.onLine);
-  const ctx: BuildContext = { buildDir, pname, mode, physStoreRoot, run };
+  const logger = spec.logger ?? noopLogger;
+  const run = (args: string[]) => runNixBuild(nixPortable, mode, [buildDir, ...args], logger);
+  const ctx: BuildContext = { buildDir, pname, mode, physStoreRoot, run, logger };
 
   // Route by the Package Manager descriptor in the Ecosystem Registry (ADR 0001:
   // internal curation, NOT a plugin system; ADR 0006: the lockfile names the
@@ -76,6 +78,7 @@ interface BuildContext {
   readonly mode: RuntimeMode;
   readonly physStoreRoot: string;
   readonly run: (args: string[]) => { status: number | null; stdout: string; stderr: string };
+  readonly logger: Logger;
 }
 
 /**
@@ -100,9 +103,14 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
 
   const toolchain = ctx.run(["-A", build.attr, "--no-out-link"]);
   if (toolchain.status !== 0) {
+    ctx.logger.error(
+      { status: toolchain.status, stderr: toolchain.stderr.slice(-2000) },
+      "toolchain build failed",
+    );
     throw new Error(`store: toolchain build failed (exit ${toolchain.status}):\n${toolchain.stderr.slice(-2000)}`);
   }
   const toolchainStorePath = parseStorePath(toolchain.stdout);
+  ctx.logger.debug({ storePath: toolchainStorePath }, "toolchain built");
   return {
     mode: ctx.mode,
     physStoreRoot: ctx.physStoreRoot,
@@ -219,14 +227,18 @@ function runNixBuild(
   nixPortable: string,
   mode: RuntimeMode,
   args: string[],
-  onLine?: (line: string) => void,
+  logger: Logger,
 ): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(nixPortable, ["nix-build", ...args], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     env: { ...process.env, NP_RUNTIME: mode },
   });
-  if (onLine && result.stderr) for (const line of result.stderr.split("\n")) onLine(line);
+  if (result.stderr) {
+    for (const line of result.stderr.split("\n").filter((l) => l.length > 0)) {
+      logger.debug({ line }, "nix-build stderr");
+    }
+  }
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 

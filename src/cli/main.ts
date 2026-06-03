@@ -33,12 +33,14 @@ async function main(argv: string[]): Promise<number> {
     return runModelCommand();
   }
   if (command === "gc") {
-    return runGcCommand();
+    const rootLogger = createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
+    return runGcCommand({ logger: rootLogger.child({ mod: "gc" }) });
   }
   if (command === "__autogc") {
     // Hidden internal entry: the detached one-shot `run()` spawns after every run
     // (ADR 0007). Not in USAGE — it is invisible maintenance, never user-invoked.
-    return runAutoGcCommand();
+    const rootLogger = createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
+    return runAutoGcCommand({ logger: rootLogger.child({ mod: "gc" }) });
   }
   if (command !== "run") {
     console.error(`dustcastle: unknown command '${command}'.\n\n${USAGE}`);
@@ -70,13 +72,12 @@ async function main(argv: string[]): Promise<number> {
   const agentModelHosts = configuredAgentModelHosts();
   const selection = loadModelSelection();
   const rootLogger = createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
-  const onLine = (l: string) => process.stderr.write(`${l}\n`);
 
   // No agent model: nothing runs in the Sandbox, so there's no egress to confine.
   // Provision the Store, print the posture, and stop — the user picks a model and
   // re-runs. (ADR 0010: agent egress only matters when an agent will actually run.)
   if (selection === undefined) {
-    const prepared = prepareRun({ cwd, onLine, ...(agentModelHosts !== undefined ? { agentModelHosts } : {}) });
+    const prepared = prepareRun({ cwd, logger: rootLogger.child({ mod: "store" }), ...(agentModelHosts !== undefined ? { agentModelHosts } : {}) });
     printPosture(prepared);
     console.error("    (sandbox provisioned and ready; run `dustcastle model` to choose an agent model)");
     return 0;
@@ -89,7 +90,6 @@ async function main(argv: string[]): Promise<number> {
   // banner prints from inside that flow (onPrepared), never a pre-run provision.
   await orchestrate({
     cwd,
-    onLine,
     logger: rootLogger.child({ mod: "orchestrate" }),
     ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
     onPrepared: (prepared) => {

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { DUSTCASTLE_HOME } from "../config/global.js";
+import { noopLogger, type Logger } from "../log/index.js";
 import { autoGc, type AutoGcOptions } from "../store/autogc.js";
 import { diskSpace, measureStoreBytes } from "../store/ceiling.js";
 import { defaultDepsCacheDir } from "../store/depscache/index.js";
@@ -15,9 +16,9 @@ import { defaultRecencyRootsDir, nixPortableRunner } from "../store/gc.js";
  * to everything. Deps are injectable so the command is unit-testable without nix.
  */
 export async function runAutoGcCommand(
-  opts: Partial<AutoGcOptions> & { readonly onLine?: (line: string) => void } = {},
+  opts: Partial<AutoGcOptions> & { readonly logger?: Logger } = {},
 ): Promise<number> {
-  const log = opts.onLine ?? ((l: string) => process.stderr.write(`${l}\n`));
+  const logger = opts.logger ?? noopLogger;
   try {
     const run = opts.run ?? nixPortableRunner();
     autoGc({
@@ -28,13 +29,13 @@ export async function runAutoGcCommand(
       recencyRootsDir: opts.recencyRootsDir ?? defaultRecencyRootsDir(),
       depsCacheDir: opts.depsCacheDir ?? defaultDepsCacheDir(),
       now: opts.now ?? (() => Date.now()),
-      onLine: log,
+      logger,
       ...(opts.lockPath !== undefined ? { lockPath: opts.lockPath } : {}),
       ...(opts.gcLogPath !== undefined ? { gcLogPath: opts.gcLogPath } : {}),
     });
   } catch (e) {
     // The child must never fail loudly — it is invisible maintenance.
-    log(`gc: WARNING autogc child error (ignored): ${(e as Error).message}`);
+    logger.warn({ err: (e as Error).message }, "autogc child error (ignored)");
   }
   return 0;
 }
@@ -56,7 +57,7 @@ export interface SpawnAutoGcOptions {
   /** Inject the spawn function (tests); defaults to `node:child_process.spawn`. */
   readonly spawnFn?: typeof spawn;
   /** Surface a warning if the spawn can't be set up (best-effort). */
-  readonly onLine?: (line: string) => void;
+  readonly logger?: Logger;
 }
 
 /**
@@ -76,6 +77,6 @@ export function spawnAutoGc(opts: SpawnAutoGcOptions = {}): void {
     });
     child.unref();
   } catch (e) {
-    opts.onLine?.(`gc: WARNING could not spawn autogc child: ${(e as Error).message}`);
+    (opts.logger ?? noopLogger).warn({ err: (e as Error).message }, "could not spawn autogc child");
   }
 }

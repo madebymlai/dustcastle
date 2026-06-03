@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { noopLogger, type Logger } from "../log/index.js";
 
 /**
  * dustcastle owns its sandbox IMAGES the way it owns nix-portable: built-once,
@@ -34,8 +35,6 @@ export interface ImageSpec {
   readonly tag: string;
   /** Path to the shipped Containerfile (resolved beside this module). */
   readonly containerfile: string;
-  /** Log namespace for the build progress lines (e.g. "sandbox" | "egress"). */
-  readonly logPrefix: string;
   /** Human noun for the build/built/failed messages (e.g. "agent image" | "proxy image"). */
   readonly label: string;
 }
@@ -49,8 +48,8 @@ export interface EnsureImageOptions {
   readonly run?: PodmanRunner;
   /** Inject the "image already built?" check (tests); defaults to `podman image exists`. */
   readonly exists?: (image: string) => boolean;
-  /** Surface build output line-by-line (never silent). */
-  readonly onLine?: (line: string) => void;
+  /** Structured logs for image build progress and podman stderr. */
+  readonly logger?: Logger;
 }
 
 /**
@@ -68,7 +67,6 @@ export function containerfilePath(filename: string): string {
 export const AGENT_SPEC: ImageSpec = {
   tag: "localhost/dustcastle-agent:bookworm",
   containerfile: containerfilePath("agent.Containerfile"),
-  logPrefix: "sandbox",
   label: "agent image",
 };
 
@@ -76,7 +74,6 @@ export const AGENT_SPEC: ImageSpec = {
 export const PROXY_SPEC: ImageSpec = {
   tag: "localhost/dustcastle-egress-proxy:node20",
   containerfile: containerfilePath("proxy.Containerfile"),
-  logPrefix: "egress",
   label: "proxy image",
 };
 
@@ -96,13 +93,18 @@ export function ensureImage(spec: ImageSpec, opts: EnsureImageOptions = {}): str
   if (exists(image)) return image;
 
   const containerfile = opts.containerfile ?? spec.containerfile;
-  const run = opts.run ?? defaultPodmanRun(opts.onLine);
-  opts.onLine?.(`${spec.logPrefix}: building the dustcastle ${spec.label} ${image} (one-time)…`);
+  const logger = opts.logger ?? noopLogger;
+  const run = opts.run ?? defaultPodmanRun(logger);
+  logger.info({ image, label: spec.label }, "building dustcastle image");
   const result = run(buildArgs(image, containerfile));
   if (result.status !== 0) {
-    throw new Error(`${spec.logPrefix}: failed to build the ${spec.label} ${image}:\n${result.stderr.slice(-2000)}`);
+    logger.error(
+      { image, label: spec.label, stderr: result.stderr.slice(-2000) },
+      "failed to build dustcastle image",
+    );
+    throw new Error(`failed to build the ${spec.label} ${image}:\n${result.stderr.slice(-2000)}`);
   }
-  opts.onLine?.(`${spec.logPrefix}: built ${image}`);
+  logger.info({ image, label: spec.label }, "built dustcastle image");
   return image;
 }
 
@@ -111,11 +113,15 @@ function defaultImageExists(image: string): boolean {
   return spawnSync("podman", ["image", "exists", image]).status === 0;
 }
 
-/** Default runner: a real `podman` spawn, streaming stderr to `onLine`. */
-function defaultPodmanRun(onLine?: (line: string) => void): PodmanRunner {
+/** Default runner: a real `podman` spawn, streaming stderr as debug detail. */
+function defaultPodmanRun(logger: Logger): PodmanRunner {
   return (args) => {
     const r = spawnSync("podman", [...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    if (onLine && r.stderr) for (const line of r.stderr.split("\n")) onLine(line);
+    if (r.stderr) {
+      for (const line of r.stderr.split("\n").filter((l) => l.length > 0)) {
+        logger.debug({ line }, "podman stderr");
+      }
+    }
     return { status: r.status, stderr: r.stderr ?? "" };
   };
 }

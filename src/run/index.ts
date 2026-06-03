@@ -26,6 +26,7 @@ import {
   type DepsCachePopulate,
 } from "../store/depscache/index.js";
 import { spawnAutoGc } from "../cli/autogc.js";
+import { noopLogger, type Logger } from "../log/index.js";
 import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
 
 export interface PrepareOptions {
@@ -35,8 +36,8 @@ export interface PrepareOptions {
   readonly nixPortable?: string;
   /** Override the physical rootless store root. */
   readonly physStoreRoot?: string;
-  /** Stream provisioning output (progress surfacing). */
-  readonly onLine?: (line: string) => void;
+  /** Structured logs for provisioning subsystems. */
+  readonly logger?: Logger;
   /**
    * Override the egress proxy URL the in-Sandbox install is routed through (ADR
    * 0005). The orchestration layer supplies this after the proxy is up; defaults
@@ -134,7 +135,7 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
         detection,
         ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
         ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
-        ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+        logger: opts.logger ?? noopLogger,
       }),
       ...(cache !== undefined ? { cache } : {}),
     };
@@ -306,12 +307,19 @@ export async function withProvisionedSandbox<T>(
   // ALL its deps-cache entries so a concurrent GC sweep never evicts assembled deps
   // out from under it; released on completion (the finally).
   const cacheDir = opts.depsCacheDir ?? defaultDepsCacheDir();
-  const cachePool = depsCachePool({ cacheDir, ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}) });
+  const rootLogger = opts.logger ?? noopLogger;
+  const gcLogger = rootLogger.child({ mod: "gc" });
+  const storeLogger = rootLogger.child({ mod: "store" });
+  const depsLogger = rootLogger.child({ mod: "deps-cache" });
+  const egressLogger = rootLogger.child({ mod: "egress" });
+  const sandboxLogger = rootLogger.child({ mod: "sandbox" });
+  const cachePool = depsCachePool({ cacheDir, logger: depsLogger });
   const cachePinnedKeys: string[] = [];
 
   try {
     const prepared = prepareRun({
       ...opts,
+      logger: storeLogger,
       depsCacheDir: cacheDir,
       ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
       // Stand up the production egress backend the moment the decision is known —
@@ -325,7 +333,7 @@ export async function withProvisionedSandbox<T>(
         const image =
           opts.proxyImage ??
           (decision.kind === "allowlist"
-            ? ensureImage(PROXY_SPEC, opts.onLine !== undefined ? { onLine: opts.onLine } : {})
+            ? ensureImage(PROXY_SPEC, { logger: egressLogger })
             : undefined);
         // The proxy resolves allowlisted hosts through external resolvers, not the
         // --internal net's aardvark (which would NXDOMAIN-poison resolution).
@@ -335,7 +343,7 @@ export async function withProvisionedSandbox<T>(
           proxyEntrypoint: opts.proxyEntrypoint ?? DEFAULT_PROXY_ENTRYPOINT,
           ...(image !== undefined ? { image } : {}),
           ...(resolvConfPath !== undefined ? { resolvConfPath } : {}),
-          ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+          logger: egressLogger,
         });
       },
     });
@@ -353,7 +361,7 @@ export async function withProvisionedSandbox<T>(
       gcrootsDir: opts.gcRoots?.gcrootsDir ?? defaultGcRootsDir(),
       projectKey: gcProjectKey(prepared),
       ...(opts.gcRoots?.run !== undefined ? { run: opts.gcRoots.run } : {}),
-      ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+      logger: gcLogger,
     });
 
     // Persist this project as recently-used + pin a PERSISTENT recency root (ADR
@@ -379,7 +387,7 @@ export async function withProvisionedSandbox<T>(
     // Containerfile; idempotent thereafter), the way the Store provision ensures
     // nix-portable. The image carries the agent harness (git/bd/pi) + a writable,
     // keep-id-aligned `agent` user that sandcastle's provider maps the host user onto.
-    ensureImage(AGENT_SPEC, opts.onLine !== undefined ? { onLine: opts.onLine } : {});
+    ensureImage(AGENT_SPEC, { logger: sandboxLogger });
 
     // Mount the pi login into the sandbox (~/.pi/agent), so the agent
     // authenticates in-container off the developer's existing `pi login` — no
@@ -402,7 +410,7 @@ export async function withProvisionedSandbox<T>(
     // so it cannot be relied on to land once the deps are assembled. Copies each
     // worktree stage dir into its lockfile-hash entry. Best-effort: a failed populate
     // only risks a later cache miss, never the run.
-    populateDepsCache(opts.cwd, cacheDir, prepared.plan.populate, opts.onLine);
+    populateDepsCache(opts.cwd, cacheDir, prepared.plan.populate, depsLogger);
 
     return result;
   } finally {
@@ -426,6 +434,7 @@ export async function withProvisionedSandbox<T>(
  */
 function updateRecency(opts: ProvisionOptions, prepared: PreparedRun): void {
   if (opts.autoGc?.disabled === true) return;
+  const gcLogger = (opts.logger ?? noopLogger).child({ mod: "gc" });
   try {
     const dir = opts.autoGc?.recencyDir ?? DUSTCASTLE_HOME;
     const recencyRootsDir = opts.autoGc?.recencyRootsDir ?? defaultRecencyRootsDir();
@@ -439,10 +448,10 @@ function updateRecency(opts: ProvisionOptions, prepared: PreparedRun): void {
       recencyRootsDir,
       projectKey,
       run: runner,
-      ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}),
+      logger: gcLogger,
     });
   } catch (e) {
-    opts.onLine?.(`gc: WARNING recency update failed (best-effort): ${(e as Error).message}`);
+    gcLogger.warn({ err: (e as Error).message }, "recency update failed (best-effort)");
   }
 }
 
@@ -451,7 +460,7 @@ function triggerAutoGc(opts: ProvisionOptions): void {
   if (opts.autoGc?.disabled === true) return;
   try {
     if (opts.autoGc?.spawn !== undefined) opts.autoGc.spawn();
-    else spawnAutoGc({ ...(opts.onLine !== undefined ? { onLine: opts.onLine } : {}) });
+    else spawnAutoGc({ logger: (opts.logger ?? noopLogger).child({ mod: "gc" }) });
   } catch {
     /* best-effort: a failed spawn must never break a run */
   }
@@ -498,21 +507,21 @@ function populateDepsCache(
   cwd: string,
   cacheDir: string,
   populate: readonly DepsCachePopulate[],
-  onLine?: (line: string) => void,
+  logger: Logger,
 ): void {
   for (const entry of populate) {
     try {
       const command = populateCommand({ cacheDir, ...entry });
       const result = spawnSync("sh", ["-c", command], { cwd, encoding: "utf8" });
       if (result.status === 0) {
-        onLine?.(`deps-cache: populated ${entry.lockfileHash} from ${entry.stageDir}`);
+        logger.debug({ lockfileHash: entry.lockfileHash, stageDir: entry.stageDir }, "populated deps-cache entry");
       } else {
         const detail = result.stderr?.trim() ?? "";
-        onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${detail}`);
+        logger.warn({ lockfileHash: entry.lockfileHash, detail }, "populate deps-cache entry failed (best-effort)");
       }
     } catch (e) {
       const detail = (e as Error).message;
-      onLine?.(`deps-cache: WARNING populate ${entry.lockfileHash} failed (best-effort): ${detail}`);
+      logger.warn({ lockfileHash: entry.lockfileHash, detail }, "populate deps-cache entry failed (best-effort)");
     }
   }
 }
