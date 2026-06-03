@@ -20,6 +20,10 @@ export interface RunStreamingOptions {
   readonly classifyStderrLine?: (line: string) => StreamingLogLevel;
 }
 
+function defaultStderrLineClassifier(): StreamingLogLevel {
+  return "debug";
+}
+
 /**
  * Run a child process asynchronously, streaming stderr lines to the logger as they
  * arrive while retaining full stdout/stderr for callers that need parsing or error
@@ -32,7 +36,7 @@ export function runStreamingAsync(
   opts: RunStreamingOptions,
 ): Promise<StreamingRunResult> {
   const logger = opts.logger ?? noopLogger;
-  const classify = opts.classifyStderrLine ?? (() => "debug" as const);
+  const classifyStderrLine = opts.classifyStderrLine ?? defaultStderrLineClassifier;
   const spawnOptions: SpawnOptions = {
     stdio: ["ignore", "pipe", "pipe"],
     ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
@@ -50,11 +54,11 @@ export function runStreamingAsync(
 
   let stdout = "";
   let stderr = "";
-  let stderrPending = "";
+  let pendingStderrLine = "";
 
   const emitStderrLine = (line: string): void => {
     if (line.length === 0) return;
-    const level = classify(line);
+    const level = classifyStderrLine(line);
     logger[level]({ line }, `${opts.label} stderr`);
   };
 
@@ -64,9 +68,9 @@ export function runStreamingAsync(
 
   stderrStream.on("data", (chunk: string) => {
     stderr += chunk;
-    stderrPending += chunk;
-    const lines = stderrPending.split("\n");
-    stderrPending = lines.pop() ?? "";
+    pendingStderrLine += chunk;
+    const lines = pendingStderrLine.split("\n");
+    pendingStderrLine = lines.pop() ?? "";
     for (const line of lines) emitStderrLine(line);
   });
 
@@ -78,9 +82,9 @@ export function runStreamingAsync(
     });
 
     child.on("close", (status) => {
-      if (stderrPending.length > 0) {
-        emitStderrLine(stderrPending);
-        stderrPending = "";
+      if (pendingStderrLine.length > 0) {
+        emitStderrLine(pendingStderrLine);
+        pendingStderrLine = "";
       }
       resolve({ status, stdout, stderr });
     });

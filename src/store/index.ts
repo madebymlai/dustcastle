@@ -6,7 +6,7 @@ import type { Detection } from "../detect/index.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
-import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
+import { runStreamingAsync, type StreamingLogLevel, type StreamingRunResult } from "../process/streaming.js";
 import { parseStorePath } from "./parse.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
 
@@ -78,7 +78,7 @@ interface BuildContext {
   readonly pname: string;
   readonly mode: RuntimeMode;
   readonly physStoreRoot: string;
-  readonly run: (args: string[]) => Promise<{ status: number | null; stdout: string; stderr: string }>;
+  readonly run: (args: string[]) => Promise<StreamingRunResult>;
   readonly logger: Logger;
 }
 
@@ -88,7 +88,11 @@ interface BuildContext {
  * expression (no deps FOD — Project Deps install in-Sandbox via the sandcastle hook),
  * and the store realizes its single Toolchain attr.
  */
-async function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Promise<Provisioned> {
+async function provision(
+  spec: ProvisionSpec,
+  ctx: BuildContext,
+  descriptor: PackageManagerDescriptor,
+): Promise<Provisioned> {
   const build = descriptor.generateToolchain({
     pname: ctx.pname,
     // Thread the detected manager (ADR 0012) so Python's Toolchain ships the manager's
@@ -229,7 +233,7 @@ function runNixBuild(
   mode: RuntimeMode,
   args: string[],
   logger: Logger,
-): Promise<{ status: number | null; stdout: string; stderr: string }> {
+): Promise<StreamingRunResult> {
   return runStreamingAsync(nixPortable, ["nix-build", ...args], {
     logger,
     label: "nix-build",
@@ -238,13 +242,18 @@ function runNixBuild(
   });
 }
 
+const NIX_BUILD_PROGRESS_LINE = /^these \d+ derivations? will be built/;
+
 function classifyNixBuildStderrLine(line: string): StreamingLogLevel {
-  return line.startsWith("building") ||
-    /^these \d+ derivations? will be built/.test(line) ||
+  if (
+    line.startsWith("building") ||
+    NIX_BUILD_PROGRESS_LINE.test(line) ||
     line.startsWith("downloading") ||
     line.startsWith("copying path")
-    ? "info"
-    : "debug";
+  ) {
+    return "info";
+  }
+  return "debug";
 }
 
 /** A pname Nix accepts (alnum, dot, dash, underscore). */

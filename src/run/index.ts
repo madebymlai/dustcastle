@@ -126,18 +126,20 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   // the Store realizes only Toolchains; deps install in-Sandbox). A polyglot repo
   // provisions every Toolchain. Decide each ecosystem's deps-cache hit/miss host-side
   // (keyed by its lockfile hash), so the plan emits restore-vs-install per ecosystem.
+  const logger = opts.logger ?? noopLogger;
   const ecosystems: EcosystemPlan[] = [];
   for (const detection of resolved) {
     const cache = depsCacheDecision(opts.cwd, detection, cacheDir);
+    const provisioned = await provisionStore({
+      projectDir: opts.cwd,
+      detection,
+      ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
+      ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
+      logger,
+    });
     ecosystems.push({
       detection,
-      provisioned: await provisionStore({
-        projectDir: opts.cwd,
-        detection,
-        ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
-        ...(opts.physStoreRoot !== undefined ? { physStoreRoot: opts.physStoreRoot } : {}),
-        logger: opts.logger ?? noopLogger,
-      }),
+      provisioned,
       ...(cache !== undefined ? { cache } : {}),
     });
   }
@@ -184,10 +186,12 @@ export interface PreparedWorkspace {
  */
 export async function prepareWorkspace(opts: PrepareOptions): Promise<PreparedWorkspace> {
   const ws = detectWorkspace(opts.cwd);
+  const provisionableProjects = ws.projects.filter((project) => project.detections.length > 0);
   const members = await Promise.all(
-    ws.projects
-      .filter((project) => project.detections.length > 0)
-      .map(async (project) => ({ dir: project.dir, prepared: await prepareRun({ ...opts, cwd: project.dir }) })),
+    provisionableProjects.map(async (project) => ({
+      dir: project.dir,
+      prepared: await prepareRun({ ...opts, cwd: project.dir }),
+    })),
   );
   return { root: ws.root, isWorkspace: ws.isWorkspace, members };
 }
