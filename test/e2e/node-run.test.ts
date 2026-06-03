@@ -34,7 +34,7 @@ describe("dustcastle run (slice 2: Node in-Sandbox install, ADR 0002/0005/0008/0
 
       // dustcastle's real pipeline: detect → provision the Toolchain → plan the
       // Sandbox with the standing egress. There is no purity decision any more.
-      const prepared = prepareRun({ cwd: projectDir });
+      const prepared = await prepareRun({ cwd: projectDir });
       expect(prepared.detection.ecosystem).toBe("node");
       // Toolchain-only Store (ADR 0012): no deps FOD realized.
       expect(prepared.plan.egress.kind).toBe("allowlist");

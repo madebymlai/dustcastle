@@ -20,7 +20,7 @@ afterAll(() => {
 });
 
 describe("provisionStore (toolchain-only rootless Store, ADR 0008/0012)", () => {
-  e2e("realizes ONLY the Go Toolchain — no deps FOD in the Store", () => {
+  e2e("realizes ONLY the Go Toolchain — no deps FOD in the Store", async () => {
     const root = mkdtempSync(join(tmpdir(), "dustcastle-e2e-"));
     tmps.push(root);
     const projectDir = stageSampleProject(root);
@@ -28,7 +28,7 @@ describe("provisionStore (toolchain-only rootless Store, ADR 0008/0012)", () => 
     const detection = detect(projectDir)[0];
     expect(detection?.packageManager).toBe("go");
 
-    const provisioned = provisionStore({ projectDir, detection: detection! });
+    const provisioned = await provisionStore({ projectDir, detection: detection! });
 
     // The Toolchain lands as a content-addressed path.
     expect(provisioned.toolchainStorePath).toMatch(/^\/nix\/store\/.+-go-\d/);

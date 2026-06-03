@@ -25,14 +25,14 @@ afterAll(() => {
 });
 
 describe("scoped GC roots (ADR 0007 — protect an in-flight run's closure)", () => {
-  e2e("roots the provisioned closure LIVE (would survive a sweep), then releases it", () => {
+  e2e("roots the provisioned closure LIVE (would survive a sweep), then releases it", async () => {
     const root = mkdtempSync(join(tmpdir(), "dustcastle-gc-e2e-"));
     tmps.push(root);
     const projectDir = stageNodeProject(root);
     const gcrootsDir = join(root, "gcroots");
 
     const detection = detect(projectDir)[0]!;
-    const provisioned = provisionStore({ projectDir, detection });
+    const provisioned = await provisionStore({ projectDir, detection });
     expect(provisioned.toolchainStorePath).toContain("/nix/store/");
     // ADR 0012: the Store holds only the Toolchain — no deps FOD path.
 

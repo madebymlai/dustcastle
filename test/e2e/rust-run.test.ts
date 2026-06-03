@@ -32,7 +32,7 @@ async function expectRustFixture(
   tmps.push(root);
   const projectDir = stage(root);
 
-  const prepared = prepareRun({ cwd: projectDir });
+  const prepared = await prepareRun({ cwd: projectDir });
   expect(prepared.detection).toMatchObject({ ecosystem: "rust", packageManager: "cargo" });
   expect(prepared.plan.egress.kind).toBe("allowlist");
   expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);

@@ -28,7 +28,7 @@ describe("dustcastle (3a-ii: per-workspace monorepo in-Sandbox install, ADR 0006
     const { root: wsRoot, members } = stageWorkspaceProject(root);
 
     // The fan-out: detect the workspace, provision EACH member's Toolchain.
-    const ws = prepareWorkspace({ cwd: wsRoot });
+    const ws = await prepareWorkspace({ cwd: wsRoot });
 
     expect(ws.isWorkspace).toBe(true);
     expect(ws.members.map((m) => m.dir).sort()).toEqual([...members].sort());

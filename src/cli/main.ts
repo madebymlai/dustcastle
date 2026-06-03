@@ -78,7 +78,7 @@ async function main(argv: string[]): Promise<number> {
   // Provision the Store, print the posture, and stop — the user picks a model and
   // re-runs. (ADR 0010: agent egress only matters when an agent will actually run.)
   if (selection === undefined) {
-    const prepared = prepareRun({
+    const prepared = await prepareRun({
       cwd,
       logger: rootLogger.child({ mod: "store" }),
       ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),

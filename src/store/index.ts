@@ -6,6 +6,7 @@ import type { Detection } from "../detect/index.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecosystems/index.js";
+import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
 import { parseStorePath } from "./parse.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
 
@@ -42,7 +43,7 @@ export interface Provisioned {
  * sandcastle hook (ADR 0012, always-impure), so there is no deps FOD to build here.
  * Returns the canonical Toolchain store path plus the physical root and runtime mode.
  */
-export function provisionStore(spec: ProvisionSpec): Provisioned {
+export async function provisionStore(spec: ProvisionSpec): Promise<Provisioned> {
   const physStoreRoot = spec.physStoreRoot ?? join(homedir(), ".nix-portable", "nix", "store");
   const nixPortable = spec.nixPortable ?? ensureNixPortable();
   const mode = chooseRuntimeMode({ unprivilegedUserns: unprivilegedUsernsAvailable() });
@@ -77,7 +78,7 @@ interface BuildContext {
   readonly pname: string;
   readonly mode: RuntimeMode;
   readonly physStoreRoot: string;
-  readonly run: (args: string[]) => { status: number | null; stdout: string; stderr: string };
+  readonly run: (args: string[]) => Promise<{ status: number | null; stdout: string; stderr: string }>;
   readonly logger: Logger;
 }
 
@@ -87,7 +88,7 @@ interface BuildContext {
  * expression (no deps FOD — Project Deps install in-Sandbox via the sandcastle hook),
  * and the store realizes its single Toolchain attr.
  */
-function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Provisioned {
+async function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageManagerDescriptor): Promise<Provisioned> {
   const build = descriptor.generateToolchain({
     pname: ctx.pname,
     // Thread the detected manager (ADR 0012) so Python's Toolchain ships the manager's
@@ -101,7 +102,7 @@ function provision(spec: ProvisionSpec, ctx: BuildContext, descriptor: PackageMa
   });
   writeFileSync(join(ctx.buildDir, "default.nix"), build.expression);
 
-  const toolchain = ctx.run(["-A", build.attr, "--no-out-link"]);
+  const toolchain = await ctx.run(["-A", build.attr, "--no-out-link"]);
   if (toolchain.status !== 0) {
     ctx.logger.error(
       { status: toolchain.status, stderr: toolchain.stderr.slice(-2000) },
@@ -228,18 +229,22 @@ function runNixBuild(
   mode: RuntimeMode,
   args: string[],
   logger: Logger,
-): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(nixPortable, ["nix-build", ...args], {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return runStreamingAsync(nixPortable, ["nix-build", ...args], {
+    logger,
+    label: "nix-build",
     env: { ...process.env, NP_RUNTIME: mode },
+    classifyStderrLine: classifyNixBuildStderrLine,
   });
-  if (result.stderr) {
-    for (const line of result.stderr.split("\n").filter((l) => l.length > 0)) {
-      logger.debug({ line }, "nix-build stderr");
-    }
-  }
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+function classifyNixBuildStderrLine(line: string): StreamingLogLevel {
+  return line.startsWith("building") ||
+    /^these \d+ derivations? will be built/.test(line) ||
+    line.startsWith("downloading") ||
+    line.startsWith("copying path")
+    ? "info"
+    : "debug";
 }
 
 /** A pname Nix accepts (alnum, dot, dash, underscore). */

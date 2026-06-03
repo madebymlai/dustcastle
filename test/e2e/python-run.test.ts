@@ -48,7 +48,7 @@ describe("dustcastle run (laimk-hse.2: Python in-Sandbox install, ADR 0002/0005/
         tmps.push(root);
         const projectDir = stage(root);
 
-        const prepared = prepareRun({ cwd: projectDir });
+        const prepared = await prepareRun({ cwd: projectDir });
         expect(prepared.detection.ecosystem).toBe("python");
         expect(prepared.detection.packageManager).toBe(manager);
         expect(prepared.plan.egress.kind).toBe("allowlist");

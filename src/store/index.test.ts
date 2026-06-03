@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
+import { createMemoryLogger } from "../log/fake.js";
 import { isStageableSource, provisionStore, stageSource } from "./index.js";
 
 // The store dispatch: which descriptor a detection routes to. The case under test
@@ -51,16 +53,59 @@ const provision = (detection: Detection) =>
     nixPortable: "/nonexistent/nix-portable",
   });
 
+function fakeNixPortable(body: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "dustcastle-fake-nix-portable-"));
+  tmps.push(dir);
+  const bin = join(dir, "nix-portable");
+  writeFileSync(bin, `#!/usr/bin/env node\n${body}\n`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
 describe("provisionStore dispatch", () => {
-  it("rejects an unknown manager with the Registry's honest miss error", () => {
+  it("rejects an unknown manager with the Registry's honest miss error", async () => {
     // The closed `PackageManager` union (laimk-mhg.6) makes a name outside the
     // Registry unrepresentable in well-typed code, so this case CASTS to exercise
     // the never-drop-a-gate safety net (ADR 0004). The store's own defensive guard
     // has RETIRED (architecture review candidate 2: dispatch is exhaustive by
     // construction); the single remaining net is the Registry lookup's own throw.
-    expect(() =>
+    await expect(
       provision({ ecosystem: "node", packageManager: "mystery" as PackageManager }),
-    ).toThrowError(/unknown package manager mystery/);
+    ).rejects.toThrowError(/unknown package manager mystery/);
+  });
+
+  it("parses the Store path from accumulated nix-build stdout and curates progress", async () => {
+    const logger = createMemoryLogger();
+    const provisioned = await provisionStore({
+      projectDir: stagedProject(),
+      detection: { ecosystem: "node", packageManager: "npm" },
+      nixPortable: fakeNixPortable(
+        "process.stderr.write('building toolchain\\n'); process.stdout.write('/nix/store/abc-toolchain\\n');",
+      ),
+      logger,
+    });
+
+    expect(provisioned.toolchainStorePath).toBe("/nix/store/abc-toolchain");
+    expect(logger.records).toContainEqual(
+      expect.objectContaining({ level: "info", fields: expect.objectContaining({ line: "building toolchain" }) }),
+    );
+  });
+
+  it("preserves the stderr tail on a failed nix-build", async () => {
+    const stderr = `HEAD${"x".repeat(2200)}TAIL`;
+    let error: Error | undefined;
+    try {
+      await provisionStore({
+        projectDir: stagedProject(),
+        detection: { ecosystem: "node", packageManager: "npm" },
+        nixPortable: fakeNixPortable(`process.stderr.write(${JSON.stringify(stderr)}); process.exit(23);`),
+      });
+    } catch (e) {
+      error = e as Error;
+    }
+
+    expect(error?.message).toContain(stderr.slice(-2000));
+    expect(error?.message).not.toContain("HEAD");
   });
 });
 

@@ -65,7 +65,7 @@ export interface PrepareOptions {
    * enforce scoped egress aborts here, not after minutes of build work. dustcastle
    * has no unconfined fallback by design, so if this throws, the run throws.
    */
-  readonly beforeProvision?: (egress: EgressDecision) => void;
+  readonly beforeProvision?: (egress: EgressDecision) => void | Promise<void>;
 }
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
@@ -91,7 +91,7 @@ export interface PreparedRun {
  * in-Sandbox via the sandcastle hook — there is no pure-vs-impure decision. Everything
  * here is dustcastle's own work — before sandcastle's flow begins.
  */
-export function prepareRun(opts: PrepareOptions): PreparedRun {
+export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   const resolved = detect(opts.cwd);
   if (resolved.length === 0) {
     throw new Error(`no supported ecosystem detected in ${opts.cwd}`);
@@ -116,7 +116,7 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
 
   // Fail fast: stand up the egress proxy now. If this host can't enforce scoped
   // egress, abort BEFORE provisioning (no unconfined fallback — ADR 0005/0010).
-  opts.beforeProvision?.(egress);
+  await opts.beforeProvision?.(egress);
 
   // The deps-cache root (ADR 0012, dustcastle-8od): the host-owned cache, one entry
   // per ecosystem keyed by its lockfile hash.
@@ -126,11 +126,12 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
   // the Store realizes only Toolchains; deps install in-Sandbox). A polyglot repo
   // provisions every Toolchain. Decide each ecosystem's deps-cache hit/miss host-side
   // (keyed by its lockfile hash), so the plan emits restore-vs-install per ecosystem.
-  const ecosystems: EcosystemPlan[] = resolved.map((detection) => {
+  const ecosystems: EcosystemPlan[] = [];
+  for (const detection of resolved) {
     const cache = depsCacheDecision(opts.cwd, detection, cacheDir);
-    return {
+    ecosystems.push({
       detection,
-      provisioned: provisionStore({
+      provisioned: await provisionStore({
         projectDir: opts.cwd,
         detection,
         ...(opts.nixPortable !== undefined ? { nixPortable: opts.nixPortable } : {}),
@@ -138,8 +139,8 @@ export function prepareRun(opts: PrepareOptions): PreparedRun {
         logger: opts.logger ?? noopLogger,
       }),
       ...(cache !== undefined ? { cache } : {}),
-    };
-  });
+    });
+  }
 
   const primary = ecosystems[0]!;
   return {
@@ -181,11 +182,13 @@ export interface PreparedWorkspace {
  * uniformly. Members with no detected ecosystem (e.g. a docs-only package) are
  * skipped — there is nothing to provision.
  */
-export function prepareWorkspace(opts: PrepareOptions): PreparedWorkspace {
+export async function prepareWorkspace(opts: PrepareOptions): Promise<PreparedWorkspace> {
   const ws = detectWorkspace(opts.cwd);
-  const members = ws.projects
-    .filter((project) => project.detections.length > 0)
-    .map((project) => ({ dir: project.dir, prepared: prepareRun({ ...opts, cwd: project.dir }) }));
+  const members = await Promise.all(
+    ws.projects
+      .filter((project) => project.detections.length > 0)
+      .map(async (project) => ({ dir: project.dir, prepared: await prepareRun({ ...opts, cwd: project.dir }) })),
+  );
   return { root: ws.root, isWorkspace: ws.isWorkspace, members };
 }
 
@@ -320,7 +323,7 @@ export async function withProvisionedSandbox<T>(
   const cachePinnedKeys: string[] = [];
 
   try {
-    const prepared = prepareRun({
+    const prepared = await prepareRun({
       ...opts,
       logger: storeLogger,
       depsCacheDir: cacheDir,

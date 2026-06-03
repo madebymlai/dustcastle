@@ -77,7 +77,7 @@ describe("dustcastle run (slice 3: impure-allow egress enforcement, ADR 0004/000
       // the nodejs Toolchain → plan the Sandbox with the STANDING egress + proxy env.
       // There is no purity decision; the install runs in-Sandbox under the allowlist,
       // and this fixture's postinstall is the untrusted lifecycle code being confined.
-      const prepared = prepareRun({
+      const prepared = await prepareRun({
         cwd: projectDir,
         proxyUrl: PROXY_URL,
         onLine: log,
