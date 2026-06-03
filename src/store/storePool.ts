@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   collectGarbageArgs,
   optimiseArgs,
@@ -6,8 +8,8 @@ import {
   type NixRunner,
   type OptimiseReport,
 } from "./nix.js";
-import { pruneRecencyRoots, registerScopedRoots } from "./gc.js";
-import { closureSizeBytes, measureStoreBytes } from "./ceiling.js";
+import { pruneRecencyRoots, registerScopedRoots } from "./gcRoots.js";
+import { measureStoreBytes } from "./ceiling.js";
 import { loadRecency } from "./recency.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import type { Pool, PoolEntry, PoolEvictReport } from "./pool.js";
@@ -36,8 +38,11 @@ export interface StorePoolOptions {
   readonly run: NixRunner;
   /** The dustcastle home holding the recency index (`recency.json`). */
   readonly dir: string;
-  /** Where the persistent recency-root symlinks live (pruned to the warm tail on evict). */
-  readonly recencyRootsDir: string;
+  /**
+   * Where the persistent recency-root symlinks live (pruned to the warm tail on evict).
+   * Defaults to `~/.dustcastle/recency-roots`.
+   */
+  readonly recencyRootsDir?: string;
   /**
    * Where the scoped (per-run) root symlinks live — pinned, released on completion.
    * Optional: the detached sweep never pins (a live run does, via its own pool), so
@@ -53,9 +58,14 @@ export interface StorePoolOptions {
   readonly logger?: Logger;
 }
 
+const DEFAULT_GCROOTS_DIR = join(homedir(), ".dustcastle", "gcroots");
+const DEFAULT_RECENCY_ROOTS_DIR = join(homedir(), ".dustcastle", "recency-roots");
+
 /** Construct the Store pool over the existing Store mechanism (ADR 0007/0012). */
 export function storePool(opts: StorePoolOptions): Pool {
   const logger = opts.logger ?? noopLogger;
+  const gcrootsDir = opts.gcrootsDir ?? DEFAULT_GCROOTS_DIR;
+  const recencyRootsDir = opts.recencyRootsDir ?? DEFAULT_RECENCY_ROOTS_DIR;
   // Track scoped roots per key so `release(key)` can drop exactly that run's roots.
   const pinned = new Map<string, ReturnType<typeof registerScopedRoots>>();
 
@@ -66,14 +76,13 @@ export function storePool(opts: StorePoolOptions): Pool {
       loadRecency(opts.dir).map((r) => ({ key: r.projectKey, lastUsedAt: r.lastUsedAt, bytes: r.closureBytes })),
 
     pin: (key: string): void => {
-      if (opts.gcrootsDir === undefined) return; // no scoped-root dir (a sweep, not a run) → no-op
       const closure = opts.closures?.get(key);
       if (closure === undefined || pinned.has(key)) return; // unknown / already pinned → no-op
       pinned.set(
         key,
         registerScopedRoots({
           provisioned: closure,
-          gcrootsDir: opts.gcrootsDir,
+          gcrootsDir,
           projectKey: key,
           run: opts.run,
           logger,
@@ -96,7 +105,7 @@ export function storePool(opts: StorePoolOptions): Pool {
       const keep = loadRecency(opts.dir)
         .map((r) => r.projectKey)
         .filter((key) => !cold.has(key));
-      pruneRecencyRoots({ recencyRootsDir: opts.recencyRootsDir, keepKeys: keep, logger });
+      pruneRecencyRoots({ recencyRootsDir, keepKeys: keep, logger });
       const gcRes = opts.run(collectGarbageArgs());
       const gc = parseGcReport(gcRes.stdout + gcRes.stderr);
       logger.debug({ pathsDeleted: gc.pathsDeleted, bytesFreed: gc.bytesFreed }, "collected unrooted store paths");
@@ -112,5 +121,3 @@ export function storePool(opts: StorePoolOptions): Pool {
   };
 }
 
-/** The closure size (bytes) of a Store closure path — re-exported for keying entries by size. */
-export { closureSizeBytes };

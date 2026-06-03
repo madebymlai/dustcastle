@@ -2,7 +2,6 @@ import { DUSTCASTLE_HOME } from "../config/global.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import { collectPools } from "../store/pool.js";
 import { defaultDepsCacheDir, depsCachePool } from "../store/depscache/index.js";
-import { defaultRecencyRootsDir } from "../store/gc.js";
 import { nixPortableRunner, type NixRunner } from "../store/nix.js";
 import { storePool } from "../store/storePool.js";
 
@@ -47,7 +46,7 @@ export async function runGcCommand(opts: {
   const store = storePool({
     run,
     dir: opts.dir ?? DUSTCASTLE_HOME,
-    recencyRootsDir: opts.recencyRootsDir ?? defaultRecencyRootsDir(),
+    ...(opts.recencyRootsDir !== undefined ? { recencyRootsDir: opts.recencyRootsDir } : {}),
     logger: logger.child({ mod: "gc" }),
   });
   const cache = depsCachePool({

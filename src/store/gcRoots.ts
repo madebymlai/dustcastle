@@ -1,26 +1,27 @@
 import { mkdirSync, readdirSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { noopLogger, type Logger } from "../log/index.js";
-import { overCeiling, type CeilingReason } from "./ceiling.js";
 import {
   addRootArgs,
   nixPortableRunner,
-  type NixResult,
   type NixRunner,
 } from "./nix.js";
 
 /**
- * Store lifecycle management (ADR 0007). Nix never garbage-collects by default, so
- * the shared rootless /nix/store grows unbounded across provisions. dustcastle owns
- * the lifecycle with three mechanisms: (1) scoped GC roots — one per active project,
- * pinning its toolchain closure so an in-flight run is never collected out
- * from under it, released on completion; (2) `nix-store --gc` on a policy, deleting
- * only unrooted paths; (3) `nix-store --optimise`, file-level hard-link dedup.
+ * The GC-root lifecycle (ADR 0007): scoped (per-run, released on completion) and
+ * recency (persistent, pruned by byte-budget) roots over a shared private mechanism
+ * (`addClosureRoots`). Nix never garbage-collects by default, so dustcastle owns
+ * both lifecycles — each register through the nix port (`nix.ts`). The scoped root
+ * pins a live run's Toolchain closure so a concurrent `nix-store --gc` never
+ * collects it; the recency root keeps a just-used closure warm across runs and is
+ * pruned only when the project falls outside the byte-budget tail.
  *
- * The nix-portable port (runner, command vocabulary, report parsers) lives in
- * `nix.ts` — the single learnable surface for how to talk to nix. The root lifecycle
- * (scoped + recency roots, prune) is here, driven through that port.
+ * The two lifecycles are genuinely different in release: scoped roots release as a
+ * unit (the returned handle), recency roots are pruned by keep-set (the warm keys
+ * survive, the rest are removed). They share one private `addClosureRoots` — the
+ * mechanism is the same; only the lifecycle around it differs. No `roots(kind)`
+ * factory (that would unify at the directory axis and leak a discriminated-union
+ * handle for two genuinely-different contracts).
  */
 
 /** A store path a provision realizes, tagged by its role in the closure. */
@@ -37,14 +38,6 @@ export function rootStorePaths(provisioned: { readonly toolchainStorePath: strin
   return [{ kind: "toolchain", path: provisioned.toolchainStorePath }];
 }
 
-/**
- * NOTE: the old `garbageCollectionPlan` (the bundled "ceiling decision + keep tail")
- * was removed in ADR 0012 — the unified GC brain now composes `overCeiling` (the
- * orchestrator's ceiling decision) and `recencyTailKeys` (the warm tail, inside
- * `collectPool`) directly, over both the Store and deps-cache pools. Both pieces
- * below/in `ceiling.ts` live on; only their wrapper is gone.
- */
-
 /** Sanitize a project key (a hash with `/`, `+`, `=`) into one filesystem-safe name. */
 function sanitizeKey(projectKey: string): string {
   return projectKey.replace(/[^A-Za-z0-9._-]/g, "_");
@@ -59,11 +52,6 @@ function sanitizeKey(projectKey: string): string {
 export function gcRootLink(gcrootsDir: string, projectKey: string, kind: RootPath["kind"]): string {
   return join(gcrootsDir, `${sanitizeKey(projectKey)}-${kind}`);
 }
-
-// Re-exported from nix.ts so internal consumers (registerScopedRoots, etc.)
-// can still reach the nix port through the existing gc.ts import paths while
-// the rest of the repo migrates to importing from nix.ts directly.
-export { addRootArgs, nixPortableRunner, type NixResult, type NixRunner } from "./nix.js";
 
 /** A handle to a run's scoped GC roots: where they live, and how to release them. */
 export interface ScopedRootsHandle {
@@ -109,35 +97,6 @@ export function registerScopedRoots(opts: RegisterScopedRootsOptions): ScopedRoo
       logger.debug({ roots: links.length }, "released scoped roots");
     },
   };
-}
-
-/**
- * Add an (indirect) GC root for each path in a provision's closure under `rootsDir`,
- * keyed by `projectKey` + kind. Best-effort per root: a root that fails to register
- * is surfaced as a warn record but never aborts — a missing root only risks a cold
- * rebuild. Shared by the scoped (released on completion) and recency (persistent)
- * roots; the only difference is the directory and the lifecycle around it.
- */
-function addClosureRoots(opts: {
-  readonly provisioned: { readonly toolchainStorePath: string };
-  readonly rootsDir: string;
-  readonly projectKey: string;
-  readonly run: NixRunner;
-  readonly logger: Logger;
-}): string[] {
-  mkdirSync(opts.rootsDir, { recursive: true });
-  const links: string[] = [];
-  for (const root of rootStorePaths(opts.provisioned)) {
-    const link = gcRootLink(opts.rootsDir, opts.projectKey, root.kind);
-    const result = opts.run(addRootArgs(root.path, link));
-    if (result.status === 0) {
-      links.push(link);
-      opts.logger.debug({ kind: root.kind, storePath: root.path, link }, "rooted store path");
-    } else {
-      opts.logger.warn({ kind: root.kind, storePath: root.path, stderr: result.stderr.trim() }, "could not root store path");
-    }
-  }
-  return links;
 }
 
 export interface RegisterRecencyRootOptions {
@@ -207,23 +166,30 @@ export function pruneRecencyRoots(opts: {
 }
 
 /**
- * The pre-pool direct-drive sweep (`collectGarbage`) was removed in ADR 0012: both
- * sweep callers now cross the unified pool brain. The automatic trigger (`autogc.ts`)
- * drives `collectPool` per pool; the manual `dustcastle gc` (`cli/gc.ts`) drives
- * `collectPools` over the Store + deps-cache pools with a zero budget. The Store pool
- * (`storePool.ts`) owns the optimise → prune-cold-roots → `nix-store --gc` mechanism;
- * `collectGarbageArgs`/`optimiseArgs`/`parseGcReport`/`parseOptimiseReport` live on in
- * `nix.ts` as its building blocks.
+ * Add an (indirect) GC root for each path in a provision's closure under `rootsDir`,
+ * keyed by `projectKey` + kind. Best-effort per root: a root that fails to register
+ * is surfaced as a warn record but never aborts — a missing root only risks a cold
+ * rebuild. Shared by the scoped (released on completion) and recency (persistent)
+ * roots; the only difference is the directory and the lifecycle around it.
  */
-
-/** The dustcastle-owned scoped-root directory under the rootless store install (ADR 0007/0008). */
-export function defaultGcRootsDir(): string {
-  return join(homedir(), ".dustcastle", "gcroots");
+function addClosureRoots(opts: {
+  readonly provisioned: { readonly toolchainStorePath: string };
+  readonly rootsDir: string;
+  readonly projectKey: string;
+  readonly run: NixRunner;
+  readonly logger: Logger;
+}): string[] {
+  mkdirSync(opts.rootsDir, { recursive: true });
+  const links: string[] = [];
+  for (const root of rootStorePaths(opts.provisioned)) {
+    const link = gcRootLink(opts.rootsDir, opts.projectKey, root.kind);
+    const result = opts.run(addRootArgs(root.path, link));
+    if (result.status === 0) {
+      links.push(link);
+      opts.logger.debug({ kind: root.kind, storePath: root.path, link }, "rooted store path");
+    } else {
+      opts.logger.warn({ kind: root.kind, storePath: root.path, stderr: result.stderr.trim() }, "could not root store path");
+    }
+  }
+  return links;
 }
-
-/** The persistent recency-root directory, a sibling of the scoped roots (ADR 0007). */
-export function defaultRecencyRootsDir(): string {
-  return join(homedir(), ".dustcastle", "recency-roots");
-}
-
-

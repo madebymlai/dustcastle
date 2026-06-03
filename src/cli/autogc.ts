@@ -5,7 +5,6 @@ import { noopLogger, type Logger } from "../log/index.js";
 import { autoGc, type AutoGcOptions } from "../store/autogc.js";
 import { diskSpace, measureStoreBytes } from "../store/ceiling.js";
 import { defaultDepsCacheDir } from "../store/depscache/index.js";
-import { defaultRecencyRootsDir } from "../store/gc.js";
 import { nixPortableRunner } from "../store/nix.js";
 
 /**
@@ -27,7 +26,7 @@ export async function runAutoGcCommand(
       measure: opts.measure ?? (() => measureStoreBytes(run)),
       disk: opts.disk ?? (() => diskSpace(diskProbePath())),
       dir: opts.dir ?? DUSTCASTLE_HOME,
-      recencyRootsDir: opts.recencyRootsDir ?? defaultRecencyRootsDir(),
+      ...(opts.recencyRootsDir !== undefined ? { recencyRootsDir: opts.recencyRootsDir } : {}),
       depsCacheDir: opts.depsCacheDir ?? defaultDepsCacheDir(),
       now: opts.now ?? (() => Date.now()),
       logger,
