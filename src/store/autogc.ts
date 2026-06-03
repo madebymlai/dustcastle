@@ -54,7 +54,7 @@ export interface AutoGcOptions {
   readonly disk: () => { readonly free: number; readonly total: number };
   /** The dustcastle home (holds `recency.json`, `gc.lock`, `gc.log`). */
   readonly dir: string;
-  /** Where the persistent recency roots live (pruned to the warm budget before collecting). Defaults in storePool. */
+  /** Where the persistent recency roots live (pruned to the warm budget before collecting). Defaults to `~/.dustcastle/recency-roots` inside `storePool`. */
   readonly recencyRootsDir?: string;
   /**
    * The deps-cache root (ADR 0012): the second managed pool, swept by the SAME brain as

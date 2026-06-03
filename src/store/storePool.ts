@@ -45,8 +45,9 @@ export interface StorePoolOptions {
   readonly recencyRootsDir?: string;
   /**
    * Where the scoped (per-run) root symlinks live — pinned, released on completion.
-   * Optional: the detached sweep never pins (a live run does, via its own pool), so
-   * the sweep constructs the pool without it and `pin` becomes a no-op.
+   * Defaults to `~/.dustcastle/gcroots`. The detached sweep is still safe: `pin` only
+   * registers when a `closures` entry exists for the key, and a sweep supplies none,
+   * so `pin` is a no-op.
    */
   readonly gcrootsDir?: string;
   /**
