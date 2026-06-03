@@ -5,7 +5,12 @@ import * as sandcastle from "@ai-hero/sandcastle";
 import { orchestrationPromptPath, type PromptPhase } from "../agent/prompts.js";
 import { buildPiAgent, loadModelSelection } from "../config/global.js";
 import { noopLogger, type Logger } from "../log/index.js";
-import { ensureBeads, realBeadsPreflightDeps, type BeadsPreflightDeps } from "./beads.js";
+import {
+  closeEligibleEpics,
+  ensureBeads,
+  realBeadsPreflightDeps,
+  type BeadsPreflightDeps,
+} from "./beads.js";
 import {
   withProvisionedSandbox,
   type ProvisionedSandbox,
@@ -156,6 +161,7 @@ export interface OrchestrateDeps {
   ): Promise<T>;
   run(args: Record<string, unknown>): Promise<PlannerResult>;
   createSandbox(args: Record<string, unknown>): Promise<IssueSandbox>;
+  closeEligibleEpics(cwd: string): { closed: string[]; count: number };
 }
 
 const liveOrchestrateDeps: OrchestrateDeps = {
@@ -165,6 +171,7 @@ const liveOrchestrateDeps: OrchestrateDeps = {
   withProvisionedSandbox,
   run: sandcastle.run as unknown as OrchestrateDeps["run"],
   createSandbox: sandcastle.createSandbox as unknown as OrchestrateDeps["createSandbox"],
+  closeEligibleEpics,
 };
 
 /**
@@ -218,6 +225,20 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
       // run() overload (it widens to any).
       const issues: PlannedIssue[] = planned.output.issues;
       if (issues.length === 0) {
+        // Reap epics whose children are all done before going idle — they are
+        // containers the planner never picks up, so nothing else would close
+        // them. A reap hiccup must not fail an otherwise-finished run, so warn
+        // and leave them for the next run rather than throwing.
+        try {
+          const { closed, count } = deps.closeEligibleEpics(opts.cwd);
+          logger.info({ event: "epic_close_eligible", closed, count }, "reaped finished epics");
+        } catch (error) {
+          const err = error instanceof Error ? error.message : String(error);
+          logger.warn(
+            { event: "epic_reap_failed", err },
+            "epic reap failed; leaving epics for the next run",
+          );
+        }
         logger.info({ event: "idle", loop, maxLoops }, "nothing left to do");
         return;
       }

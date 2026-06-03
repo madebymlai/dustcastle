@@ -154,6 +154,107 @@ describe("orchestrate logging", () => {
       },
     ]);
   });
+
+  it("reaps close-eligible epics, logging the reap before declaring idle", async () => {
+    const root = createMemoryLogger();
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      run: async () => ({ output: { issues: [] } }),
+      closeEligibleEpics: () => ({ closed: ["dustcastle-9lx"], count: 1 }),
+    };
+
+    await orchestrate({
+      cwd: "/repo",
+      maxLoops: 1,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: root.child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    expect(root.records).toEqual([
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
+        msg: "planning",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: {
+          mod: "orchestrate",
+          event: "epic_close_eligible",
+          closed: ["dustcastle-9lx"],
+          count: 1,
+        },
+        msg: "reaped finished epics",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "idle", loop: 1, maxLoops: 1 },
+        msg: "nothing left to do",
+        args: [],
+      },
+    ]);
+  });
+
+  it("warns and still declares idle when the reap fails (a reap hiccup never fails a finished run)", async () => {
+    const root = createMemoryLogger();
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      run: async () => ({ output: { issues: [] } }),
+      closeEligibleEpics: () => {
+        throw new Error("bd exited 1");
+      },
+    };
+
+    await expect(
+      orchestrate({
+        cwd: "/repo",
+        maxLoops: 1,
+        beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+        logger: root.child({ mod: "orchestrate" }),
+        deps,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(root.records).toEqual([
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
+        msg: "planning",
+        args: [],
+      },
+      {
+        level: "warn",
+        fields: { mod: "orchestrate", event: "epic_reap_failed", err: "bd exited 1" },
+        msg: "epic reap failed; leaving epics for the next run",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "idle", loop: 1, maxLoops: 1 },
+        msg: "nothing left to do",
+        args: [],
+      },
+    ]);
+  });
 });
 
 describe("completedFrom", () => {
