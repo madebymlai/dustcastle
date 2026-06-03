@@ -74,17 +74,21 @@ export interface PreparedRun {
   readonly plan: SandboxPlan;
 }
 
-function assertNonEmpty<T>(items: readonly T[], message: string): asserts items is readonly [T, ...T[]] {
+type NonEmptyArray<T> = readonly [T, ...T[]];
+
+function assertNonEmpty<T>(items: readonly T[], message: string): asserts items is NonEmptyArray<T> {
   if (items.length === 0) throw new Error(message);
 }
 
 async function mapNonEmptySequential<T, U>(
-  items: readonly [T, ...T[]],
+  items: NonEmptyArray<T>,
   map: (item: T) => Promise<U>,
-): Promise<readonly [U, ...U[]]> {
-  const mapped: U[] = [];
-  for (const item of items) mapped.push(await map(item));
-  return mapped as unknown as readonly [U, ...U[]];
+): Promise<NonEmptyArray<U>> {
+  const [first, ...rest] = items;
+  const mappedFirst = await map(first);
+  const mappedRest: U[] = [];
+  for (const item of rest) mappedRest.push(await map(item));
+  return [mappedFirst, ...mappedRest];
 }
 
 /**
@@ -96,9 +100,8 @@ async function mapNonEmptySequential<T, U>(
  * here is dustcastle's own work — before sandcastle's flow begins.
  */
 export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
-  const resolved = detect(opts.cwd);
-  assertNonEmpty(resolved, `no supported ecosystem detected in ${opts.cwd}`);
-  const detections = resolved;
+  const detections = detect(opts.cwd);
+  assertNonEmpty(detections, `no supported ecosystem detected in ${opts.cwd}`);
 
   // Derive the standing egress decision (ADR 0005/0010/0012) BEFORE provisioning —
   // it needs only detection, not the realized Store — so the enforcing proxy can be
@@ -107,7 +110,7 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   // polyglot repo opens both), with the agent's model host alongside.
   const remoteHost = gitRemoteHost(opts.cwd);
   const egress: EgressDecision = deriveEgress({
-    packageManagers: resolved.map((d) => d.packageManager),
+    packageManagers: detections.map((d) => d.packageManager),
     // Open the hosts of any git-sourced deps (ADR 0012, dustcastle-61j): scanned from the
     // detected managers' declared source files under cwd (manifests ∪ lockfiles).
     projectDir: opts.cwd,

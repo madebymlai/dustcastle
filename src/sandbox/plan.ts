@@ -108,6 +108,7 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   // restores its deps from the cache (hit) or installs them in-Sandbox (miss /
   // uncacheable).
   const ecosystems = spec.ecosystems;
+  const primaryEcosystem = ecosystems[0];
   const cacheDir = spec.cacheDir;
   const egress =
     spec.egress ?? deriveEgress({ packageManagers: ecosystems.map((e) => e.detection.packageManager) });
@@ -122,7 +123,7 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     mounts: [
       // THE SEAM: the shared Store, read-only, at its canonical path. Every
       // Ecosystem's Toolchain lives in this one content-addressed Store.
-      { hostPath: ecosystems[0].provisioned.physStoreRoot, sandboxPath: "/nix/store", readonly: true },
+      { hostPath: primaryEcosystem.provisioned.physStoreRoot, sandboxPath: "/nix/store", readonly: true },
     ],
     env: {
       // Merge each Ecosystem's run env (PATH + cache vars). A polyglot repo puts
