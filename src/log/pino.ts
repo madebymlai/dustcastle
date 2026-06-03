@@ -1,4 +1,5 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import pino from "pino";
 import type { Logger } from "./index.js";
@@ -10,7 +11,7 @@ export type StderrLogSetting = (typeof STDERR_LOG_SETTINGS)[number];
 export type TargetLevel = "trace" | StderrLogSetting;
 
 export interface LoggerTransportTarget extends pino.TransportTargetOptions<Record<string, unknown>> {
-  readonly target: "pino-pretty" | "pino/file";
+  readonly target: string;
   readonly level: TargetLevel;
   readonly options: Record<string, unknown>;
 }
@@ -49,12 +50,12 @@ export function loggerConfig(opts: CreateLoggerOptions): LoggerConfig {
     transport: {
       targets: [
         {
-          target: "pino-pretty",
+          target: prettyTransportTarget(),
           level: stderrLevel,
           options: {
             destination: 2,
             colorize: false,
-            translateTime: "SYS:standard",
+            include: "msg",
           },
         },
         {
@@ -75,6 +76,12 @@ export function stderrLogSetting(value: string | undefined): StderrLogSetting {
 
 function isStderrLogSetting(value: string): value is StderrLogSetting {
   return (STDERR_LOG_SETTINGS as readonly string[]).includes(value);
+}
+
+function prettyTransportTarget(): string {
+  const js = fileURLToPath(new URL("./pretty-transport.js", import.meta.url));
+  if (existsSync(js)) return js;
+  return fileURLToPath(new URL("./pretty-transport.ts", import.meta.url));
 }
 
 function runLogDirectory(homeDir: string): string {
