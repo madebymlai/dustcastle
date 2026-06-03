@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { noopLogger, type Logger } from "../log/index.js";
 import { overCeiling, type CeilingReason } from "./ceiling.js";
-import { ensureNixPortable } from "./index.js";
+import { ensureNixPortableSync } from "./index.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
 
 /**
@@ -317,7 +317,7 @@ export function defaultRecencyRootsDir(): string {
 
 /** A real nix-portable runner: same spawn shape as `runNixBuild` (NP_RUNTIME env). */
 export function nixPortableRunner(): NixRunner {
-  const nixPortable = ensureNixPortable();
+  const nixPortable = ensureNixPortableSync();
   const mode: RuntimeMode = chooseRuntimeMode({ unprivilegedUserns: unprivilegedUsernsAvailable() });
   return (args: readonly string[]): NixResult => {
     const r = spawnSync(nixPortable, [...args], {
