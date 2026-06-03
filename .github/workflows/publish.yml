@@ -60,12 +60,25 @@ jobs:
         if: steps.check.outputs.publish == 'true'
         run: npm publish --access public
 
+      # Tag + release are made idempotent: a tag that already exists on the
+      # remote (e.g. pushed manually before the bump landed) must not abort the
+      # job, because npm publish has already happened by this point. Skip the
+      # push when the tag is already on origin, and only cut the release when one
+      # doesn't exist yet for this tag.
       - name: Tag and create GitHub release
         if: steps.check.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="v${{ steps.pkg.outputs.version }}"
-          git tag "$tag"
-          git push origin "$tag"
-          gh release create "$tag" --title "$tag" --generate-notes
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists on origin — skipping tag push."
+          else
+            git tag "$tag"
+            git push origin "$tag"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — nothing to do."
+          else
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
