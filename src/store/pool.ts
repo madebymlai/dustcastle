@@ -1,5 +1,5 @@
 import { recencyTailKeys } from "./gc.js";
-import type { GcReport, OptimiseReport } from "./nix.js";
+import type { OptimiseReport } from "./nix.js";
 
 /**
  * The reusable GC pool interface (ADR 0012). dustcastle's GC is already a pure
@@ -121,5 +121,5 @@ export function collectPools(pools: readonly Pool[], opts: CollectPoolOptions): 
   return optimise !== undefined ? { entriesEvicted, bytesFreed, optimise } : { entriesEvicted, bytesFreed };
 }
 
-/** Re-exported so pool implementations share the surfaced report shapes from one place. */
-export type { GcReport, OptimiseReport };
+/** Re-exported so consumers referencing the pool interface also get its optimise report shape. */
+export type { OptimiseReport };
