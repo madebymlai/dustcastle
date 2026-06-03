@@ -3,12 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  gcQueryArgs,
-  nixPortableRunner,
-  registerRecencyRoot,
-  registerScopedRoots,
-} from "../../src/store/gc.js";
+import { gcQueryArgs, nixPortableRunner } from "../../src/store/nix.js";
+import { registerRecencyRoot, registerScopedRoots } from "../../src/store/gcRoots.js";
 import { autoGc } from "../../src/store/autogc.js";
 import { collectPool } from "../../src/store/pool.js";
 import { storePool } from "../../src/store/storePool.js";

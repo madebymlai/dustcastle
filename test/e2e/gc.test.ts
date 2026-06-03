@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { detect } from "../../src/detect/index.js";
-import { gcQueryArgs, nixPortableRunner, registerScopedRoots } from "../../src/store/gc.js";
+import { gcQueryArgs, nixPortableRunner } from "../../src/store/nix.js";
+import { registerScopedRoots } from "../../src/store/gcRoots.js";
 import { provisionStore } from "../../src/store/index.js";
 import { stageNodeProject } from "./fixture.js";
 

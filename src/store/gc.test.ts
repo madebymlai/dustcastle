@@ -8,7 +8,7 @@ import {
   registerRecencyRoot,
   registerScopedRoots,
   rootStorePaths,
-} from "./gc.js";
+} from "./gcRoots.js";
 import type { NixResult } from "./nix.js";
 
 // Store lifecycle (ADR 0007). The shared rootless /nix/store grows unbounded; 3b

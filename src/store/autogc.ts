@@ -54,8 +54,8 @@ export interface AutoGcOptions {
   readonly disk: () => { readonly free: number; readonly total: number };
   /** The dustcastle home (holds `recency.json`, `gc.lock`, `gc.log`). */
   readonly dir: string;
-  /** Where the persistent recency roots live (pruned to the warm budget before collecting). */
-  readonly recencyRootsDir: string;
+  /** Where the persistent recency roots live (pruned to the warm budget before collecting). Defaults to `~/.dustcastle/recency-roots` inside `storePool`. */
+  readonly recencyRootsDir?: string;
   /**
    * The deps-cache root (ADR 0012): the second managed pool, swept by the SAME brain as
    * the Store. The cache shares the disk, so its bytes count toward the ceiling, and its
@@ -125,7 +125,7 @@ function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
   // its mechanism (optimise / prune cold roots + `nix-store --gc`) lives in `storePool`.
   // The cache shares the disk, so its bytes count toward the cap and its cold tail is
   // evicted alongside the Store. Absent ⇒ the Store is the sole pool, as before.
-  const store = storePool({ run: opts.run, dir: opts.dir, recencyRootsDir: opts.recencyRootsDir, logger });
+  const store = storePool({ run: opts.run, dir: opts.dir, ...(opts.recencyRootsDir !== undefined ? { recencyRootsDir: opts.recencyRootsDir } : {}), logger });
   const cache = opts.depsCacheDir !== undefined ? depsCachePool({ cacheDir: opts.depsCacheDir, logger }) : undefined;
   const cacheBytes = (): number => cache?.measure() ?? 0;
 

@@ -8,12 +8,9 @@ import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/pl
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore, storeHashOf, type Provisioned } from "../store/index.js";
 import { nixPortableRunner, type NixRunner } from "../store/nix.js";
-import {
-  defaultGcRootsDir,
-  defaultRecencyRootsDir,
-  registerRecencyRoot,
-  registerScopedRoots,
-} from "../store/gc.js";
+import { registerRecencyRoot, registerScopedRoots } from "../store/gcRoots.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { closureSizeBytes } from "../store/ceiling.js";
 import { upsertRecency } from "../store/recency.js";
 import {
@@ -366,7 +363,7 @@ export async function withProvisionedSandbox<T>(
     // are released on completion (below), scoping them to the active run.
     roots = registerScopedRoots({
       provisioned: prepared.provisioned,
-      gcrootsDir: opts.gcRoots?.gcrootsDir ?? defaultGcRootsDir(),
+      gcrootsDir: opts.gcRoots?.gcrootsDir ?? join(homedir(), ".dustcastle", "gcroots"),
       projectKey: gcProjectKey(prepared),
       ...(opts.gcRoots?.run !== undefined ? { run: opts.gcRoots.run } : {}),
       logger: gcLogger,
@@ -445,7 +442,7 @@ function updateRecency(opts: ProvisionOptions, prepared: PreparedRun): void {
   const gcLogger = subsystemLogger(opts.logger, "gc");
   try {
     const dir = opts.autoGc?.recencyDir ?? DUSTCASTLE_HOME;
-    const recencyRootsDir = opts.autoGc?.recencyRootsDir ?? defaultRecencyRootsDir();
+    const recencyRootsDir = opts.autoGc?.recencyRootsDir ?? join(homedir(), ".dustcastle", "recency-roots");
     const runner = opts.autoGc?.run ?? opts.gcRoots?.run ?? nixPortableRunner();
     const projectKey = gcProjectKey(prepared);
     const closurePath = prepared.provisioned.toolchainStorePath;

@@ -1,4 +1,4 @@
-import type { GcReport, OptimiseReport } from "./nix.js";
+import type { OptimiseReport } from "./nix.js";
 
 /**
  * The reusable GC pool interface (ADR 0012). dustcastle's GC is already a pure

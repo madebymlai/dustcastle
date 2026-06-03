@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
 import { autoGc, readLastSweepLine } from "./autogc.js";
-import { gcRootLink } from "./gc.js";
+import { gcRootLink } from "./gcRoots.js";
 import type { NixResult } from "./nix.js";
 import { upsertRecency } from "./recency.js";
 
