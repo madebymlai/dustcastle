@@ -127,6 +127,26 @@ export function completedFrom(
 /** agentstack's MAX_ITERATIONS: plan→execute→merge cycles before stopping. */
 const DEFAULT_MAX_LOOPS = 10;
 
+/**
+ * A non-deterministic planner occasionally emits a malformed `<plan>` that sandcastle
+ * rejects with {@link sandcastle.StructuredOutputError} (missing tag / bad JSON / wrong
+ * shape). That single bad generation must NOT kill a multi-loop run, so the planner
+ * phase is attempted this many times — recovering between attempts by resuming that same
+ * agent session with corrective feedback (sandcastle's documented recovery kit). A
+ * resumed attempt is re-validated against the schema, so this re-asks for a WELL-FORMED
+ * plan; it never accepts a malformed one.
+ */
+export const PLANNER_ATTEMPTS = 3;
+
+/**
+ * The Merger is a single-shot LLM agent prompted to merge the completed branches and
+ * close their issues; nothing guarantees it did either. Each merge is verified against
+ * the target ({@link branchAheadOf}) and re-attempted this many times before the run gives
+ * up on it — a silent no-op (logging "merging branches" while `main` never advances) must
+ * never pass for success.
+ */
+export const MERGE_ATTEMPTS = 3;
+
 export interface OrchestrateOptions extends ProvisionOptions {
   /** Max plan→execute→merge cycles (default 10). */
   readonly maxLoops?: number;
@@ -216,15 +236,31 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
 
     for (let loop = 1; loop <= maxLoops; loop++) {
       logger.info({ event: "planning", loop, maxLoops }, "planning");
-      const planned = await deps.run({
-        sandbox: provider,
-        agent,
-        name: "Planner",
-        promptFile: orchestrationPromptPath("plan"),
-        maxIterations: phaseConfig("plan").maxIterations,
-        output: planOutput,
-        hooks,
-      });
+      const planned = await runPlannerWithRecovery(
+        deps.run,
+        {
+          sandbox: provider,
+          agent,
+          name: "Planner",
+          promptFile: orchestrationPromptPath("plan"),
+          maxIterations: phaseConfig("plan").maxIterations,
+          output: planOutput,
+          hooks,
+        },
+        logger,
+        loop,
+      );
+      if (planned === undefined) {
+        // Every attempt this loop produced an unparseable <plan>. Stop the run rather
+        // than crash — prior loops' merges already persist — and WITHOUT reaping epics:
+        // a malformed plan is not evidence the remaining work is finished. The next
+        // `dustcastle run` re-plans from current beads state.
+        logger.error(
+          { event: "planner_failed", loop, attempts: PLANNER_ATTEMPTS },
+          "planner produced no parseable <plan>; stopping",
+        );
+        return;
+      }
 
       // sandcastle has already validated output against planSchema at runtime;
       // annotate the boundary because zod's inferred type doesn't flow through the
@@ -275,23 +311,22 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
       if (completed.length === 0) {
         logger.info(
           { event: "skip_merge", loop, completedCount: 0 },
-          "no branch produced commits; skipping merge",
+          "no branch ahead of target; skipping merge",
         );
         continue;
       }
 
-      logger.info(
-        { event: "merge", loop, completedCount: completed.length },
-        "merging branches",
-      );
-      await deps.run({
-        sandbox: provider,
+      await mergeCompleted({
+        run: deps.run,
+        branchAheadOf: deps.branchAheadOf,
+        provider,
         agent,
-        name: "Merger",
-        promptFile: orchestrationPromptPath("merge"),
-        promptArgs: mergeArgs(completed),
-        maxIterations: phaseConfig("merge").maxIterations,
         hooks,
+        cwd: opts.cwd,
+        targetBranch,
+        completed,
+        logger,
+        loop,
       });
     }
   });
@@ -353,6 +388,155 @@ async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
     return { issue };
   } finally {
     await sandbox.close();
+  }
+}
+
+/**
+ * Run the planner, recovering from a rejected `<plan>` by resuming that same agent
+ * session with corrective feedback — sandcastle ships {@link sandcastle.StructuredOutputError}
+ * with `sessionId` precisely so the caller can ask the agent to re-emit valid output
+ * without losing its planning context. Bounded to {@link PLANNER_ATTEMPTS}; every attempt
+ * keeps the structured-output definition, so a resumed plan is re-validated (this re-asks
+ * for a well-formed plan, it never accepts a malformed one). Returns undefined when no
+ * attempt yielded a parseable plan, so the caller can stop the run gracefully instead of
+ * crashing. A non-parse error from the FIRST (normal) planner call is the run's normal
+ * error path and propagates unchanged; a non-parse error raised while RESUMING (e.g.
+ * sandcastle's resume precheck when the session was never captured to host) means recovery
+ * itself is unavailable, so we stop gracefully rather than let it crash the run.
+ */
+async function runPlannerWithRecovery(
+  run: OrchestrateDeps["run"],
+  plannerArgs: Record<string, unknown>,
+  logger: Logger,
+  loop: number,
+): Promise<PlannerResult | undefined> {
+  let args = plannerArgs;
+  let resuming = false; // true once we are re-running via session resume (recovery)
+  for (let attempt = 1; attempt <= PLANNER_ATTEMPTS; attempt++) {
+    try {
+      return await run(args);
+    } catch (error) {
+      if (!(error instanceof sandcastle.StructuredOutputError)) {
+        // A non-parse failure on the FIRST (normal) planner call is the run's normal
+        // error path — propagate it. The same WHILE RESUMING means our own recovery
+        // could not run (e.g. sandcastle's resume precheck threw because the session was
+        // never captured to host); that must never crash a run a malformed plan should
+        // merely have paused, so stop gracefully instead.
+        if (!resuming) throw error;
+        logger.warn(
+          {
+            event: "planner_resume_failed",
+            loop,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          "could not resume the planner session to recover; stopping",
+        );
+        return undefined;
+      }
+      logger.warn(
+        {
+          event: "planner_parse_failed",
+          loop,
+          attempt,
+          maxAttempts: PLANNER_ATTEMPTS,
+          err: error.message,
+        },
+        "planner emitted an unparseable <plan>",
+      );
+      // Recover only by resuming the rejected session with feedback. Without a captured
+      // session there is nothing to resume, so stop rather than blindly re-plan.
+      if (error.sessionId === undefined || attempt === PLANNER_ATTEMPTS) return undefined;
+      // `prompt` and `promptFile` are mutually exclusive — swap the file out for the
+      // inline corrective prompt and resume that session.
+      const { promptFile: _promptFile, ...rest } = args;
+      args = { ...rest, resumeSession: error.sessionId, prompt: plannerFeedback(error) };
+      resuming = true;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The corrective prompt for a planner session resume: states exactly why the previous
+ * structured output was rejected (and what it contained) and asks for a clean re-emit.
+ * The literal `<tag>` must appear because sandcastle re-validates that a resumed prompt
+ * names the structured-output tag when `output` is set (see RunOptions.output).
+ */
+function plannerFeedback(error: sandcastle.StructuredOutputError): string {
+  const cause =
+    error.rawMatched !== undefined
+      ? `${error.message}. Your previous output contained:\n\n${error.rawMatched}`
+      : error.message;
+  return (
+    `That response was rejected: ${cause}\n\n` +
+    `Re-emit your answer as a single <${error.tag}>…</${error.tag}> block whose contents ` +
+    `are valid JSON matching the required schema, and output nothing else.`
+  );
+}
+
+interface MergePhaseArgs {
+  readonly run: OrchestrateDeps["run"];
+  readonly branchAheadOf: OrchestrateDeps["branchAheadOf"];
+  readonly provider: ProvisionedSandbox["provider"];
+  readonly agent: sandcastle.AgentProvider;
+  readonly hooks: NonNullable<SandcastleHandoff["hooks"]>;
+  readonly cwd: string;
+  readonly targetBranch: string;
+  readonly completed: readonly PlannedIssue[];
+  readonly logger: Logger;
+  readonly loop: number;
+}
+
+/**
+ * Merge the completed branches and VERIFY each one actually landed, instead of trusting
+ * the single-shot Merger agent. The Merger can fail, partially complete, or be interrupted
+ * after the loop has already announced "merging branches"; a branch still ahead of the
+ * target afterwards did not merge. Unlanded branches are re-merged, bounded to
+ * {@link MERGE_ATTEMPTS}; any that never land are surfaced at error level — never a silent
+ * no-op (the original bug). They also stay ahead of the target, so the merge gate
+ * re-merges them on a later loop/run: the failure is scoped to this cycle, not the run.
+ */
+async function mergeCompleted(args: MergePhaseArgs): Promise<void> {
+  const { run, branchAheadOf, provider, agent, hooks, cwd, targetBranch, logger, loop } =
+    args;
+  logger.info(
+    { event: "merge", loop, completedCount: args.completed.length },
+    "merging branches",
+  );
+  let toMerge: readonly PlannedIssue[] = args.completed;
+  for (let attempt = 1; attempt <= MERGE_ATTEMPTS; attempt++) {
+    await run({
+      sandbox: provider,
+      agent,
+      name: "Merger",
+      promptFile: orchestrationPromptPath("merge"),
+      promptArgs: mergeArgs(toMerge),
+      maxIterations: phaseConfig("merge").maxIterations,
+      hooks,
+    });
+    // The merge-eligibility signal, reused as the merge-landed signal: a branch still
+    // ahead of the target after the Merger ran did not actually merge.
+    const unlanded = toMerge.filter((issue) =>
+      branchAheadOf(cwd, targetBranch, issue.branch),
+    );
+    if (unlanded.length === 0) return;
+    if (attempt < MERGE_ATTEMPTS) {
+      logger.warn(
+        { event: "merge_retry", loop, attempt, maxAttempts: MERGE_ATTEMPTS, unlanded: unlanded.length },
+        "merge did not land; retrying the unlanded branches",
+      );
+    } else {
+      logger.error(
+        {
+          event: "merge_unlanded",
+          loop,
+          attempts: MERGE_ATTEMPTS,
+          branches: unlanded.map((i) => i.branch).join(", "),
+        },
+        "merge did not land after retries; branches still ahead of target (a later loop will retry)",
+      );
+    }
+    toMerge = unlanded;
   }
 }
 
