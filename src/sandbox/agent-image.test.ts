@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { AGENT_SPEC, ensureImage, type PodmanRunner } from "./image.js";
+import { AGENT_SPEC, ensureImage, imageRef, type PodmanRunner } from "./image.js";
 
 // The agent image is a dustcastle-owned artifact (like nix-portable): built once
 // from the shipped Containerfile, then consumed by sandcastle's podman provider by
@@ -18,15 +18,16 @@ describe("the dustcastle-owned agent image (AGENT_SPEC)", () => {
     expect(existsSync(AGENT_SPEC.containerfile)).toBe(true);
   });
 
-  it("builds the agent image through ensureImage from that spec", () => {
+  it("builds the agent image through ensureImage under its version-derived tag", () => {
     let args: readonly string[] | undefined;
     const run: PodmanRunner = (a) => {
       args = a;
       return { status: 0, stderr: "" };
     };
-    const image = ensureImage(AGENT_SPEC, { exists: () => false, run });
-    expect(image).toBe(AGENT_SPEC.tag);
-    expect(args?.slice(0, 3)).toEqual(["build", "-t", AGENT_SPEC.tag]);
+    const ref = imageRef(AGENT_SPEC, "1.0.0");
+    const image = ensureImage(AGENT_SPEC, { version: "1.0.0", exists: () => false, run });
+    expect(image).toBe(ref);
+    expect(args?.slice(0, 3)).toEqual(["build", "-t", ref]);
     expect(args?.some((a) => a.endsWith("agent.Containerfile"))).toBe(true);
   });
 

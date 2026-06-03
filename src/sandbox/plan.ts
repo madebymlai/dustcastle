@@ -1,5 +1,5 @@
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
-import { AGENT_SPEC } from "./image.js";
+import { AGENT_SPEC, imageRef } from "./image.js";
 import type { Detection } from "../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../ecosystems/index.js";
 import { restoreCommand, type DepsCacheDecision, type DepsCachePopulate } from "../store/depscache/index.js";
@@ -101,7 +101,9 @@ export interface SandboxPlan {
  * sandcastle's `git config --global` step can't run in it — hence dustcastle owns
  * this image the way it owns nix-portable.
  */
-const DEFAULT_IMAGE = AGENT_SPEC.tag;
+// The SAME content-busting ref ensureImage(AGENT_SPEC) builds — derived through the
+// one imageRef so the run site can never address a tag the build site didn't produce.
+const DEFAULT_IMAGE = imageRef(AGENT_SPEC);
 
 /**
  * Plan the Sandbox for a provisioned project (ADR 0002): bind-mount the Store

@@ -25,7 +25,7 @@ import {
   proxyResolvConf,
 } from "./confine.js";
 import { egressHosts, type EgressDecision } from "./egress.js";
-import { PROXY_SPEC } from "./image.js";
+import { imageRef, PROXY_SPEC } from "./image.js";
 
 /** The minimal result of a podman invocation the orchestration reasons about. */
 export interface PodmanResult {
@@ -43,7 +43,7 @@ export type PodmanRunner = (args: readonly string[]) => PodmanResult;
  * node:20-alpine: that image has no `/opt/dustcastle/proxy-main.js`, so the proxy
  * container crashed on start and the allowlist was enforced over a dead proxy.
  */
-const DEFAULT_PROXY_IMAGE = PROXY_SPEC.tag;
+const DEFAULT_PROXY_IMAGE = imageRef(PROXY_SPEC);
 /** The external (internet-facing) network the proxy is also homed on. */
 const DEFAULT_EXTERNAL_NETWORK = "podman";
 

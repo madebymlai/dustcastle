@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { PROXY_SPEC, ensureImage, type PodmanRunner } from "./image.js";
+import { PROXY_SPEC, ensureImage, imageRef, type PodmanRunner } from "./image.js";
 
 // The egress-proxy image is a dustcastle-owned artifact (like the agent image):
 // built once from the shipped Containerfile, then run by ensureEgress by name. The
@@ -20,15 +20,16 @@ describe("the dustcastle-owned egress-proxy image (PROXY_SPEC)", () => {
     expect(existsSync(PROXY_SPEC.containerfile)).toBe(true);
   });
 
-  it("builds the proxy image through ensureImage from that spec", () => {
+  it("builds the proxy image through ensureImage under its version-derived tag", () => {
     let args: readonly string[] | undefined;
     const run: PodmanRunner = (a) => {
       args = a;
       return { status: 0, stderr: "" };
     };
-    const image = ensureImage(PROXY_SPEC, { exists: () => false, run });
-    expect(image).toBe(PROXY_SPEC.tag);
-    expect(args?.slice(0, 3)).toEqual(["build", "-t", PROXY_SPEC.tag]);
+    const ref = imageRef(PROXY_SPEC, "1.0.0");
+    const image = ensureImage(PROXY_SPEC, { version: "1.0.0", exists: () => false, run });
+    expect(image).toBe(ref);
+    expect(args?.slice(0, 3)).toEqual(["build", "-t", ref]);
     expect(args?.some((a) => a.endsWith("proxy.Containerfile"))).toBe(true);
   });
 

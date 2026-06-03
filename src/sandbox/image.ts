@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { noopLogger, type Logger } from "../log/index.js";
+import { dustcastleVersion } from "../version.js";
 
 /**
  * dustcastle owns its sandbox IMAGES the way it owns nix-portable: built-once,
@@ -31,7 +32,13 @@ export type PodmanRunner = (args: readonly string[]) => PodmanBuildResult;
  * podman image from another. Adding an image is adding one of these, not a module.
  */
 export interface ImageSpec {
-  /** The image tag (local; never pushed to a registry). */
+  /**
+   * The STABLE tag prefix (local; never pushed to a registry). The image is built
+   * and run under {@link imageRef}, which appends the dustcastle version so the tag
+   * busts when a release changes what the image bakes — `podman image exists` is
+   * content-agnostic, so without this a proxy/agent change ships inside a release
+   * but the cached image with the old tag is never rebuilt (dustcastle-q9u).
+   */
   readonly tag: string;
   /** Path to the shipped Containerfile (resolved beside this module). */
   readonly containerfile: string;
@@ -48,6 +55,8 @@ export interface EnsureImageOptions {
   readonly run?: PodmanRunner;
   /** Inject the "image already built?" check (tests); defaults to `podman image exists`. */
   readonly exists?: (image: string) => boolean;
+  /** Override the version folded into the derived tag (tests); defaults to the running version. */
+  readonly version?: string;
   /** Structured logs for image build progress and podman stderr. */
   readonly logger?: Logger;
 }
@@ -77,6 +86,20 @@ export const PROXY_SPEC: ImageSpec = {
   label: "proxy image",
 };
 
+/**
+ * The content-busting image reference: the spec's stable tag prefix with the
+ * dustcastle version appended (e.g. `…egress-proxy:node20-0.3.0`). Because the build
+ * (`ensureImage`) and the run sites (plan's DEFAULT_IMAGE, egress-runtime's
+ * DEFAULT_PROXY_IMAGE) all derive the ref through THIS one function, a release that
+ * changes what an image bakes ships a new tag that `podman image exists` misses,
+ * forcing a rebuild — and build/run can never disagree on the tag (dustcastle-q9u).
+ * Version, not a content hash: the agent image installs bd/pi via unpinned network
+ * fetches a local-file hash can't observe, so a per-release bump is the honest signal.
+ */
+export function imageRef(spec: ImageSpec, version: string = dustcastleVersion()): string {
+  return `${spec.tag}-${version}`;
+}
+
 /** The `podman build` args for an image (build context = the Containerfile's dir). */
 export function buildArgs(image: string, containerfile: string): string[] {
   return ["build", "-t", image, "-f", containerfile, dirname(containerfile)];
@@ -88,7 +111,7 @@ export function buildArgs(image: string, containerfile: string): string[] {
  * exists` hit). Returns the image tag for the consumer to run by name.
  */
 export function ensureImage(spec: ImageSpec, opts: EnsureImageOptions = {}): string {
-  const image = opts.imageName ?? spec.tag;
+  const image = opts.imageName ?? imageRef(spec, opts.version ?? dustcastleVersion());
   const exists = opts.exists ?? defaultImageExists;
   if (exists(image)) return image;
 
