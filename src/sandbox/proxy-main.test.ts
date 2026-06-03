@@ -1,7 +1,7 @@
 import { createServer, type AddressInfo, type Server, type Socket, connect as netConnect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
-import { main } from "./proxy-main.js";
+import { installShutdownHandlers, main } from "./proxy-main.js";
 import type { EgressProxyHandle } from "./proxy.js";
 
 const TEST_ENV = {
@@ -47,6 +47,30 @@ describe("proxy-main structured logging", () => {
       msg: "egress decision",
       args: [],
     });
+  });
+
+  // Regression (egress standup/teardown latency): the proxy is PID 1 in its
+  // container, which the kernel gives no default SIGTERM disposition — so without an
+  // explicit handler `podman stop`/`rm -f` blocks the full ~10s stop-timeout then
+  // SIGKILLs (exit 137). This locks in the handler that closes + exits on the signal.
+  // (PID-1 kernel semantics themselves are container-only; the live proof is the
+  // diagnose experiment, not this unit seam.)
+  it("installShutdownHandlers closes the proxy and exits 0 on SIGTERM/SIGINT", async () => {
+    let closed = false;
+    let exitCode: number | undefined;
+    const handlers = new Map<NodeJS.Signals, () => void>();
+    const fakeProxy = { port: 8118, close: async () => { closed = true; } } as EgressProxyHandle;
+
+    installShutdownHandlers(fakeProxy, createMemoryLogger(), {
+      on: (signal, handler) => handlers.set(signal, handler),
+      exit: (code) => { exitCode = code; },
+    });
+
+    expect([...handlers.keys()]).toEqual(["SIGTERM", "SIGINT"]);
+    handlers.get("SIGTERM")!(); // simulate the signal
+    await new Promise((resolve) => setImmediate(resolve)); // let close().then() settle
+    expect(closed).toBe(true);
+    expect(exitCode).toBe(0);
   });
 
   async function startTarget(): Promise<number> {
