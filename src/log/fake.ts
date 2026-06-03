@@ -13,13 +13,22 @@ export interface MemoryLogger extends Logger {
   readonly records: MemoryLogRecord[];
 }
 
-export function createMemoryLogger(bindings: LogFields = {}, records: MemoryLogRecord[] = []): MemoryLogger {
+export function createMemoryLogger(
+  bindings: LogFields = {},
+  records: MemoryLogRecord[] = [],
+): MemoryLogger {
   const emit = (level: MemoryLogLevel): LogMethod => {
-    return ((first?: string | LogFields, second?: string, ...args: unknown[]) => {
+    return ((first?: string | LogFields, second?: unknown, ...args: unknown[]) => {
       if (typeof first === "string") {
-        records.push({ level, fields: { ...bindings }, msg: first, args: [second, ...args].filter((v) => v !== undefined) });
+        records.push({
+          level,
+          fields: { ...bindings },
+          msg: first,
+          args: [second, ...args].filter((value) => value !== undefined),
+        });
         return;
       }
+
       records.push({
         level,
         fields: { ...bindings, ...(isFields(first) ? first : {}) },

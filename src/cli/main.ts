@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-import { configuredAgentModelHosts, loadModelSelection } from "../config/global.js";
+import { configuredAgentModelHosts, DUSTCASTLE_HOME, loadModelSelection } from "../config/global.js";
 import { createLogger } from "../log/pino.js";
 import { prepareRun, type PreparedRun } from "../run/index.js";
 import { orchestrate } from "../run/orchestrate.js";
-import { DUSTCASTLE_HOME } from "../config/global.js";
 import { readLastSweepLine } from "../store/autogc.js";
 import { join } from "node:path";
 import { runAutoGcCommand } from "./autogc.js";

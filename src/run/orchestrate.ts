@@ -146,9 +146,14 @@ interface IssueSandbox {
 
 export interface OrchestrateDeps {
   loadModelSelection(): ReturnType<typeof loadModelSelection>;
-  buildPiAgent(selection: NonNullable<ReturnType<typeof loadModelSelection>>): sandcastle.AgentProvider;
+  buildPiAgent(
+    selection: NonNullable<ReturnType<typeof loadModelSelection>>,
+  ): sandcastle.AgentProvider;
   currentGitBranch(cwd: string): string;
-  withProvisionedSandbox<T>(opts: ProvisionOptions, body: (sandbox: ProvisionedSandbox) => Promise<T>): Promise<T>;
+  withProvisionedSandbox<T>(
+    opts: ProvisionOptions,
+    body: (sandbox: ProvisionedSandbox) => Promise<T>,
+  ): Promise<T>;
   run(args: Record<string, unknown>): Promise<PlannerResult>;
   createSandbox(args: Record<string, unknown>): Promise<IssueSandbox>;
 }
@@ -187,7 +192,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   const agent = deps.buildPiAgent(selection);
   const targetBranch = opts.targetBranch ?? deps.currentGitBranch(opts.cwd);
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
-  const log = opts.logger ?? noopLogger;
+  const logger = opts.logger ?? noopLogger;
 
   // `.beads` + any agent-context docs the isolated worktrees must carry past the
   // git checkout (computed once from the host project root).
@@ -197,7 +202,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
     const hooks = withSetupHooks();
 
     for (let loop = 1; loop <= maxLoops; loop++) {
-      log.info({ event: "planning", loop, maxLoops }, "planning");
+      logger.info({ event: "planning", loop, maxLoops }, "planning");
       const planned = await deps.run({
         sandbox: provider,
         agent,
@@ -213,11 +218,11 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
       // run() overload (it widens to any).
       const issues: PlannedIssue[] = planned.output.issues;
       if (issues.length === 0) {
-        log.info({ event: "idle", loop, maxLoops }, "nothing left to do");
+        logger.info({ event: "idle", loop, maxLoops }, "nothing left to do");
         return;
       }
 
-      log.info(
+      logger.info(
         { event: "implement_review", loop, issueCount: issues.length },
         "implement + review",
       );
@@ -237,14 +242,14 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
 
       const completed = completedFrom(outcomes);
       if (completed.length === 0) {
-        log.info(
+        logger.info(
           { event: "skip_merge", loop, completedCount: 0 },
           "no branch produced commits; skipping merge",
         );
         continue;
       }
 
-      log.info(
+      logger.info(
         { event: "merge", loop, completedCount: completed.length },
         "merging branches",
       );
@@ -278,8 +283,15 @@ interface ExecuteIssueArgs {
  * if the implementer committed; both share the one sandbox/branch.
  */
 async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
-  const { issue, provider, agent, hooks, targetBranch, copyToWorktree, createSandbox } =
-    args;
+  const {
+    issue,
+    provider,
+    agent,
+    hooks,
+    targetBranch,
+    copyToWorktree,
+    createSandbox,
+  } = args;
   const sandbox = await createSandbox({
     sandbox: provider,
     branch: issue.branch,
