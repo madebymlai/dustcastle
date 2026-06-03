@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
 import { EGRESS_NETWORK, EGRESS_PROXY_CONTAINER, productionProxyUrl } from "./confine.js";
 import type { EgressDecision } from "./egress.js";
-import { ensureEgress, provisionProxyResolvConf, type PodmanResult } from "./egress-runtime.js";
+import { ensureEgress, isProxyListeningLogLine, provisionProxyResolvConf, type PodmanResult } from "./egress-runtime.js";
 
 /** A structured allowlist decision (ADR 0010): Build hosts + optional Agent hosts. */
 const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision => ({
@@ -23,10 +23,10 @@ const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision 
 
 const OK: PodmanResult = { status: 0, stderr: "" };
 
-/** A proxy whose logs report it is serving — the liveness probe's success signal. */
+/** A proxy whose logs report it is serving — the JSON liveness contract. */
 const LIVE_LOGS: PodmanResult = {
   status: 0,
-  stderr: "dustcastle-egress: listening on http://0.0.0.0:8118; allowlist=[x]\n",
+  stderr: '{"level":30,"event":"listening","port":8118,"msg":"proxy listening"}\n',
 };
 
 /** Default replies: ordinary commands succeed, and the liveness probe sees a live proxy. */
@@ -174,7 +174,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     expect(runCall.join(" ")).toContain("/h/.dustcastle/egress-resolv.conf:/etc/resolv.conf:ro");
   });
 
-  it("accepts the proxy once its logs report it is listening (liveness confirmed)", () => {
+  it("accepts the proxy once its logs report the JSON listening event (liveness confirmed)", () => {
     const { run } = recorder(); // default reply: logs report the proxy is serving
     const handle = ensureEgress({
       egress: allow(["registry.npmjs.org"]),
@@ -182,6 +182,12 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
       run,
     });
     expect(handle.proxyUrl).toBe(productionProxyUrl());
+  });
+
+  it("treats readiness as a pure JSON event predicate, not a stderr-prefix grep", () => {
+    expect(isProxyListeningLogLine('{"level":30,"event":"listening","port":8118}')).toBe(true);
+    expect(isProxyListeningLogLine("dustcastle-egress: listening on http://0.0.0.0:8118")).toBe(false);
+    expect(isProxyListeningLogLine('{"level":30,"event":"egress decision","decision":"allow"}')).toBe(false);
   });
 
   it("provisionProxyResolvConf writes external resolvers (not the --internal aardvark)", () => {

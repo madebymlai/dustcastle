@@ -47,8 +47,8 @@ const DEFAULT_PROXY_IMAGE = PROXY_SPEC.tag;
 /** The external (internet-facing) network the proxy is also homed on. */
 const DEFAULT_EXTERNAL_NETWORK = "podman";
 
-/** The stderr line proxy-main.ts prints once the proxy is actually bound + serving. */
-const PROXY_LISTENING = /dustcastle-egress: listening on/;
+/** The JSON event proxy-main.ts emits once the proxy is actually bound + serving. */
+const PROXY_LISTENING_EVENT = "listening";
 
 export interface EnsureEgressOptions {
   /** The plan's egress decision; only the allowlist path provisions anything. */
@@ -165,13 +165,30 @@ function isOk(r: PodmanResult): boolean {
   return r.status === 0;
 }
 
+export function isProxyListeningLogLine(line: string): boolean {
+  try {
+    const record: unknown = JSON.parse(line);
+    return isObject(record) && record.event === PROXY_LISTENING_EVENT;
+  } catch {
+    return false;
+  }
+}
+
+function proxyLogsReportListening(output: string): boolean {
+  return output.split(/\r?\n/).some((line) => line.trim().length > 0 && isProxyListeningLogLine(line));
+}
+
+function isObject(value: unknown): value is { readonly event?: unknown } {
+  return typeof value === "object" && value !== null;
+}
+
 /** How long to wait for the proxy to bind before declaring it dead (Node start is fast). */
 const LIVENESS_ATTEMPTS = 20;
 const LIVENESS_DELAY_MS = 150;
 
 /**
- * Real liveness probe: poll the container's logs for the `listening on …` line
- * proxy-main.ts prints once it is serving. If the container has already exited
+ * Real liveness probe: poll the container's logs for the JSON `event: "listening"`
+ * proxy-main.ts emits once it is serving. If the container has already exited
  * (crashed), stop early and surface its output as the failure detail. Drives off
  * the same injected `run` so it is unit-tested without real podman.
  */
@@ -180,7 +197,7 @@ function defaultVerifyProxyAlive(run: PodmanRunner, container: string): ProxyLiv
   for (let attempt = 0; attempt < LIVENESS_ATTEMPTS; attempt++) {
     const logs = run(["logs", container]);
     detail = `${logs.stdout ?? ""}${logs.stderr}`;
-    if (PROXY_LISTENING.test(detail)) return { alive: true, detail };
+    if (proxyLogsReportListening(detail)) return { alive: true, detail };
     // Already exited? Then it will never start listening — fail now with its output.
     const inspect = run(["inspect", "-f", "{{.State.Running}}", container]);
     if ((inspect.stdout ?? "").trim() !== "true") {

@@ -8,9 +8,20 @@
  *   DUSTCASTLE_EGRESS_PORT=8118
  *   DUSTCASTLE_EGRESS_HOST=0.0.0.0   (default 127.0.0.1)
  */
-import { startEgressProxy } from "./proxy.js";
+import type { Logger } from "../log/index.js";
+import { startEgressProxy, type EgressProxyHandle } from "./proxy.js";
+import { createProxyLogger } from "./proxy-logger.js";
 
-export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export interface ProxyMainEnv {
+  readonly DUSTCASTLE_EGRESS_ALLOWLIST?: string;
+  readonly DUSTCASTLE_EGRESS_PORT?: string;
+  readonly DUSTCASTLE_EGRESS_HOST?: string;
+}
+
+export async function main(
+  env: ProxyMainEnv = process.env,
+  logger: Logger = createProxyLogger().child({ mod: "egress-proxy" }),
+): Promise<EgressProxyHandle> {
   const allowlist = (env.DUSTCASTLE_EGRESS_ALLOWLIST ?? "")
     .split(",")
     .map((h) => h.trim())
@@ -23,17 +34,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     port,
     host,
     onDecision: (h, allowed) =>
-      process.stderr.write(`dustcastle-egress: ${allowed ? "ALLOW" : "DENY "} ${h}\n`),
+      logger.info({ decision: allowed ? "allow" : "deny", host: h }, "egress decision"),
   });
-  process.stderr.write(
-    `dustcastle-egress: listening on ${proxy.url}; allowlist=[${allowlist.join(", ")}]\n`,
-  );
+  logger.info({ event: "listening", port: proxy.port }, "proxy listening");
+  return proxy;
 }
 
 // Run when invoked directly (production container / e2e host process).
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((err) => {
-    process.stderr.write(`dustcastle-egress: ${String(err)}\n`);
+  const logger = createProxyLogger().child({ mod: "egress-proxy" });
+  main(process.env, logger).catch((err) => {
+    logger.error({ err }, "egress proxy failed");
     process.exit(1);
   });
 }
