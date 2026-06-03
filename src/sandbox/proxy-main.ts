@@ -22,10 +22,7 @@ export async function main(
   env: ProxyMainEnv = process.env,
   logger: Logger = createProxyLogger().child({ mod: "egress-proxy" }),
 ): Promise<EgressProxyHandle> {
-  const allowlist = (env.DUSTCASTLE_EGRESS_ALLOWLIST ?? "")
-    .split(",")
-    .map((h) => h.trim())
-    .filter((h) => h.length > 0);
+  const allowlist = allowlistFromEnv(env);
   const port = Number(env.DUSTCASTLE_EGRESS_PORT ?? "8118");
   const host = env.DUSTCASTLE_EGRESS_HOST ?? "127.0.0.1";
 
@@ -33,11 +30,18 @@ export async function main(
     allowlist,
     port,
     host,
-    onDecision: (h, allowed) =>
-      logger.info({ decision: allowed ? "allow" : "deny", host: h }, "egress decision"),
+    onDecision: (targetHost, allowed) =>
+      logger.info({ decision: allowed ? "allow" : "deny", host: targetHost }, "egress decision"),
   });
   logger.info({ event: "listening", port: proxy.port }, "proxy listening");
   return proxy;
+}
+
+function allowlistFromEnv(env: ProxyMainEnv): string[] {
+  return (env.DUSTCASTLE_EGRESS_ALLOWLIST ?? "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
 }
 
 // Run when invoked directly (production container / e2e host process).

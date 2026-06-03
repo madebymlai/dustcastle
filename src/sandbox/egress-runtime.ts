@@ -165,20 +165,28 @@ function isOk(r: PodmanResult): boolean {
   return r.status === 0;
 }
 
+interface ProxyLogRecord {
+  readonly event?: unknown;
+}
+
 export function isProxyListeningLogLine(line: string): boolean {
+  return parseProxyLogLine(line)?.event === PROXY_LISTENING_EVENT;
+}
+
+function parseProxyLogLine(line: string): ProxyLogRecord | undefined {
   try {
-    const record: unknown = JSON.parse(line);
-    return isObject(record) && record.event === PROXY_LISTENING_EVENT;
+    const parsed: unknown = JSON.parse(line);
+    return isProxyLogRecord(parsed) ? parsed : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 function proxyLogsReportListening(output: string): boolean {
-  return output.split(/\r?\n/).some((line) => line.trim().length > 0 && isProxyListeningLogLine(line));
+  return output.split(/\r?\n/).some(isProxyListeningLogLine);
 }
 
-function isObject(value: unknown): value is { readonly event?: unknown } {
+function isProxyLogRecord(value: unknown): value is ProxyLogRecord {
   return typeof value === "object" && value !== null;
 }
 

@@ -1,4 +1,4 @@
-import { createServer, type Server, type Socket, connect as netConnect } from "node:net";
+import { createServer, type AddressInfo, type Server, type Socket, connect as netConnect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
 import { main } from "./proxy-main.js";
@@ -55,7 +55,7 @@ describe("proxy-main structured logging", () => {
       sock.end("ORIGIN_OK\n");
     });
     await new Promise<void>((resolve) => target!.listen(0, "127.0.0.1", () => resolve()));
-    return (target!.address() as { port: number }).port;
+    return (target!.address() as AddressInfo).port;
   }
 
   function connectThroughProxy(proxyPort: number, hostPort: string): Promise<void> {
@@ -63,13 +63,28 @@ describe("proxy-main structured logging", () => {
       const sock = netConnect(proxyPort, "127.0.0.1", () => {
         sock.write(`CONNECT ${hostPort} HTTP/1.1\r\nHost: ${hostPort}\r\n\r\n`);
       });
-      sock.on("data", () => {});
-      sock.on("end", resolve);
-      sock.on("error", reject);
-      setTimeout(() => {
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (timeout !== undefined) clearTimeout(timeout);
         sock.destroy();
         resolve();
-      }, 2000);
+      };
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        if (timeout !== undefined) clearTimeout(timeout);
+        sock.destroy();
+        reject(err);
+      };
+
+      sock.on("data", () => {});
+      sock.on("end", finish);
+      sock.on("error", fail);
+      timeout = setTimeout(finish, 2000);
     });
   }
 });
