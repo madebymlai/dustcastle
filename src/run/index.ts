@@ -379,7 +379,7 @@ export async function withProvisionedSandbox<T>(
     // which is released on completion. Best-effort: a failure only risks a later
     // cold rebuild, never the run.
     try {
-      pool.warm!(projectKey);
+      pool.warm?.(projectKey);
     } catch (e) {
       gcLogger.warn({ err: (e as Error).message }, "recency update failed (best-effort)");
     }

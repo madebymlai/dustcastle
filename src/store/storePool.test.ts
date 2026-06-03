@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -155,7 +155,7 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
       closures,
     });
 
-    pool.warm!("npm-warm");
+    pool.warm?.("npm-warm");
 
     // The recency index has the upserted record.
     const records = loadRecency(dir);
@@ -184,7 +184,7 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
       // no closures → warm is a no-op
     });
 
-    expect(() => pool.warm!("unknown-key")).not.toThrow();
+    expect(() => pool.warm?.("unknown-key")).not.toThrow();
     expect(loadRecency(dir)).toHaveLength(0); // no recency record written
   });
 
@@ -210,7 +210,6 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
     pool.pin(slashyKey);
     expect(existsSync(join(gcrootsDir, ".."))).toBe(true); // parent still exists (not deleted)
     // The scoped root link was created; verify NO link escaped the roots dir.
-    const { readdirSync } = require("node:fs") as typeof import("node:fs");
     const scopedLinks = readdirSync(gcrootsDir);
     for (const link of scopedLinks) {
       expect(link).not.toContain("/"); // no slashes in the filename
@@ -218,7 +217,7 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
     }
 
     // Warm the slashy key → recency root link stays inside recencyRootsDir.
-    pool.warm!(slashyKey);
+    pool.warm?.(slashyKey);
     const recencyLinks = readdirSync(recencyRootsDir);
     for (const link of recencyLinks) {
       expect(link).not.toContain("/");
@@ -242,7 +241,7 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
     });
 
     // Warm the entry so its recency root is on disk (entry has 500 bytes).
-    pool.warm!("npm-warm");
+    pool.warm?.("npm-warm");
     const recencyLink = gcRootLink(recencyRootsDir, "npm-warm", "toolchain");
     expect(existsSync(recencyLink)).toBe(true);
 
@@ -270,7 +269,7 @@ describe("storePool (the Store behind the reusable pool interface — ADR 0012)"
     });
 
     // Warm (persistent recency root) + pin (scoped root).
-    pool.warm!("npm-active");
+    pool.warm?.("npm-active");
     pool.pin("npm-active");
 
     const recencyLink = gcRootLink(recencyRootsDir, "npm-active", "toolchain");
