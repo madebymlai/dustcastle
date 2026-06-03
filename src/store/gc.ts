@@ -37,42 +37,6 @@ export function rootStorePaths(provisioned: { readonly toolchainStorePath: strin
   return [{ kind: "toolchain", path: provisioned.toolchainStorePath }];
 }
 
-/** A project's last-use timestamp + closure size, the input to the recency tail (ADR 0007). */
-export interface RecencyRecord {
-  /** The project's GC key (mirrors `gcProjectKey`). */
-  readonly projectKey: string;
-  /** When this project's closure was last used by a run (epoch ms). */
-  readonly lastUsedAt: number;
-  /** The on-disk size of this project's closure (bytes) — the byte-budget unit. */
-  readonly closureBytes: number;
-}
-
-/**
- * The byte-budget LRU recency tail (ADR 0007 — "the most-recently-used closures
- * that fit a byte budget"). Walks the records newest-first and keeps each whose
- * closure still fits under `budgetBytes`, stopping at the first that overflows —
- * exactly LRU eviction (evict the oldest until the total fits). Byte-budget, not
- * count-based, because closures vary wildly in size: a count-based "keep N" is
- * size-blind and would let a few large closures blow the disk. The kept keys are
- * the closures a sweep keeps rooted (warm); the rest go cold. `budgetBytes` is the
- * low watermark (a product-derived parameter, never baked in).
- *
- * Edges: a zero budget keeps nothing; a single closure larger than the whole
- * budget is dropped (its key never fits), so the warm set stays bounded by bytes.
- */
-export function recencyTailKeys(records: readonly RecencyRecord[], budgetBytes: number): string[] {
-  const newestFirst = [...records].sort((a, b) => b.lastUsedAt - a.lastUsedAt);
-  const keep: string[] = [];
-  let spent = 0;
-  for (const r of newestFirst) {
-    const next = spent + Math.max(0, r.closureBytes);
-    if (next > budgetBytes) break; // LRU: this and every older closure go cold
-    spent = next;
-    keep.push(r.projectKey);
-  }
-  return keep;
-}
-
 /**
  * NOTE: the old `garbageCollectionPlan` (the bundled "ceiling decision + keep tail")
  * was removed in ADR 0012 — the unified GC brain now composes `overCeiling` (the

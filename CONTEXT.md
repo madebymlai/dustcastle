@@ -30,6 +30,10 @@ _Avoid_: dependencies (ambiguous — always qualify as Project Deps or Toolchain
 An entry is **warm** when it is resident, so a Sandbox that wants it gets it instantly; it goes **cold** when GC collects it, so the next use pays a re-fetch or re-install. This applies to **both** managed pools — the Store (Toolchain closures) and the deps cache (assembled Project Deps keyed by lockfile hash) — kept warm by one recency/ceiling brain that lets the rest go cold under disk pressure (see ADR 0007/0012).
 _Avoid_: cached / evicted (reserve the precise warm/cold pair)
 
+**GC root**:
+A dustcastle-owned indirect Nix GC root — a symlink under the dustcastle home (`gcroots/` or `recency-roots/`) — that keeps one Toolchain closure rooted so the shared Store's `nix-store --gc` cannot collect a closure something still needs. Two kinds, by lifecycle: a **scoped root** pins the closure a live run is using and is released the moment the run completes; a **recency root** persists across runs to keep a recently-used Toolchain warm, and is pruned only when its project falls outside the byte-budget recency tail (the warm set).
+_Avoid_: gcroot, pin, lock, anchor
+
 **Ecosystem**:
 A language world (npm/TS, Python, Rust, Go, Ruby, …) defined by three slots: a Toolchain (resolved from the Store), an install-deps command, and a run-tests command. dustcastle is Ecosystem-agnostic; sandcastle was biased to npm/TS. Which Ecosystem(s) a repo *is* — and therefore which install command to run — dustcastle detects itself from the repo's lockfile and version files, not via a third-party tool (see ADR 0006). An Ecosystem owns the **detection** grain: how to recognise itself in a directory, how to resolve which of its Package Managers a repo uses, and how to read its Toolchain version.
 _Avoid_: language, stack, platform

@@ -1,5 +1,4 @@
-import { recencyTailKeys } from "./gc.js";
-import type { OptimiseReport } from "./nix.js";
+import type { GcReport, OptimiseReport } from "./gc.js";
 
 /**
  * The reusable GC pool interface (ADR 0012). dustcastle's GC is already a pure
@@ -30,6 +29,32 @@ export interface PoolEntry {
   readonly lastUsedAt: number;
   /** The entry's resident size (bytes) — the byte-budget unit. */
   readonly bytes: number;
+}
+
+/**
+ * The byte-budget LRU recency tail (ADR 0007 — "the most-recently-used closures
+ * that fit a byte budget"). Walks the entries newest-first and keeps each whose
+ * bytes still fit under `budgetBytes`, stopping at the first that overflows —
+ * exactly LRU eviction (evict the oldest until the total fits). Byte-budget, not
+ * count-based, because entries vary wildly in size: a count-based "keep N" is
+ * size-blind and would let a few large entries blow the disk. The kept keys are
+ * the entries a sweep keeps warm; the rest go cold. `budgetBytes` is the low
+ * watermark (a product-derived parameter, never baked in).
+ *
+ * Edges: a zero budget keeps nothing; a single entry larger than the whole
+ * budget is dropped (its key never fits), so the warm set stays bounded by bytes.
+ */
+export function recencyTailKeys(entries: readonly PoolEntry[], budgetBytes: number): string[] {
+  const newestFirst = [...entries].sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  const keep: string[] = [];
+  let spent = 0;
+  for (const e of newestFirst) {
+    const next = spent + Math.max(0, e.bytes);
+    if (next > budgetBytes) break; // LRU: this and every older entry go cold
+    spent = next;
+    keep.push(e.key);
+  }
+  return keep;
 }
 
 /** What an `evict` (or the whole `collectPool` sweep) reclaimed — surfaced, never silent. */
@@ -89,9 +114,9 @@ export function collectPool(pool: Pool, opts: CollectPoolOptions): PoolSweepRepo
     optimise = pool.optimise();
   }
 
-  const records = pool.entries().map((e) => ({ projectKey: e.key, lastUsedAt: e.lastUsedAt, closureBytes: e.bytes }));
-  const warm = new Set(recencyTailKeys(records, opts.budgetBytes));
-  const cold = records.map((r) => r.projectKey).filter((key) => !warm.has(key));
+  const entries = pool.entries();
+  const warm = new Set(recencyTailKeys(entries, opts.budgetBytes));
+  const cold = entries.map((e) => e.key).filter((key) => !warm.has(key));
   const evicted = pool.evict(cold);
 
   return optimise !== undefined ? { ...evicted, optimise } : evicted;
@@ -121,5 +146,4 @@ export function collectPools(pools: readonly Pool[], opts: CollectPoolOptions): 
   return optimise !== undefined ? { entriesEvicted, bytesFreed, optimise } : { entriesEvicted, bytesFreed };
 }
 
-/** Re-exported so consumers referencing the pool interface also get its optimise report shape. */
-export type { OptimiseReport };
+
