@@ -46,7 +46,7 @@ export function messageFormat(log: MessageFormatLog): string {
   return ordinaryMessage(log);
 }
 
-export default function prettyTransport(opts: Record<string, unknown>) {
+export default function prettyTransport(opts: Record<string, unknown>): ReturnType<typeof pretty> {
   return pretty({ ...opts, messageFormat });
 }
 

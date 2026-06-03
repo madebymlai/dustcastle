@@ -7,7 +7,18 @@ export interface LogPostureOptions {
   readonly agent?: ProvisionedAgentLog;
 }
 
-export function logPosture(logger: Logger, prepared: PreparedRun, opts: LogPostureOptions = {}): void {
+export interface PreparedPosture {
+  readonly provisioned: Pick<PreparedRun["provisioned"], "mode">;
+  readonly ecosystems: readonly PreparedPostureEcosystem[];
+  readonly plan: Pick<PreparedRun["plan"], "egress">;
+}
+
+interface PreparedPostureEcosystem {
+  readonly detection: Pick<PreparedRun["ecosystems"][number]["detection"], "ecosystem" | "toolchainVersion">;
+  readonly provisioned: Pick<PreparedRun["ecosystems"][number]["provisioned"], "toolchainStorePath">;
+}
+
+export function logPosture(logger: Logger, prepared: PreparedPosture, opts: LogPostureOptions = {}): void {
   logger.info(provisionedEvent(prepared, opts), "provisioned");
 }
 
@@ -24,7 +35,7 @@ export function sweptEvent(line: string): SweptLogEvent & LogFields {
   };
 }
 
-export function provisionedEvent(prepared: PreparedRun, opts: LogPostureOptions = {}): ProvisionedLogEvent & LogFields {
+export function provisionedEvent(prepared: PreparedPosture, opts: LogPostureOptions = {}): ProvisionedLogEvent & LogFields {
   return {
     event: "provisioned",
     ecosystems: prepared.ecosystems.map((ecosystem) => ecosystem.detection.ecosystem),
@@ -36,7 +47,7 @@ export function provisionedEvent(prepared: PreparedRun, opts: LogPostureOptions 
   };
 }
 
-function toolchainEvent(ecosystem: PreparedRun["ecosystems"][number]): ProvisionedToolchainLog {
+function toolchainEvent(ecosystem: PreparedPostureEcosystem): ProvisionedToolchainLog {
   return {
     ecosystem: ecosystem.detection.ecosystem,
     ...(ecosystem.detection.toolchainVersion !== undefined ? { version: ecosystem.detection.toolchainVersion } : {}),
@@ -44,12 +55,16 @@ function toolchainEvent(ecosystem: PreparedRun["ecosystems"][number]): Provision
   };
 }
 
+const SWEEP_LINE_PATTERN = /^(\d+) last sweep freed (\d+) bytes \((\d+) path\(s\) collected\)$/;
+
 function parseSweepLine(line: string): Pick<SweptLogEvent, "sweptAt" | "freedBytes" | "pathsCollected"> | undefined {
-  const match = /^(\d+) last sweep freed (\d+) bytes \((\d+) path\(s\) collected\)$/.exec(line);
+  const match = SWEEP_LINE_PATTERN.exec(line);
   if (match === null) return undefined;
+
+  const [, sweptAt, freedBytes, pathsCollected] = match;
   return {
-    sweptAt: Number(match[1]),
-    freedBytes: Number(match[2]),
-    pathsCollected: Number(match[3]),
+    sweptAt: Number(sweptAt),
+    freedBytes: Number(freedBytes),
+    pathsCollected: Number(pathsCollected),
   };
 }

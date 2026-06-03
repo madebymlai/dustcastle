@@ -1,29 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
-import type { PreparedRun } from "../run/index.js";
-import { logPosture, logSweep } from "./posture.js";
+import { logPosture, logSweep, type PreparedPosture } from "./posture.js";
 
 const prepared = {
-  detection: { ecosystem: "node", packageManager: "npm" },
-  provisioned: {
-    mode: "proot",
-    physStoreRoot: "/phys/store",
-    toolchainStorePath: "/nix/store/node-toolchain",
-  },
+  provisioned: { mode: "proot" },
   ecosystems: [
     {
-      detection: { ecosystem: "node", packageManager: "npm", toolchainVersion: "20.18.1" },
-      provisioned: {
-        mode: "proot",
-        physStoreRoot: "/phys/store",
-        toolchainStorePath: "/nix/store/node-toolchain",
-      },
+      detection: { ecosystem: "node", toolchainVersion: "20.18.1" },
+      provisioned: { toolchainStorePath: "/nix/store/node-toolchain" },
     },
   ],
-  plan: {
-    egress: { kind: "none" },
-  },
-} as unknown as PreparedRun;
+  plan: { egress: { kind: "none" } },
+} satisfies PreparedPosture;
 
 describe("posture logging", () => {
   it("emits the posture banner and sweep line as structured logger events", () => {
