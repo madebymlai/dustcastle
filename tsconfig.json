@@ -6,7 +6,6 @@
     "lib": ["ES2023"],
     "types": ["node"],
     "outDir": "dist",
-    "rootDir": "src",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -19,6 +18,10 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"],
+  // `scripts` (build tooling, run via tsx) is type-checked but never emitted — the
+  // build config below re-adds rootDir:src and narrows include to ["src"] so only
+  // runtime source ships into dist. `rootDir` lives there, not here, so type-checking
+  // scripts/ outside src doesn't trip TS6059.
+  "include": ["src", "scripts"],
   "exclude": ["node_modules", "dist", "spike-go-store"]
 }

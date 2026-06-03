@@ -34,7 +34,7 @@
     "!dist/**/*.test.js.map"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "build": "tsc -p tsconfig.build.json && tsx scripts/copy-assets.ts",
     "dev": "tsx src/cli/main.ts",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
