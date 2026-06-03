@@ -197,9 +197,9 @@ describe("detect — JS/Node ecosystem (ADR 0006 slice 2)", () => {
     expect(detect(dir)[0]?.toolchainVersion).toBe("20.18.1");
   });
 
-  it("flags a lockless package.json as a loose manifest (pin-then-pure, ADR 0006c)", () => {
-    // A resolvable-but-unpinned manifest: dustcastle resolves it once into a
-    // generated lock, then builds pure — strictly better than going impure.
+  it("flags a lockless package.json as a loose manifest (ADR 0006c)", () => {
+    // A resolvable-but-unpinned manifest: the single resolving install resolves it
+    // fresh in-Sandbox, and it is never cached (no stable lockfile hash to key on).
     const dir = repo({ "package.json": JSON.stringify({ name: "app" }) });
 
     expect(detect(dir)[0]).toMatchObject({ ecosystem: "node", loose: true });
@@ -237,7 +237,7 @@ describe("detect — Rust ecosystem (Cargo, dustcastle-gy5.2)", () => {
     expect(detect(dir)).toContainEqual({ ecosystem: "rust", packageManager: "cargo" });
   });
 
-  it("flags a lockless Cargo.toml as a loose manifest (pin-then-pure)", () => {
+  it("flags a lockless Cargo.toml as a loose manifest (resolved fresh, never cached)", () => {
     const dir = repo({
       "Cargo.toml": '[package]\nname = "sample"\nversion = "0.1.0"\nedition = "2021"\n',
     });
@@ -286,7 +286,7 @@ describe("detect — Rust ecosystem (Cargo, dustcastle-gy5.2)", () => {
 
 describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => {
   // A hash-pinned, wheels-only requirements.txt (the tracer case): already
-  // lock-grade, so it routes the pip-FOD Importer and is NOT a loose manifest.
+  // lock-grade — a stable, cacheable lock — so it is NOT a loose manifest.
   const PINNED_REQUIREMENTS =
     "idna==3.10 \\\n" +
     "    --hash=sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3\n" +
@@ -352,17 +352,17 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
     expect(ecos).toContain("python");
   });
 
-  // Loose-manifest pin-then-pure (ADR 0006c, laimk-hse.5). Unlike Node, where
-  // requirements-presence implies a lockfile, a Python requirements.txt is the
-  // pip-FOD's lockfile ONLY when it is lock-grade (== + --hash). A loose one is
-  // flagged `loose` so dustcastle resolves it ONCE (uv pip compile) then builds pure.
-  it("flags an UNPINNED requirements.txt as loose (pin-then-pure, ADR 0006c)", () => {
+  // Loose-manifest detection (ADR 0006c, laimk-hse.5). Unlike Node, where
+  // requirements-presence implies a lockfile, a Python requirements.txt counts as a
+  // stable lockfile ONLY when it is lock-grade (== + --hash). A loose one is flagged
+  // `loose` so the single resolving install resolves it fresh and it is never cached.
+  it("flags an UNPINNED requirements.txt as loose (ADR 0006c)", () => {
     const dir = repo({ "requirements.txt": "idna\nurllib3\n" });
 
     expect(detect(dir)[0]).toMatchObject({ ecosystem: "python", packageManager: "pip", loose: true });
   });
 
-  it("flags a hash-LESS pinned requirements.txt as loose (the pip-FOD needs hashes)", () => {
+  it("flags a hash-LESS pinned requirements.txt as loose (lock-grade needs hashes)", () => {
     const dir = repo({ "requirements.txt": "idna==3.10\nurllib3==2.2.3\n" });
 
     expect(detect(dir)[0]?.loose).toBe(true);
@@ -378,7 +378,7 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
 
   it("does NOT flag a lock-grade requirements.txt as loose even with an abstract pyproject", () => {
     // pyproject is abstract, but the hash-pinned requirements.txt IS the lockfile,
-    // so the build runs pure directly — no resolve needed.
+    // so it is a stable, cacheable lock — not loose.
     const dir = repo({
       "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna"]\n',
       "requirements.txt": PINNED_REQUIREMENTS,
@@ -389,10 +389,10 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
 
   // uv Package Manager (laimk-hse.6). `uv.lock` is a real lockfile that beats a
   // co-present requirements.txt (ADR 0006d: "a repo with both uv.lock and
-  // requirements.txt uses uv"). uv is an EXPORT FRONT-END to the same pip-FOD —
-  // `uv export --format requirements-txt` produces the hash-pinned requirements,
-  // so the importer is still pip-FOD (not uv2nix), per the ADR 0006 amendment.
-  it("routes a uv.lock repo to uv (the pip-FOD Importer via the uv export front-end)", () => {
+  // requirements.txt uses uv"). uv is an EXPORT FRONT-END to the shared pip install —
+  // `uv export --format requirements-txt` produces the hash-pinned requirements that
+  // the in-Sandbox `pip install` then consumes (ADR 0012; no uv2nix importer).
+  it("routes a uv.lock repo to uv (export front-end to the shared pip install)", () => {
     const dir = repo({
       "pyproject.toml": '[project]\nname = "app"\ndependencies = ["idna"]\n',
       "uv.lock": "version = 1\n\n[[package]]\nname = \"idna\"\nversion = \"3.10\"\n",
@@ -419,9 +419,9 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
   // poetry Package Manager (laimk-hse.7). `poetry.lock` is a real lockfile that
   // beats a co-present requirements.txt but loses to uv.lock (ADR 0006d precedence:
   // uv.lock > poetry.lock > requirements.txt). poetry is an EXPORT FRONT-END
-  // (`poetry export`) to the same pip-FOD — not poetry2nix — so the importer is
-  // still pip-FOD per the ADR 0006 amendment.
-  it("routes a poetry.lock repo to poetry (the pip-FOD Importer via the poetry export front-end)", () => {
+  // (`poetry export`) to the shared pip install — not poetry2nix — producing the
+  // hash-pinned requirements the in-Sandbox `pip install` consumes (ADR 0012).
+  it("routes a poetry.lock repo to poetry (export front-end to the shared pip install)", () => {
     const dir = repo({
       "pyproject.toml": '[tool.poetry]\nname = "app"\n\n[tool.poetry.dependencies]\nidna = "3.10"\n',
       "poetry.lock": '[[package]]\nname = "idna"\nversion = "3.10"\n',

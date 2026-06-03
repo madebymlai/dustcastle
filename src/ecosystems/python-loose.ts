@@ -5,25 +5,29 @@
  * In Python, `requirements.txt` is BOTH the Ecosystem's manifest marker AND pip's
  * lockfile, so the generic "manifest-present-but-no-lockfile" loose test (which
  * works for Node's package.json) cannot decide Python's loose case. The grain that
- * matters is CONTENT, not presence: a `requirements.txt` is the pip-FOD's lockfile
- * ONLY when it is lock-grade — every requirement `==`-pinned and `--hash=`-bearing
- * (the pip-FOD's `pip download --require-hashes` contract). An unpinned, hash-less,
- * or mixed file is resolvable-but-unpinned and routes pin-then-pure (resolved ONCE
- * into a hash-pinned requirements.txt via `uv pip compile --generate-hashes`, then
- * built pure) — strictly better than going impure (ADR 0004).
+ * matters is CONTENT, not presence: a `requirements.txt` counts as a real lockfile
+ * ONLY when it is lock-grade — every requirement `==`-pinned and `--hash=`-bearing.
+ * An unpinned, hash-less, or mixed file is resolvable-but-unpinned, i.e. LOOSE.
+ *
+ * The install no longer branches on this (ADR 0012, dustcastle-6ta): a single
+ * resolving `pip install -r requirements.txt` handles both — pip auto-verifies the
+ * hashes of a lock-grade file and resolves a loose one. Lock-grade-ness now governs
+ * ONE thing: CACHEABILITY. A lock-grade file has a stable content hash, so its
+ * assembled deps are cached by it; a loose file resolves afresh (versions can drift),
+ * so it has no stable key and is never cached (see `depsCacheKey`).
  *
  * Conservative throughout: anything undefined/empty/unparseable reads NOT
- * lock-grade, so the loose path (a visible, reproducible pinning step) is preferred
- * over silently treating a half-pinned file as a lockfile.
+ * lock-grade, so it is treated as loose (resolve + never cache) rather than silently
+ * trusting a half-pinned file as a stable lockfile.
  */
 
 /**
- * Whether a `requirements.txt` is lock-grade — directly consumable by the pip-FOD
- * without a pin-then-pure resolve. True ONLY when the file declares at least one
- * requirement AND every requirement line is exactly `==`-pinned and carries at
- * least one `--hash=` (the `--require-hashes` contract). An empty file, a bare
- * package name, a loose constraint (`>=`/`~=`), a hash-less pin, or any mixed line
- * makes it NOT lock-grade — it needs pinning.
+ * Whether a `requirements.txt` is lock-grade — a stable, cacheable lock (not loose).
+ * True ONLY when the file declares at least one requirement AND every requirement line
+ * is exactly `==`-pinned and carries at least one `--hash=` (pip's hash-checking
+ * contract). An empty file, a bare package name, a loose constraint (`>=`/`~=`), a
+ * hash-less pin, or any mixed line makes it NOT lock-grade — it resolves afresh and is
+ * not cached.
  */
 export function requirementsIsLockGrade(text: string | undefined): boolean {
   if (typeof text !== "string") return false;

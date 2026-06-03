@@ -14,13 +14,17 @@ import type {
 } from "./types.js";
 
 /**
- * The shared in-Sandbox install for Python (ADR 0012): install the committed/exported,
- * hash-pinned requirements into `./site` — the dir `PYTHONPATH` points at.
- * `--require-hashes` enforces the no-drift invariant (the install can't resolve
- * versions beyond the hash-pinned export). Every python manager's `installCommand`
- * ends with this; uv/poetry prepend their `export` step.
+ * The shared in-Sandbox install for Python (ADR 0012): install the requirements into
+ * `./site` — the dir `PYTHONPATH` points at. ONE resolving line that works whether or
+ * not the requirements are pinned: pip auto-enables hash-checking when the file carries
+ * `--hash=` lines (a lock-grade or uv/poetry-exported requirements.txt is still
+ * verified), and resolves a loose/unpinned file rather than hard-failing on it. We do
+ * NOT pass `--require-hashes` — that demands every line be `==`-pinned and would reject
+ * the common hand-written requirements.txt; reproducibility is out of scope (ADR 0012).
+ * Every python manager's `installCommand` ends with this; uv/poetry prepend their
+ * `export` step (only ever selected when their lockfile is present, so it always exports).
  */
-const PIP_INSTALL_INTO_SITE = "pip install --require-hashes -r requirements.txt --target site";
+const PIP_INSTALL_INTO_SITE = "pip install -r requirements.txt --target site";
 
 /** uv's in-Sandbox export step: materialise the hash-pinned requirements.txt from uv.lock. */
 const UV_EXPORT = "uv export --format requirements-txt -o requirements.txt";

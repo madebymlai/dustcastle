@@ -39,7 +39,7 @@ The specific tool *within* an Ecosystem that owns a repo's dependency resolution
 _Avoid_: manager, tool, pm (in prose)
 
 **Install command**:
-What dustcastle runs to assemble one Package Manager's Project Deps — the real Package Manager, frozen to the lockfile when present (`npm ci`, `pnpm install --frozen-lockfile`, `uv sync`, `cargo build`), resolving when not. Derived 1:1 from the Package Manager, so it is a *property of* the Package Manager, not a second key. It runs in-Sandbox via the sandcastle hook, and its assembled output is what the deps cache stores (ADR 0012).
+What dustcastle runs to assemble one Package Manager's Project Deps — the real Package Manager via ONE resolving command per manager (`npm install`, `pnpm install`, `go mod download`, `cargo fetch`, `pip install -r requirements.txt`): it installs from a committed lockfile when present and resolves when not, so a loose/lockless repo still installs. The frozen variants (`npm ci`, `--frozen-lockfile`, `--require-hashes`) are deliberately avoided — they hard-fail without a lockfile, and the byte-reproducibility they buy is out of scope (ADR 0012; dustcastle-6ta). Derived 1:1 from the Package Manager, so it is a *property of* the Package Manager, not a second key. It runs in-Sandbox via the sandcastle hook; its assembled output is cached only for lock-grade repos (a loose resolve has no stable key, so it is never cached).
 _Avoid_: importer, builder, lang2nix (no Nix dep-expression generator exists any more)
 
 **Ecosystem Registry**:

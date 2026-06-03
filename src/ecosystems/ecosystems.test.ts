@@ -120,7 +120,7 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       const d = packageManagerDescriptor("bun") as unknown as Record<string, unknown>;
       expect(d.provisionGate).toBeUndefined();
       // bun provisions like every other manager: a real install command, no gate.
-      expect(packageManagerDescriptor("bun").installCommand).toEqual(["bun install --frozen-lockfile"]);
+      expect(packageManagerDescriptor("bun").installCommand).toEqual(["bun install"]);
     });
   });
 
@@ -128,7 +128,8 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     // Deps now ALWAYS install in-Sandbox via the sandcastle hook (ADR 0012): there is
     // no pure-vs-impure decision, so EVERY detected manager must carry an install
     // command — go and cargo included (formerly pure-only). The install runs the real
-    // Package Manager, frozen to the committed lockfile where possible, resolving when not.
+    // Package Manager with one resolving line: it honours a committed lockfile when
+    // present and resolves when not, so a loose repo still installs (dustcastle-6ta).
     it.each([...PACKAGE_MANAGERS])("%s carries a non-empty installCommand", (pm) => {
       const cmds = packageManagerDescriptor(pm).installCommand;
       expect(cmds).toBeDefined();
@@ -172,18 +173,21 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       expect(packageManagerDescriptor("cargo").registryHosts).toEqual(["index.crates.io", "static.crates.io"]);
     });
 
-    describe("node managers install strictly from the committed lockfile (frozen/immutable)", () => {
-      it("npm runs npm ci", () => {
-        expect(packageManagerDescriptor("npm").installCommand).toEqual(["npm ci"]);
+    describe("node managers install with ONE resolving command (lockfile-or-not, no frozen flag)", () => {
+      // dustcastle-6ta: a loose / lockless node repo must still install, so every node
+      // manager uses its plain resolving install — never `npm ci` / `--frozen-lockfile`,
+      // which hard-fail without a lockfile. A committed lockfile is still honoured.
+      it("npm runs npm install (not npm ci)", () => {
+        expect(packageManagerDescriptor("npm").installCommand).toEqual(["npm install"]);
       });
-      it("pnpm runs a frozen-lockfile install", () => {
-        expect(packageManagerDescriptor("pnpm").installCommand).toEqual(["pnpm install --frozen-lockfile"]);
+      it("pnpm runs a plain resolving install (no --frozen-lockfile)", () => {
+        expect(packageManagerDescriptor("pnpm").installCommand).toEqual(["pnpm install"]);
       });
-      it("yarn runs a frozen-lockfile install", () => {
-        expect(packageManagerDescriptor("yarn").installCommand).toEqual(["yarn install --frozen-lockfile"]);
+      it("yarn runs a plain resolving install (no --frozen-lockfile)", () => {
+        expect(packageManagerDescriptor("yarn").installCommand).toEqual(["yarn install"]);
       });
-      it("bun runs a frozen-lockfile install through the normal path (no gate)", () => {
-        expect(packageManagerDescriptor("bun").installCommand).toEqual(["bun install --frozen-lockfile"]);
+      it("bun runs a plain resolving install through the normal path (no gate, no --frozen-lockfile)", () => {
+        expect(packageManagerDescriptor("bun").installCommand).toEqual(["bun install"]);
       });
     });
 
@@ -191,7 +195,9 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
       // The uv/poetry lists prepend their in-Sandbox `export` step before one shared
       // pip-into-site command. pip consumes requirements.txt directly, so it has no
       // export step — just the shared install (ADR 0012, always-impure in-Sandbox).
-      const sharedPipInstall = "pip install --require-hashes -r requirements.txt --target site";
+      // ONE resolving line (no `--require-hashes`): pip auto-verifies hashes when the
+      // file carries them, and resolves a loose/unpinned file rather than failing.
+      const sharedPipInstall = "pip install -r requirements.txt --target site";
 
       it("pip is just the shared pip-into-site install (no export step)", () => {
         expect(packageManagerDescriptor("pip").installCommand).toEqual([sharedPipInstall]);

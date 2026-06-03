@@ -71,10 +71,11 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
     expect(miss.lockfileHash).toBeTruthy();
     expect(miss.hit).toBe(false);
 
-    // On a MISS the plan installs in-Sandbox (`npm ci`) and schedules a populate;
-    // nothing is restored on the host.
+    // On a MISS the plan installs in-Sandbox (`npm install`) and schedules a populate;
+    // nothing is restored on the host. (A committed lockfile is still honoured by the
+    // resolving install — and a lock-grade repo still caches by its lockfile hash.)
     const missPlan = planSandbox({ provisioned: toolchainOnly(), detection, cacheDir, cache: miss });
-    expect(missPlan.setupCommands.join("\n")).toContain("npm ci");
+    expect(missPlan.setupCommands.join("\n")).toContain("npm install");
     expect(missPlan.hostWorktreeReady).toEqual([]);
     expect(missPlan.populate).toHaveLength(1);
     expect(missPlan.populate[0]!.lockfileHash).toBe(miss.lockfileHash);
@@ -85,10 +86,10 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
     expect(hit.hit).toBe(true);
 
     // On a HIT the plan restores from the cache on the host (host.onWorktreeReady),
-    // runs no install (`npm ci` absent — just the git-exclude), and schedules no populate.
+    // runs no install (`npm install` absent — just the git-exclude), and no populate.
     const hitPlan = planSandbox({ provisioned: toolchainOnly(), detection, cacheDir, cache: hit });
     expect(hitPlan.hostWorktreeReady.join("\n")).toContain(join(cacheDir, hit.lockfileHash!));
-    expect(hitPlan.setupCommands.join("\n")).not.toContain("npm ci");
+    expect(hitPlan.setupCommands.join("\n")).not.toContain("npm install");
     expect(hitPlan.populate).toEqual([]);
   });
 });

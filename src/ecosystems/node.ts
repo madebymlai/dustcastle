@@ -14,10 +14,14 @@ const npm: PackageManagerDescriptor = {
   lockfiles: ["package-lock.json"],
   // Node's Toolchain is nixpkgs' `nodejs`; the manager name does not change it.
   generateToolchain: generateNodeToolchain,
-  // The in-Sandbox install (ADR 0012): `npm ci` installs strictly from the committed
-  // package-lock.json (frozen), running postinstall under the standing egress.
-  installCommand: ["npm ci"],
-  // Build Egress (ADR 0012): the registry `npm ci` fetches from.
+  // The in-Sandbox install (ADR 0012): `npm install` works whether or not a lockfile
+  // is committed — it installs from a satisfying package-lock.json when present, and
+  // resolves when absent (a loose repo). We do NOT use `npm ci`: it hard-fails without
+  // a lockfile, which is exactly the common loose case. Reproducibility is out of scope
+  // (ADR 0012), so the resolving install is the single path. postinstall runs under the
+  // standing egress either way.
+  installCommand: ["npm install"],
+  // Build Egress (ADR 0012): the registry `npm install` fetches from.
   registryHosts: ["registry.npmjs.org"],
 };
 
@@ -27,8 +31,10 @@ const pnpm: PackageManagerDescriptor = {
   lockfiles: ["pnpm-lock.yaml"],
   // pnpm shares Node's `nodejs` Toolchain — the manager only changes the install.
   generateToolchain: generateNodeToolchain,
-  // The in-Sandbox install (ADR 0012): frozen to pnpm-lock.yaml.
-  installCommand: ["pnpm install --frozen-lockfile"],
+  // The in-Sandbox install (ADR 0012): `pnpm install` resolves with or without a
+  // committed pnpm-lock.yaml — no `--frozen-lockfile`, which errors when the lock is
+  // absent/outdated (the loose case must still install).
+  installCommand: ["pnpm install"],
   // Build Egress (ADR 0012): pnpm fetches from the npm registry too.
   registryHosts: ["registry.npmjs.org"],
 };
@@ -39,8 +45,10 @@ const yarn: PackageManagerDescriptor = {
   lockfiles: ["yarn.lock"],
   // yarn shares Node's `nodejs` Toolchain — the manager only changes the install.
   generateToolchain: generateNodeToolchain,
-  // The in-Sandbox install (ADR 0012): frozen to yarn.lock.
-  installCommand: ["yarn install --frozen-lockfile"],
+  // The in-Sandbox install (ADR 0012): `yarn install` resolves with or without a
+  // committed yarn.lock — no `--frozen-lockfile`, which errors when the lock is
+  // absent/outdated (the loose case must still install).
+  installCommand: ["yarn install"],
   // Build Egress (ADR 0012): yarn classic's own registry.
   registryHosts: ["registry.yarnpkg.com"],
 };
@@ -51,10 +59,12 @@ const bun: PackageManagerDescriptor = {
   lockfiles: ["bun.lockb", "bun.lock"],
   // bun shares Node's `nodejs` Toolchain.
   generateToolchain: generateNodeToolchain,
-  // The in-Sandbox install (ADR 0012): frozen to bun.lock. bun installs through the
-  // normal path like every other manager — no gate, because there is no FOD importer
-  // to be missing any more (the real install runs in-Sandbox).
-  installCommand: ["bun install --frozen-lockfile"],
+  // The in-Sandbox install (ADR 0012): `bun install` resolves with or without a
+  // committed bun.lock — no `--frozen-lockfile`, which errors when the lock is absent
+  // (the loose case must still install). bun installs through the normal path like
+  // every other manager — no gate, because there is no FOD importer to be missing any
+  // more (the real install runs in-Sandbox).
+  installCommand: ["bun install"],
   // Build Egress (ADR 0012): bun uses the npm registry.
   registryHosts: ["registry.npmjs.org"],
 };

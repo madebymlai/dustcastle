@@ -135,28 +135,28 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
     expect(path.indexOf(`${nodeProvisioned.toolchainStorePath}/bin`)).toBeLessThan(path.indexOf("/usr/local/bin"));
   });
 
-  it("installs node_modules in-Sandbox via the detected manager (npm ci), under the standing allowlist", () => {
+  it("installs node_modules in-Sandbox via the detected manager (npm install), under the standing allowlist", () => {
     const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection });
     const setup = plan.setupCommands.join("\n");
 
     // Egress no longer branches on purity (ADR 0012): a node repo's standing
-    // allowlist opens the npm registry, and the container runs `npm ci` in-Sandbox.
+    // allowlist opens the npm registry, and the container runs `npm install` in-Sandbox.
     expect(plan.podmanOptions.network).not.toBe("none");
     expect(plan.egress).toEqual({ kind: "allowlist", buildHosts: ["registry.npmjs.org"], agentHosts: [] });
     // The install runs in-Sandbox; nothing is staged from the Store.
-    expect(setup).toContain("npm ci");
+    expect(setup).toContain("npm install");
     expect(setup).not.toContain("cp -RL");
   });
 
-  it("installs with the detected manager, frozen to the lockfile", () => {
+  it("installs with the detected manager's resolving command (pnpm/yarn, no --frozen-lockfile)", () => {
     const cmd = (packageManager: PackageManager) =>
       planSandbox({
         provisioned: nodeProvisioned,
         detection: { ecosystem: "node", packageManager },
       }).setupCommands.at(-1);
 
-    expect(cmd("pnpm")).toBe("pnpm install --frozen-lockfile");
-    expect(cmd("yarn")).toBe("yarn install --frozen-lockfile");
+    expect(cmd("pnpm")).toBe("pnpm install");
+    expect(cmd("yarn")).toBe("yarn install");
   });
 
   it("points the container's tooling at the egress proxy (production proxy by default)", () => {
@@ -205,7 +205,7 @@ describe("planSandbox — staging dir excluded from the worktree's git (dustcast
     // The active Ecosystem's staging dir is what gets excluded.
     expect(setup[0]).toContain("node_modules");
     // Excluded BEFORE the in-Sandbox install runs.
-    expect(joined.indexOf("info/exclude")).toBeLessThan(joined.indexOf("npm ci"));
+    expect(joined.indexOf("info/exclude")).toBeLessThan(joined.indexOf("npm install"));
   });
 
   it("excludes vendor for a go build (the staging dir is read from the Registry)", () => {
@@ -237,8 +237,8 @@ describe("planSandbox — staging dir excluded from the worktree's git (dustcast
 
 describe("planSandbox — Python always-impure path installs into ./site", () => {
   // python's in-Sandbox install lands in ./site — the same dir PYTHONPATH points
-  // at, so the run env is identical regardless of manager. `--require-hashes`
-  // keeps the install frozen to the committed/exported requirements.
+  // at, so the run env is identical regardless of manager. One resolving pip line
+  // installs it: hashes are auto-verified when present, a loose file resolves.
   const pythonProvisioned: Provisioned = {
     mode: "bwrap",
     physStoreRoot: nodeProvisioned.physStoreRoot,
@@ -251,24 +251,37 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
       detection: { ecosystem: "python", packageManager },
     }).setupCommands;
 
+  it("a loose / unpinned requirements.txt installs by resolving — no --require-hashes (dustcastle-6ta)", () => {
+    // The reported failure: a hand-written requirements.txt of bare names + `>=`
+    // ranges is loose (nothing is `==`-pinned with a hash). The in-Sandbox install
+    // must RESOLVE it, not demand `--require-hashes` — which hard-fails on an
+    // unpinned file ("all requirements must have their versions pinned with ==").
+    const cmds = planSandbox({
+      provisioned: pythonProvisioned,
+      detection: { ecosystem: "python", packageManager: "pip", loose: true },
+    }).setupCommands;
+    expect(cmds.join("\n")).not.toContain("--require-hashes");
+    expect(cmds.at(-1)).toBe("pip install -r requirements.txt --target site");
+  });
+
   it("pip installs its committed requirements straight into ./site (no empty cp)", () => {
     const cmds = setup("pip");
     // The install commands follow the prepended worktree git-exclude (dustcastle-8dk).
-    expect(cmds.slice(1)).toEqual(["pip install --require-hashes -r requirements.txt --target site"]);
+    expect(cmds.slice(1)).toEqual(["pip install -r requirements.txt --target site"]);
     expect(cmds.join("\n")).not.toContain("cp -RL");
   });
 
   it("uv exports its hash-pinned requirements first, then installs them into ./site", () => {
     expect(setup("uv").slice(1)).toEqual([
       "uv export --format requirements-txt -o requirements.txt",
-      "pip install --require-hashes -r requirements.txt --target site",
+      "pip install -r requirements.txt --target site",
     ]);
   });
 
   it("poetry exports its hash-pinned requirements first, then installs them into ./site", () => {
     expect(setup("poetry").slice(1)).toEqual([
       "poetry export --format requirements.txt -o requirements.txt",
-      "pip install --require-hashes -r requirements.txt --target site",
+      "pip install -r requirements.txt --target site",
     ]);
   });
 
@@ -302,8 +315,8 @@ describe("planSandbox — polyglot Node + Python (ADR 0012 multi-ecosystem)", ()
 
   it("installs BOTH dep sets in one Sandbox", () => {
     const setup = plan.setupCommands.join("\n");
-    expect(setup).toContain("npm ci");
-    expect(setup).toContain("pip install --require-hashes -r requirements.txt --target site");
+    expect(setup).toContain("npm install");
+    expect(setup).toContain("pip install -r requirements.txt --target site");
   });
 
   it("excludes BOTH stage dirs from the worktree's git before installing", () => {
@@ -311,7 +324,7 @@ describe("planSandbox — polyglot Node + Python (ADR 0012 multi-ecosystem)", ()
     expect(setup).toContain("node_modules");
     expect(setup).toContain("site");
     // each install is preceded by its own info/exclude entry
-    expect(setup.indexOf("info/exclude")).toBeLessThan(setup.indexOf("npm ci"));
+    expect(setup.indexOf("info/exclude")).toBeLessThan(setup.indexOf("npm install"));
   });
 
   it("puts BOTH toolchains on PATH and merges each Ecosystem's run env", () => {
@@ -350,7 +363,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     // The in-Sandbox setup runs only the git-exclude — no install command.
     const setup = plan.setupCommands.join("\n");
     expect(setup).toContain("info/exclude");
-    expect(setup).not.toContain("npm ci");
+    expect(setup).not.toContain("npm install");
 
     // Nothing to populate on a hit.
     expect(plan.populate).toEqual([]);
@@ -382,9 +395,9 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     // No restore copy on a miss.
     expect(plan.hostWorktreeReady).toEqual([]);
 
-    // The install runs in-Sandbox (frozen npm ci).
+    // The install runs in-Sandbox (npm install).
     const setup = plan.setupCommands.join("\n");
-    expect(setup).toContain("npm ci");
+    expect(setup).toContain("npm install");
 
     // The cache entry to populate after the run: the worktree's stage dir → the
     // lockfile-hash entry dir.
@@ -407,7 +420,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
     expect(plan.hostWorktreeReady).toEqual([]);
     expect(plan.populate).toEqual([]);
-    expect(plan.setupCommands.join("\n")).toContain("npm ci");
+    expect(plan.setupCommands.join("\n")).toContain("npm install");
   });
 
   it("requires the run-level cache root for cacheable decisions", () => {
@@ -426,7 +439,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     const plan = planSandbox({ provisioned: nodeProvisioned, detection: nodeDetection });
     expect(plan.hostWorktreeReady).toEqual([]);
     expect(plan.populate).toEqual([]);
-    expect(plan.setupCommands.join("\n")).toContain("npm ci");
+    expect(plan.setupCommands.join("\n")).toContain("npm install");
   });
 
   it("a polyglot repo mixes hit + miss across its ecosystems in one Sandbox", () => {
@@ -455,9 +468,9 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
     // Node restores from cache and does NOT install npm.
     expect(restore).toContain("/c/nodehash/node_modules");
-    expect(setup).not.toContain("npm ci");
+    expect(setup).not.toContain("npm install");
     // Python is a miss: it installs in-Sandbox and has nothing restored.
-    expect(setup).toContain("pip install --require-hashes -r requirements.txt --target site");
+    expect(setup).toContain("pip install -r requirements.txt --target site");
     expect(restore).not.toContain("/c/pyhash");
     // Only Python is populated after the run.
     expect(plan.populate).toEqual([

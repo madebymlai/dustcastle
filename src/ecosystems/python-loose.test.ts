@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { requirementsIsLockGrade } from "./python-loose.js";
 
 // Loose-manifest detection for Python (ADR 0006c, laimk-hse.5). A Python repo is
-// LOOSE — and so routes pin-then-pure — when its declared deps are not lock-grade:
+// LOOSE — resolved fresh by the single resolving install and never cached — when its
+// declared deps are not lock-grade:
 //   - an unpinned (no `==`) or hash-less requirements.txt (the common case), or
 //   - an abstract pyproject.toml with no requirements.txt and no lock.
 // `requirementsIsLockGrade` is the pure predicate the loose check derives from:
 // requirements.txt is lock-grade ONLY when every requirement line is `==`-pinned
-// AND carries at least one `--hash=` (the pip-FOD's `--require-hashes` contract).
+// AND carries at least one `--hash=` (pip's hash-checking contract).
 
 describe("requirementsIsLockGrade (the pure lock-grade predicate — ADR 0006c)", () => {
   it("treats a fully ==-pinned, --hash-bearing requirements.txt as lock-grade", () => {
@@ -25,7 +26,7 @@ describe("requirementsIsLockGrade (the pure lock-grade predicate — ADR 0006c)"
   });
 
   it("is NOT lock-grade when a pinned requirement carries no --hash", () => {
-    // Pinned-without-hashes still needs pinning: the pip-FOD requires hashes.
+    // Pinned-without-hashes is not a stable lock: lock-grade requires hashes.
     expect(requirementsIsLockGrade("idna==3.10\nurllib3==2.2.3\n")).toBe(false);
   });
 

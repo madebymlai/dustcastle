@@ -215,8 +215,9 @@ function mergeEnv(ecosystems: readonly EcosystemPlan[]): Record<string, string> 
  * deps land in the Ecosystem's `stageDir` — a build artifact, never project state.
  * Exclude it from the worktree's git FIRST so the agent's `git add` and sandcastle's
  * untracked-sync never capture it (dustcastle-8dk), then run the real Package
- * Manager's frozen/immutable install command(s) under the standing egress. The
- * install command lives on the dispatch grain (PackageManagerDescriptor.installCommand),
+ * Manager's resolving install command(s) under the standing egress (it installs from
+ * a committed lockfile when present, resolves when not — never branches on `loose`).
+ * The install command lives on the dispatch grain (PackageManagerDescriptor.installCommand),
  * so this is ecosystem-AGNOSTIC — node installs node_modules, python installs into
  * ./site, go fetches its modules, cargo fetches its crates — no per-Ecosystem `if`.
  * `installCommand` is REQUIRED on every descriptor (ADR 0012), so there is no
