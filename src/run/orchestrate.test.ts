@@ -191,7 +191,7 @@ describe("orchestrate logging", () => {
         fields: {
           mod: "orchestrate",
           event: "epic_close_eligible",
-          closed: ["dustcastle-9lx"],
+          closed: "dustcastle-9lx",
           count: 1,
         },
         msg: "reaped finished epics",
