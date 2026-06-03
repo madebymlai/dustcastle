@@ -136,7 +136,7 @@ export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   const fail = (reason: string): never => {
     run(["rm", "-f", EGRESS_PROXY_CONTAINER]); // remove the dead/half-started container
     if (weCreatedNetwork) run(["network", "rm", EGRESS_NETWORK]); // roll back our own network
-    logger.error({ hosts, reason }, "could not establish scoped egress proxy");
+    logger.error({ hosts: hosts.join(", "), reason }, "could not establish scoped egress proxy");
     throw new Error(
       `dustcastle: could not establish the scoped egress proxy enforcing [${hosts.join(", ")}]. ${reason}`,
     );
@@ -150,7 +150,10 @@ export function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   if (!liveness.alive) {
     fail(`The proxy container started but is not serving:\n${liveness.detail.trim()}`);
   }
-  logger.info({ container: EGRESS_PROXY_CONTAINER, hosts }, "proxy enforcing allowlist");
+  // Join to a readable string, not a string[]: pino-pretty renders an array field
+  // over multiple indented lines, which is noisy for a flat allowlist. A comma list
+  // is one clean line on the console and still trivially parseable in the recorder.
+  logger.info({ container: EGRESS_PROXY_CONTAINER, hosts: hosts.join(", ") }, "proxy enforcing allowlist");
 
   return {
     proxyUrl: productionProxyUrl(),
