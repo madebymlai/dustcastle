@@ -1,5 +1,4 @@
 import type { Logger, LogFields } from "../log/index.js";
-import type { SweptLogEvent } from "../log/format.js";
 import type { PreparedRun } from "../run/index.js";
 
 /** The agent harness the sandbox runs: coding-agent runner, model, and mounted login. */
@@ -47,17 +46,24 @@ export function logPosture(logger: Logger, prepared: PreparedPosture, opts: LogP
   }
 }
 
+/**
+ * Surface the last auto-GC sweep (ADR 0007 — never-silent: a sweep is quiet, the
+ * NEXT run reports it) as one ordinary log line, the same shape as the posture
+ * lines. The freed-bytes/paths are a self-contained human sentence; the parsed
+ * numbers ride as fields into the JSON flight recorder (hidden on the console via
+ * the pretty `ignore` list, since the message already states them). An unparseable
+ * gc.log line still surfaces verbatim rather than being dropped.
+ */
 export function logSweep(logger: Logger, line: string): void {
-  logger.info(sweptEvent(line), "swept");
-}
-
-export function sweptEvent(line: string): SweptLogEvent & LogFields {
   const parsed = parseSweepLine(line);
-  return {
-    event: "swept",
-    line,
-    ...(parsed !== undefined ? parsed : {}),
-  };
+  if (parsed === undefined) {
+    logger.info(`last GC sweep: ${line}`);
+    return;
+  }
+  logger.info(
+    { freedBytes: parsed.freedBytes, pathsCollected: parsed.pathsCollected, sweptAt: parsed.sweptAt },
+    `last GC sweep freed ${parsed.freedBytes} bytes (${parsed.pathsCollected} path(s) collected)`,
+  );
 }
 
 /** The unique per-toolchain facts a posture line carries: the resolved version and Store path. */
@@ -68,9 +74,15 @@ function toolchainFields(ecosystem: PreparedPostureEcosystem): LogFields {
   };
 }
 
+interface ParsedSweep {
+  readonly sweptAt: number;
+  readonly freedBytes: number;
+  readonly pathsCollected: number;
+}
+
 const SWEEP_LINE_PATTERN = /^(\d+) last sweep freed (\d+) bytes \((\d+) path\(s\) collected\)$/;
 
-function parseSweepLine(line: string): Pick<SweptLogEvent, "sweptAt" | "freedBytes" | "pathsCollected"> | undefined {
+function parseSweepLine(line: string): ParsedSweep | undefined {
   const match = SWEEP_LINE_PATTERN.exec(line);
   if (match === null) return undefined;
 

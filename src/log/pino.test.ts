@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loggerConfig, stderrLogSetting } from "./pino.js";
 
-const prettyTransport = expect.stringMatching(/pretty-transport\.(?:ts|js)$/);
+const prettyTransport = "pino-pretty";
 
 describe("loggerConfig", () => {
   const now = new Date("2026-06-03T04:05:06.007Z");
@@ -18,7 +18,7 @@ describe("loggerConfig", () => {
             level: "info",
             options: {
               destination: 2,
-              ignore: "mod,event,line,sweptAt,freedBytes,pathsCollected",
+              ignore: "mod,event,sweptAt,freedBytes,pathsCollected",
             },
           },
           {

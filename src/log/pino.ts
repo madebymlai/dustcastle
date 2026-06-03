@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import pino from "pino";
 import type { Logger } from "./index.js";
@@ -50,18 +49,19 @@ export function loggerConfig(opts: CreateLoggerOptions): LoggerConfig {
     transport: {
       targets: [
         {
-          target: prettyTransportTarget(),
+          // Stock pino-pretty straight off the package — no custom renderer: the
+          // [time] LEVEL header, the bare message, and expanded fields.
+          target: "pino-pretty",
           level: stderrLevel,
           options: {
             destination: 2,
-            // Stock pino-pretty on the console: the [time] LEVEL header and expanded
-            // fields. `colorize` is intentionally OMITTED so pino-pretty auto-detects
-            // the TTY — color when a human watches live, plain text when stderr is
-            // redirected/captured (the AFK case), so captured logs carry no ANSI noise.
-            // `mod` (internal module taxonomy), the operational `event` discriminator,
-            // and the swept-line payload are hidden so a user never reads dustcastle's
+            // `colorize` is intentionally OMITTED so pino-pretty auto-detects the TTY —
+            // color when a human watches live, plain text when stderr is redirected/
+            // captured (the AFK case), so captured logs carry no ANSI noise. `mod`
+            // (internal module taxonomy), the operational `event` discriminator, and the
+            // swept-sweep numbers are hidden so a user never reads dustcastle's
             // implementation detail off the console — all stay in the flight recorder.
-            ignore: "mod,event,line,sweptAt,freedBytes,pathsCollected",
+            ignore: "mod,event,sweptAt,freedBytes,pathsCollected",
           },
         },
         {
@@ -82,12 +82,6 @@ export function stderrLogSetting(value: string | undefined): StderrLogSetting {
 
 function isStderrLogSetting(value: string): value is StderrLogSetting {
   return (STDERR_LOG_SETTINGS as readonly string[]).includes(value);
-}
-
-function prettyTransportTarget(): string {
-  const js = fileURLToPath(new URL("./pretty-transport.js", import.meta.url));
-  if (existsSync(js)) return js;
-  return fileURLToPath(new URL("./pretty-transport.ts", import.meta.url));
 }
 
 function runLogDirectory(homeDir: string): string {

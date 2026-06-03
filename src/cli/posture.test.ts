@@ -22,16 +22,12 @@ describe("posture logging", () => {
     });
 
     expect(logger.records).toEqual([
+      // The sweep is an ordinary line now (no 🧹 renderer): a self-contained message,
+      // with the parsed numbers as fields for the flight recorder.
       {
         level: "info",
-        fields: {
-          event: "swept",
-          line: "1700000000000 last sweep freed 4300 bytes (2 path(s) collected)",
-          sweptAt: 1700000000000,
-          freedBytes: 4300,
-          pathsCollected: 2,
-        },
-        msg: "swept",
+        fields: { freedBytes: 4300, pathsCollected: 2, sweptAt: 1700000000000 },
+        msg: "last GC sweep freed 4300 bytes (2 path(s) collected)",
         args: [],
       },
       // The posture is no longer one banner event — each unique fact is its own line.
@@ -69,5 +65,14 @@ describe("posture logging", () => {
       "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
     ]);
     expect(logger.records.some((r) => r.msg === "agent ready")).toBe(false);
+  });
+
+  it("surfaces an unparseable gc.log sweep line verbatim rather than dropping it", () => {
+    const logger = createMemoryLogger();
+    logSweep(logger, "garbled gc line");
+
+    expect(logger.records).toEqual([
+      { level: "info", fields: {}, msg: "last GC sweep: garbled gc line", args: [] },
+    ]);
   });
 });
