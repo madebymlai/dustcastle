@@ -58,10 +58,10 @@ export function loggerConfig(opts: CreateLoggerOptions): LoggerConfig {
             // fields. `colorize` is intentionally OMITTED so pino-pretty auto-detects
             // the TTY — color when a human watches live, plain text when stderr is
             // redirected/captured (the AFK case), so captured logs carry no ANSI noise.
-            // `mod` (internal module taxonomy) and the structured payloads of the
-            // banner/swept events are hidden so a user never reads dustcastle's
-            // implementation detail off the console — both stay in the flight recorder.
-            ignore: "mod,event,ecosystems,mode,egress,toolchains,note,agent,line,sweptAt,freedBytes,pathsCollected",
+            // `mod` (internal module taxonomy), the operational `event` discriminator,
+            // and the swept-line payload are hidden so a user never reads dustcastle's
+            // implementation detail off the console — all stay in the flight recorder.
+            ignore: "mod,event,line,sweptAt,freedBytes,pathsCollected",
           },
         },
         {

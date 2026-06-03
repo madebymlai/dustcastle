@@ -1,16 +1,22 @@
 import type { Logger, LogFields } from "../log/index.js";
-import type { ProvisionedAgentLog, ProvisionedLogEvent, ProvisionedToolchainLog, SweptLogEvent } from "../log/format.js";
+import type { SweptLogEvent } from "../log/format.js";
 import type { PreparedRun } from "../run/index.js";
+
+/** The agent harness the sandbox runs: coding-agent runner, model, and mounted login. */
+export interface AgentPosture {
+  readonly runner: string;
+  readonly model: string;
+  readonly mount: string;
+}
 
 export interface LogPostureOptions {
   readonly note?: string;
-  readonly agent?: ProvisionedAgentLog;
+  readonly agent?: AgentPosture;
 }
 
 export interface PreparedPosture {
   readonly provisioned: Pick<PreparedRun["provisioned"], "mode">;
   readonly ecosystems: readonly PreparedPostureEcosystem[];
-  readonly plan: Pick<PreparedRun["plan"], "egress">;
 }
 
 interface PreparedPostureEcosystem {
@@ -18,8 +24,27 @@ interface PreparedPostureEcosystem {
   readonly provisioned: Pick<PreparedRun["ecosystems"][number]["provisioned"], "toolchainStorePath">;
 }
 
+/**
+ * Surface the provisioned posture as ordinary log lines (ADR 0014, revised): one
+ * fact per line, each carrying only what isn't already on the console from the
+ * operational logs. The old single `🏖️` banner event duplicated the play-by-play
+ * — most visibly the egress allowlist, which `proxy enforcing allowlist` already
+ * prints — so egress is omitted here. The store mode and per-toolchain store paths
+ * ARE unique (the deep `toolchain built` log is debug-level), as is the agent
+ * harness; those become their own lines. The full structured detail still lands in
+ * the JSON flight recorder via these same records.
+ */
 export function logPosture(logger: Logger, prepared: PreparedPosture, opts: LogPostureOptions = {}): void {
-  logger.info(provisionedEvent(prepared, opts), "provisioned");
+  logger.info({ mode: prepared.provisioned.mode }, "store provisioned (rootless nix-portable)");
+  for (const ecosystem of prepared.ecosystems) {
+    logger.info(toolchainFields(ecosystem), `${ecosystem.detection.ecosystem} toolchain ready`);
+  }
+  if (opts.agent !== undefined) {
+    logger.info({ ...opts.agent }, "agent ready");
+  }
+  if (opts.note !== undefined) {
+    logger.info(opts.note);
+  }
 }
 
 export function logSweep(logger: Logger, line: string): void {
@@ -35,21 +60,9 @@ export function sweptEvent(line: string): SweptLogEvent & LogFields {
   };
 }
 
-export function provisionedEvent(prepared: PreparedPosture, opts: LogPostureOptions = {}): ProvisionedLogEvent & LogFields {
+/** The unique per-toolchain facts a posture line carries: the resolved version and Store path. */
+function toolchainFields(ecosystem: PreparedPostureEcosystem): LogFields {
   return {
-    event: "provisioned",
-    ecosystems: prepared.ecosystems.map((ecosystem) => ecosystem.detection.ecosystem),
-    mode: prepared.provisioned.mode,
-    egress: prepared.plan.egress,
-    toolchains: prepared.ecosystems.map(toolchainEvent),
-    ...(opts.note !== undefined ? { note: opts.note } : {}),
-    ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
-  };
-}
-
-function toolchainEvent(ecosystem: PreparedPostureEcosystem): ProvisionedToolchainLog {
-  return {
-    ecosystem: ecosystem.detection.ecosystem,
     ...(ecosystem.detection.toolchainVersion !== undefined ? { version: ecosystem.detection.toolchainVersion } : {}),
     storePath: ecosystem.provisioned.toolchainStorePath,
   };

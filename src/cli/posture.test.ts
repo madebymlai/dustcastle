@@ -10,11 +10,10 @@ const prepared = {
       provisioned: { toolchainStorePath: "/nix/store/node-toolchain" },
     },
   ],
-  plan: { egress: { kind: "none" } },
 } satisfies PreparedPosture;
 
 describe("posture logging", () => {
-  it("emits the posture banner and sweep line as structured logger events", () => {
+  it("emits the sweep line and the posture as one ordinary line per unique fact", () => {
     const logger = createMemoryLogger();
 
     logSweep(logger, "1700000000000 last sweep freed 4300 bytes (2 path(s) collected)");
@@ -35,19 +34,40 @@ describe("posture logging", () => {
         msg: "swept",
         args: [],
       },
+      // The posture is no longer one banner event — each unique fact is its own line.
+      // Egress is intentionally absent: `proxy enforcing allowlist` already prints it.
       {
         level: "info",
-        fields: {
-          event: "provisioned",
-          ecosystems: ["node"],
-          mode: "proot",
-          egress: { kind: "none" },
-          toolchains: [{ ecosystem: "node", version: "20.18.1", storePath: "/nix/store/node-toolchain" }],
-          agent: { runner: "pi", model: "openai/gpt-4.1", mount: "~/.pi/agent" },
-        },
-        msg: "provisioned",
+        fields: { mode: "proot" },
+        msg: "store provisioned (rootless nix-portable)",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { version: "20.18.1", storePath: "/nix/store/node-toolchain" },
+        msg: "node toolchain ready",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { runner: "pi", model: "openai/gpt-4.1", mount: "~/.pi/agent" },
+        msg: "agent ready",
         args: [],
       },
     ]);
+  });
+
+  it("omits the agent line when no agent runs, and emits the note as a bare message", () => {
+    const logger = createMemoryLogger();
+    logPosture(logger, prepared, {
+      note: "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
+    });
+
+    expect(logger.records.map((r) => r.msg)).toEqual([
+      "store provisioned (rootless nix-portable)",
+      "node toolchain ready",
+      "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
+    ]);
+    expect(logger.records.some((r) => r.msg === "agent ready")).toBe(false);
   });
 });
