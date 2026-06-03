@@ -8,9 +8,9 @@ import {
   type NixRunner,
   type OptimiseReport,
 } from "./nix.js";
-import { pruneRecencyRoots, registerScopedRoots } from "./gcRoots.js";
-import { measureStoreBytes } from "./ceiling.js";
-import { loadRecency } from "./recency.js";
+import { pruneRecencyRoots, registerRecencyRoot, registerScopedRoots } from "./gcRoots.js";
+import { closureSizeBytes, measureStoreBytes } from "./ceiling.js";
+import { loadRecency, upsertRecency } from "./recency.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import type { Pool, PoolEntry, PoolEvictReport } from "./pool.js";
 
@@ -118,6 +118,21 @@ export function storePool(opts: StorePoolOptions): Pool {
       const optimise = parseOptimiseReport(opt.stdout + opt.stderr);
       logger.debug({ bytesFreed: optimise.bytesFreed, filesLinked: optimise.filesLinked }, "optimise hard-linked store files");
       return optimise;
+    },
+
+    warm: (key: string): void => {
+      const closure = opts.closures?.get(key);
+      if (closure === undefined) return; // unknown key → no-op (best-effort, mirroring pin)
+      const closurePath = closure.toolchainStorePath;
+      const bytes = closurePath.length > 0 ? closureSizeBytes(opts.run, closurePath) : 0;
+      upsertRecency(opts.dir, { projectKey: key, lastUsedAt: Date.now(), closureBytes: bytes });
+      registerRecencyRoot({
+        provisioned: closure,
+        recencyRootsDir,
+        projectKey: key,
+        run: opts.run,
+        logger,
+      });
     },
   };
 }

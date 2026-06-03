@@ -83,6 +83,10 @@ export interface Pool {
   evict(keys: readonly string[]): PoolEvictReport;
   /** Optional non-destructive dedup before eviction (Store: `nix store optimise`). */
   optimise?(): OptimiseReport;
+  /** Warm an entry: write its recency record + a persistent recency root so it stays warm
+   *  across runs (pruned only when it falls outside the byte-budget tail). Optional — a
+   *  pool that keeps no on-disk recency (the deps cache) simply omits it. */
+  warm?(key: string): void;
 }
 
 /** What a pool sweep reclaimed — the optimise pass (when one ran) plus the eviction. */

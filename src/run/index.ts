@@ -8,11 +8,7 @@ import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/pl
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore, storeHashOf, type Provisioned } from "../store/index.js";
 import { nixPortableRunner, type NixRunner } from "../store/nix.js";
-import { registerRecencyRoot, registerScopedRoots } from "../store/gcRoots.js";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { closureSizeBytes } from "../store/ceiling.js";
-import { upsertRecency } from "../store/recency.js";
+import { storePool } from "../store/storePool.js";
 import {
   depsCacheDecision,
   populateCommand,
@@ -305,11 +301,12 @@ export async function withProvisionedSandbox<T>(
   // on an unknown provider, before any sandbox is stood up).
   const agentModelHosts = opts.agentModelHosts ?? configuredAgentModelHosts();
 
-  // The egress backend and the scoped GC roots, captured as the run sets them up so
+  // The egress backend and the Store pool, captured as the run sets them up so
   // the single finally tears down whatever was established — even if provisioning or
   // the body throws after egress came up.
   let egress: ReturnType<typeof ensureEgress> = { teardown: () => {} };
-  let roots: ReturnType<typeof registerScopedRoots> | undefined;
+  let pool: ReturnType<typeof storePool> | undefined;
+  let projectKey: string | undefined;
   // The deps-cache pool + the keys this run pins in it (ADR 0012). A live run pins
   // ALL its deps-cache entries so a concurrent GC sweep never evicts assembled deps
   // out from under it; released on completion (the finally).
@@ -358,22 +355,34 @@ export async function withProvisionedSandbox<T>(
     // pre-run prepareRun, so the run provisions exactly once and stays fail-fast).
     opts.onPrepared?.(prepared);
 
-    // Pin this run's Toolchain closure with scoped GC roots (ADR 0007/0012), so a
-    // concurrent collect-garbage never deletes paths the live run still needs. Roots
-    // are released on completion (below), scoping them to the active run.
-    roots = registerScopedRoots({
-      provisioned: prepared.provisioned,
-      gcrootsDir: opts.gcRoots?.gcrootsDir ?? join(homedir(), ".dustcastle", "gcroots"),
-      projectKey: gcProjectKey(prepared),
-      ...(opts.gcRoots?.run !== undefined ? { run: opts.gcRoots.run } : {}),
+    // Route the Store's pin/warm/release through the one Pool seam (ADR 0012/0015),
+    // symmetric with the deps-cache pool below. The pool owns the GC-root lifecycle
+    // and the recency index; no out-of-band registerScopedRoots/registerRecencyRoot
+    // /upsertRecency calls remain.
+    projectKey = gcProjectKey(prepared);
+    pool = storePool({
+      run: opts.gcRoots?.run ?? opts.autoGc?.run ?? nixPortableRunner(),
+      dir: opts.autoGc?.recencyDir ?? DUSTCASTLE_HOME,
+      ...(opts.gcRoots?.gcrootsDir !== undefined ? { gcrootsDir: opts.gcRoots.gcrootsDir } : {}),
+      ...(opts.autoGc?.recencyRootsDir !== undefined ? { recencyRootsDir: opts.autoGc.recencyRootsDir } : {}),
+      closures: new Map([[projectKey, prepared.provisioned]]),
       logger: gcLogger,
     });
 
-    // Persist this project as recently-used + pin a PERSISTENT recency root (ADR
-    // 0007), so its Toolchain stays warm across runs — distinct from the scoped root
-    // above, which is released on completion. Best-effort: a failure only risks a
-    // later cold rebuild, never the run.
-    updateRecency(opts, prepared);
+    // Pin this run's Toolchain closure with scoped GC roots (ADR 0007/0012), so a
+    // concurrent collect-garbage never deletes paths the live run still needs. Roots
+    // are released on completion (below), scoping them to the active run.
+    pool.pin(projectKey);
+
+    // Warm this project in the recency index + persistent recency root (ADR 0007),
+    // so its Toolchain stays warm across runs — distinct from the scoped root above,
+    // which is released on completion. Best-effort: a failure only risks a later
+    // cold rebuild, never the run.
+    try {
+      pool.warm!(projectKey);
+    } catch (e) {
+      gcLogger.warn({ err: (e as Error).message }, "recency update failed (best-effort)");
+    }
 
     // Pin EVERY detected ecosystem's deps-cache entry (ADR 0012, dustcastle-8od), so a
     // concurrent GC sweep never evicts assembled deps out from under the live run —
@@ -419,7 +428,7 @@ export async function withProvisionedSandbox<T>(
 
     return result;
   } finally {
-    roots?.release(); // drop this run's scoped GC roots — closure becomes collectable
+    pool?.release(projectKey!); // drop this run's scoped GC roots — closure becomes collectable
     for (const key of cachePinnedKeys) cachePool.release(key); // unpin deps-cache entries
     egress.teardown();
     // Fire the detached auto-GC one-shot (ADR 0007), off the hot path. It runs
@@ -428,35 +437,6 @@ export async function withProvisionedSandbox<T>(
     // it can never throw out of this finally (and the child is detached, so a
     // failed/hung sweep can never break the run either).
     triggerAutoGc(opts);
-  }
-}
-
-/**
- * Upsert the project's recency record (last-used + closure size) and register its
- * persistent recency root (ADR 0007). Best-effort and fully injectable: disabled or
- * redirected via `opts.autoGc` (tests/e2e), otherwise the dustcastle-owned home +
- * a real nix-portable runner.
- */
-function updateRecency(opts: ProvisionOptions, prepared: PreparedRun): void {
-  if (opts.autoGc?.disabled === true) return;
-  const gcLogger = subsystemLogger(opts.logger, "gc");
-  try {
-    const dir = opts.autoGc?.recencyDir ?? DUSTCASTLE_HOME;
-    const recencyRootsDir = opts.autoGc?.recencyRootsDir ?? join(homedir(), ".dustcastle", "recency-roots");
-    const runner = opts.autoGc?.run ?? opts.gcRoots?.run ?? nixPortableRunner();
-    const projectKey = gcProjectKey(prepared);
-    const closurePath = prepared.provisioned.toolchainStorePath;
-    const closureBytes = closurePath.length > 0 ? closureSizeBytes(runner, closurePath) : 0;
-    upsertRecency(dir, { projectKey, lastUsedAt: Date.now(), closureBytes });
-    registerRecencyRoot({
-      provisioned: prepared.provisioned,
-      recencyRootsDir,
-      projectKey,
-      run: runner,
-      logger: gcLogger,
-    });
-  } catch (e) {
-    gcLogger.warn({ err: (e as Error).message }, "recency update failed (best-effort)");
   }
 }
 
