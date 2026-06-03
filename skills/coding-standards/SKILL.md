@@ -1,6 +1,6 @@
 ---
 name: coding-standards
-description: Coding standards writer — interactively select a project's style, testing, and architecture standards from curated catalogs and write or update its CODING_STANDARDS.md so the code-review agent enforces them. Use when defining or revising coding conventions for review, or when a repo has no coding-standards file.
+description: Coding standards writer — interactively select a project's style and testing standards from curated catalogs and write or update its CODING_STANDARDS.md so the code-review agent enforces them. Use when defining or revising line-level coding conventions for review, or when a repo has no coding-standards file.
 ---
 
 <purpose>
@@ -16,26 +16,22 @@ A coding standards writer. Probe the codebase, propose standards one menu at a t
 </rules>
 
 <phase name="locate">
-Detect the OS and choose the target file — the two review loops read it from different places:
-
-- **macOS / Windows** → `.sandcastle/CODING_STANDARDS.md`. The sandcastle reviewer loads it via `@.sandcastle/CODING_STANDARDS.md`. If `.sandcastle/` does not exist, **fail fast**: the project isn't set up for the sandcastle loop, so stop and tell the user to set it up first rather than creating the directory.
-- **Linux** → `CODING_STANDARDS.md` at the repo root. On Linux the loop is driven by dustcastle, whose review prompt reads the root `CODING_STANDARDS.md`.
+The target file is `CODING_STANDARDS.md` at the repo root.
 
 Then look at the target file:
 
 - **If it exists** — read it. Treat its current standards as already-decided: do not re-propose them. The session is then an *update* — you are adding to (or, if the user asks, revising) the existing set.
 - **If it is missing** — this is a fresh write; you will create it at the end.
 
-Tell the user which OS you detected, which path you'll write, and whether you're creating or updating.
+Tell the user the path you'll write and whether you're creating or updating.
 </phase>
 
 ## Catalogs
 
-Read all three for the full menu. Each item carries a one-line definition and a `> Pick when:` signal describing the code smell it addresses.
+Read both for the full menu. Each item carries a one-line definition and a `> Pick when:` signal describing the code smell it addresses.
 
 - [catalogs/STYLE.md](catalogs/STYLE.md) — control flow, error handling, duplication
 - [catalogs/TESTING.md](catalogs/TESTING.md) — structure, scope, assertions, reliability
-- [catalogs/ARCHITECTURE.md](catalogs/ARCHITECTURE.md) — module boundaries, dependency direction
 
 <phase name="present">
 Show the user each catalog's items, grouped by section, with the name and its one-line definition. Skip any item already present in the target file (from the locate phase). Keep it scannable — the user is choosing from a menu, not reading an essay.
@@ -50,7 +46,7 @@ The user picks which standards they want. They may pick items you didn't recomme
 </phase>
 
 <phase name="write">
-Write the selected standards to the target file from the locate phase, grouped by the same section headers as the catalogs, each as an imperative one-liner. When updating an existing file, merge the new items under their sections without disturbing what's already there. When creating, create the file at the located path (on macOS/Windows the `.sandcastle/` directory is a precondition, already checked in the locate phase). Do not include the `> Pick when:` signals or source links — only the imperative rules the reviewer enforces.
+Write the selected standards to the target file from the locate phase, grouped by the same section headers as the catalogs, each as an imperative one-liner. When updating an existing file, merge the new items under their sections without disturbing what's already there. When creating, create `CODING_STANDARDS.md` at the repo root. Do not include the `> Pick when:` signals or source links — only the imperative rules the reviewer enforces.
 </phase>
 
 <phase name="summary">
