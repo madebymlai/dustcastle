@@ -1,12 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_INSTALL_HOOK_TIMEOUT_MS,
   gcProjectKey,
   installHookTimeoutMs,
+  populateDepsCache,
   withSetupHooks,
   type GcProjectKeyInput,
 } from "./index.js";
+import { createMemoryLogger } from "../log/fake.js";
 import type { SandboxPlan } from "../sandbox/plan.js";
+import type { DepsCachePopulate } from "../store/depscache/index.js";
+
+const tmps: string[] = [];
+afterEach(() => {
+  while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+});
 
 function planWith(setupCommands: string[]): SandboxPlan {
   return { setupCommands, hostWorktreeReady: [] } as unknown as SandboxPlan;
@@ -90,5 +101,26 @@ describe("installHookTimeoutMs", () => {
     expect(() => installHookTimeoutMs({ DUSTCASTLE_INSTALL_TIMEOUT_SECONDS: "soon" })).toThrow(
       /DUSTCASTLE_INSTALL_TIMEOUT_SECONDS/,
     );
+  });
+});
+
+describe("populateDepsCache", () => {
+  it("streams stderr lines live via the logger before the child closes", async () => {
+    const logger = createMemoryLogger();
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-populate-"));
+    tmps.push(dir);
+    const cacheDir = join(dir, "cache");
+    const stageDir = join(dir, "stage");
+    mkdirSync(stageDir, { recursive: true });
+    writeFileSync(join(stageDir, "dep.txt"), "hello");
+
+    const lockfileHash = "abc123";
+    const populate: DepsCachePopulate[] = [{ lockfileHash, stageDir }];
+
+    await populateDepsCache(dir, cacheDir, populate, logger);
+
+    // The sink receives a stderr line BEFORE the child 'close' event resolves
+    // the promise — the streaming helper line-buffers stderr data as it arrives.
+    expect(logger.records.some((r) => r.level === "info" && r.msg === "populate stderr")).toBe(true);
   });
 });

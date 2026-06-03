@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { detect, type Detection } from "../detect/index.js";
@@ -28,6 +27,7 @@ import {
 import { spawnAutoGc } from "../cli/autogc.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
+import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
 
 export interface PrepareOptions {
   /** The project directory to run in (defaults to the process cwd at the CLI). */
@@ -419,7 +419,7 @@ export async function withProvisionedSandbox<T>(
     // so it cannot be relied on to land once the deps are assembled. Copies each
     // worktree stage dir into its lockfile-hash entry. Best-effort: a failed populate
     // only risks a later cache miss, never the run.
-    populateDepsCache(opts.cwd, cacheDir, prepared.plan.populate, depsLogger);
+    await populateDepsCache(opts.cwd, cacheDir, prepared.plan.populate, depsLogger);
 
     return result;
   } finally {
@@ -543,6 +543,12 @@ export function withSetupHooks(
   };
 }
 
+function classifyPopulateStderrLine(line: string): StreamingLogLevel {
+  // cp errors and shell diagnostics are debug detail; the progress prefix is info.
+  if (line.startsWith("populating")) return "info";
+  return "debug";
+}
+
 /**
  * Populate the deps cache after a run (ADR 0012, dustcastle-8od): for each cache-MISS
  * ecosystem, copy the worktree's assembled stage dir into its lockfile-hash entry, so
@@ -550,12 +556,12 @@ export function withSetupHooks(
  * host in the worktree (the bind-mount path's worktree IS the project dir). Best-effort
  * per entry — a failed copy only risks a later cache miss, never the run.
  */
-function populateDepsCache(
+export async function populateDepsCache(
   cwd: string,
   cacheDir: string,
   populate: readonly DepsCachePopulate[],
   logger: Logger,
-): void {
+): Promise<void> {
   for (const entry of populate) {
     const warnPopulateFailed = (detail: string): void => {
       logger.warn({ lockfileHash: entry.lockfileHash, detail }, "populate deps-cache entry failed (best-effort)");
@@ -563,11 +569,17 @@ function populateDepsCache(
 
     try {
       const command = populateCommand({ cacheDir, ...entry });
-      const result = spawnSync("sh", ["-c", command], { cwd, encoding: "utf8" });
+      const verboseCommand = `echo "populating ${entry.lockfileHash}/${entry.stageDir}" >&2; ${command}`;
+      const result = await runStreamingAsync("sh", ["-c", verboseCommand], {
+        cwd,
+        logger,
+        label: "populate",
+        classifyStderrLine: classifyPopulateStderrLine,
+      });
       if (result.status === 0) {
         logger.debug({ lockfileHash: entry.lockfileHash, stageDir: entry.stageDir }, "populated deps-cache entry");
       } else {
-        warnPopulateFailed(result.stderr?.trim() ?? "");
+        warnPopulateFailed(result.stderr.slice(-2000).trim());
       }
     } catch (e) {
       warnPopulateFailed((e as Error).message);

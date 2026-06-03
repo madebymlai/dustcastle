@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Detection } from "../detect/index.js";
@@ -45,7 +45,7 @@ export interface Provisioned {
  */
 export async function provisionStore(spec: ProvisionSpec): Promise<Provisioned> {
   const physStoreRoot = spec.physStoreRoot ?? join(homedir(), ".nix-portable", "nix", "store");
-  const nixPortable = spec.nixPortable ?? ensureNixPortable();
+  const nixPortable = spec.nixPortable ?? (await ensureNixPortable(spec.logger));
   const mode = chooseRuntimeMode({ unprivilegedUserns: unprivilegedUsernsAvailable() });
   const pname = sanitizePname(basename(spec.projectDir));
 
@@ -262,19 +262,42 @@ function sanitizePname(name: string): string {
   return cleaned.length > 0 ? cleaned : "project";
 }
 
+function classifyCurlStderrLine(line: string): StreamingLogLevel {
+  // curl progress bars and status lines are info; the rest is debug.
+  if (line.includes("%") || line.startsWith("downloading") || line.startsWith("curl")) return "info";
+  return "debug";
+}
+
 /**
  * Locate the dustcastle-owned nix-portable binary, downloading it on first use
- * (ADR 0008 — dustcastle bundles/manages the rootless runtime). Tests inject an
- * existing binary via `spec.nixPortable` to avoid the download.
+ * with live streaming progress (ADR 0008 — dustcastle bundles/manages the rootless
+ * runtime). Called from the async provision path, which streams the curl download
+ * live. Tests inject an existing binary via `spec.nixPortable` to avoid the download.
  */
-export function ensureNixPortable(): string {
+export async function ensureNixPortable(logger?: Logger): Promise<string> {
   const dir = join(homedir(), ".dustcastle", "bin");
   const bin = join(dir, "nix-portable");
   if (existsSync(bin)) return bin;
   mkdirSync(dir, { recursive: true });
   const url = `https://github.com/DavHau/nix-portable/releases/latest/download/nix-portable-${process.arch === "arm64" ? "aarch64" : "x86_64"}`;
-  const dl = spawnSync("curl", ["-fsSL", url, "-o", bin], { encoding: "utf8" });
-  if (dl.status !== 0) throw new Error(`store: failed to download nix-portable:\n${dl.stderr}`);
-  spawnSync("chmod", ["+x", bin]);
+  const dl = await runStreamingAsync("curl", ["-fsSL", url, "-o", bin], {
+    logger: logger ?? noopLogger,
+    label: "nix-portable-dl",
+    classifyStderrLine: classifyCurlStderrLine,
+  });
+  if (dl.status !== 0) throw new Error(`store: failed to download nix-portable:\n${dl.stderr.slice(-2000)}`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+/**
+ * The synchronous variant of `ensureNixPortable` for GC paths (nixPortableRunner).
+ * By the time GC runs, the binary has already been downloaded by the provision path
+ * — the Store always provisions first. Throws if the binary is missing (a manual
+ * `dustcastle gc` run before any `dustcastle run`).
+ */
+export function ensureNixPortableSync(): string {
+  const bin = join(homedir(), ".dustcastle", "bin", "nix-portable");
+  if (!existsSync(bin)) throw new Error("nix-portable not found — run `dustcastle run` first to download it");
   return bin;
 }
