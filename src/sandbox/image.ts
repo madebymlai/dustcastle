@@ -107,15 +107,14 @@ export function buildArgs(image: string, containerfile: string): string[] {
 }
 
 /**
- * Classify a podman build stderr line into a {@link StreamingLogLevel} for the
- * curation seam: progress lines (STEP, -->, Successfully) surface at info; the
- * rest routes to debug. Tunable by tests that inject a runner.
+ * Classify a podman build output line into a {@link StreamingLogLevel} for the
+ * curation seam: only the `STEP x/y` progression is user-facing progress (info).
+ * Cache-hit (`-->`) and `Successfully tagged` lines are detail (debug) — the
+ * "built dustcastle image" log already signals success, and a fully-cached build
+ * lists every historical version tag, which is pure noise. Tunable by tests.
  */
 export function classifyPodmanLine(line: string): StreamingLogLevel {
-  if (/^STEP \d+\/\d+/i.test(line) || line.startsWith("-->") || /successfully/i.test(line)) {
-    return "info";
-  }
-  return "debug";
+  return /^STEP \d+\/\d+/i.test(line) ? "info" : "debug";
 }
 
 /**

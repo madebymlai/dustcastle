@@ -119,8 +119,10 @@ describe("populateDepsCache", () => {
 
     await populateDepsCache(dir, cacheDir, populate, logger);
 
-    // The sink receives a stderr line BEFORE the child 'close' event resolves
-    // the promise — the streaming helper line-buffers stderr data as it arrives.
-    expect(logger.records.some((r) => r.level === "info" && r.msg === "populate stderr")).toBe(true);
+    // The streamed "populating <hash>/<dir>" line reaches the logger at info, with
+    // the lockfile hash trimmed to 12 chars (the message IS the line — see emitLine).
+    expect(
+      logger.records.some((r) => r.level === "info" && r.msg?.startsWith("populating abc123/") === true),
+    ).toBe(true);
   });
 });

@@ -18,7 +18,7 @@ describe("loggerConfig", () => {
             level: "info",
             options: {
               destination: 2,
-              ignore: "mod,event,sweptAt,freedBytes,pathsCollected",
+              ignore: "mod,event,sweptAt,freedBytes,pathsCollected,line,stream,cmd",
             },
           },
           {

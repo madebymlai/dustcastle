@@ -61,7 +61,7 @@ export function loggerConfig(opts: CreateLoggerOptions): LoggerConfig {
             // (internal module taxonomy), the operational `event` discriminator, and the
             // swept-sweep numbers are hidden so a user never reads dustcastle's
             // implementation detail off the console — all stay in the flight recorder.
-            ignore: "mod,event,sweptAt,freedBytes,pathsCollected",
+            ignore: "mod,event,sweptAt,freedBytes,pathsCollected,line,stream,cmd",
           },
         },
         {

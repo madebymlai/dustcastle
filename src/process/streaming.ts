@@ -62,7 +62,10 @@ export function runStreamingAsync(
 
   const emitLine = (line: string, stream: "stdout" | "stderr"): void => {
     if (line.length === 0) return;
-    logger[classifyLine(line)]({ line }, `${opts.label} ${stream}`);
+    // The message IS the line, so the console renders one clean row per line. The
+    // line/stream/cmd stay structured fields for the JSONL flight recorder (the
+    // console prettifier ignores them — see loggerConfig's `ignore`).
+    logger[classifyLine(line)]({ line, stream, cmd: opts.label }, line);
   };
 
   // Line-buffer one stream: emit each complete line live as it arrives, and return a

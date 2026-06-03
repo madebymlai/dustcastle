@@ -569,7 +569,7 @@ export async function populateDepsCache(
 
     try {
       const command = populateCommand({ cacheDir, ...entry });
-      const verboseCommand = `echo "populating ${entry.lockfileHash}/${entry.stageDir}" >&2; ${command}`;
+      const verboseCommand = `echo "populating ${entry.lockfileHash.slice(0, 12)}/${entry.stageDir}" >&2; ${command}`;
       const result = await runStreamingAsync("sh", ["-c", verboseCommand], {
         cwd,
         logger,
