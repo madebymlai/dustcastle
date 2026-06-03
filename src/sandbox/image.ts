@@ -108,8 +108,8 @@ export function buildArgs(image: string, containerfile: string): string[] {
 
 /**
  * Classify a podman build stderr line into a {@link StreamingLogLevel} for the
- * curation seam: progress lines (STEP, COMMIT/-->, Successfully) surface at info;
- * the rest routes to debug. Tunable by tests that inject a runner.
+ * curation seam: progress lines (STEP, -->, Successfully) surface at info; the
+ * rest routes to debug. Tunable by tests that inject a runner.
  */
 export function classifyPodmanStderrLine(line: string): StreamingLogLevel {
   if (/^STEP \d+\/\d+/i.test(line) || line.startsWith("-->") || /successfully/i.test(line)) {
@@ -152,7 +152,7 @@ function defaultImageExists(image: string): boolean {
 /** Default runner: a real `podman` spawn, streaming stderr live via the shared helper. */
 function defaultPodmanRun(logger: Logger): PodmanRunner {
   return (args) =>
-    runStreamingAsync("podman", [...args], {
+    runStreamingAsync("podman", args, {
       logger,
       label: "podman",
       classifyStderrLine: classifyPodmanStderrLine,

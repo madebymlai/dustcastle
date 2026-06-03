@@ -43,7 +43,7 @@ export function runStreamingAsync(
     ...(opts.env !== undefined ? { env: opts.env } : {}),
   };
 
-  const child = spawn(command, [...args], spawnOptions);
+  const child = spawn(command, args, spawnOptions);
   const stdoutStream = child.stdout;
   const stderrStream = child.stderr;
   if (stdoutStream === null || stderrStream === null) {
