@@ -469,6 +469,37 @@ function triggerAutoGc(opts: ProvisionOptions): void {
 }
 
 /**
+ * The default budget for the in-Sandbox dep-install hook (ADR 0012). sandcastle's
+ * per-hook default is 60s, which a real install (pip resolve + wheel-build, a large
+ * `npm install`, `cargo fetch`) routinely blows past; 15 minutes covers an outsized
+ * cold install while still bounding a genuinely stuck one. Override globally with
+ * the {@link installHookTimeoutMs} env knob.
+ */
+export const DEFAULT_INSTALL_HOOK_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * Resolve the dep-install hook's timeout (ms). A global escape hatch for repos whose
+ * cold install exceeds the {@link DEFAULT_INSTALL_HOOK_TIMEOUT_MS} default:
+ * `DUSTCASTLE_INSTALL_TIMEOUT_SECONDS` (seconds, matching the existing
+ * `idleTimeoutSeconds` / `DUSTCASTLE_LOG` conventions). Unset → the default; a
+ * non-positive or non-numeric value is a config error, surfaced before any Sandbox
+ * stands up rather than silently ignored.
+ */
+export function installHookTimeoutMs(
+  env: { readonly DUSTCASTLE_INSTALL_TIMEOUT_SECONDS?: string } = process.env,
+): number {
+  const raw = env.DUSTCASTLE_INSTALL_TIMEOUT_SECONDS;
+  if (raw === undefined || raw === "") return DEFAULT_INSTALL_HOOK_TIMEOUT_MS;
+  const seconds = Number(raw);
+  if (!Number.isInteger(seconds) || seconds <= 0) {
+    throw new Error(
+      `DUSTCASTLE_INSTALL_TIMEOUT_SECONDS must be a positive integer (seconds), got: ${raw}`,
+    );
+  }
+  return seconds * 1000;
+}
+
+/**
  * Prepend dustcastle's per-project hooks to any caller hooks (ADR 0002/0012):
  *   - `sandbox.onSandboxReady` — the in-Sandbox install (or, on a cache hit, just the
  *     git-exclude), ahead of the caller's hooks so `go test -mod=vendor` finds its dir;
@@ -477,11 +508,18 @@ function triggerAutoGc(opts: ProvisionOptions): void {
  * Populate (cache misses) is NOT a hook — it runs after `run()` returns (sandcastle
  * runs `host.onSandboxReady` concurrently with the install, so it can't populate after).
  */
-function withSetupHooks(
+export function withSetupHooks(
   existing: SandcastleHandoff["hooks"],
   plan: SandboxPlan,
+  installTimeoutMs: number = installHookTimeoutMs(),
 ): NonNullable<SandcastleHandoff["hooks"]> {
-  const ourSandbox = plan.setupCommands.map((command) => ({ command }));
+  // dustcastle's own setup hooks ARE the dep install (ADR 0012). sandcastle caps
+  // every onSandboxReady hook at HOOK_TIMEOUT_MS=60s by default — far too short for
+  // a real Package Manager install (a pip resolve + wheel-build, `npm install`,
+  // `cargo fetch`), which it has no env knob to relax — so we set `timeoutMs`
+  // explicitly. Caller hooks keep sandcastle's default; only OUR install gets the
+  // generous budget.
+  const ourSandbox = plan.setupCommands.map((command) => ({ command, timeoutMs: installTimeoutMs }));
   const ourHost = plan.hostWorktreeReady.map((command) => ({ command }));
   const callerSandbox = existing?.sandbox;
   const callerHost = existing?.host;
