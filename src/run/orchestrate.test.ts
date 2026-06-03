@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
 import {
+  branchAheadOf,
   branchForIssue,
   completedFrom,
   implementArgs,
@@ -110,6 +112,7 @@ describe("orchestrate logging", () => {
       loadModelSelection: () => ({ model: "test/model" }),
       buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
       currentGitBranch: () => "main",
+      branchAheadOf: () => true,
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
@@ -301,14 +304,95 @@ describe("orchestrate logging", () => {
 });
 
 describe("completedFrom", () => {
-  it("keeps only fulfilled issues that committed, preserving order", () => {
+  it("keeps fulfilled, mergeable issues; drops rejected and non-ahead branches, preserving order", () => {
     const results: PromiseSettledResult<IssueOutcome>[] = [
-      { status: "fulfilled", value: { issue: issue("1"), commits: [{ sha: "a" }] } },
-      { status: "fulfilled", value: { issue: issue("2"), commits: [] } },
+      { status: "fulfilled", value: { issue: issue("1") } },
+      { status: "fulfilled", value: { issue: issue("2") } },
       { status: "rejected", reason: new Error("boom") },
-      { status: "fulfilled", value: { issue: issue("3"), commits: [{ sha: "b" }] } },
+      { status: "fulfilled", value: { issue: issue("3") } },
     ];
-    expect(completedFrom(results).map((i) => i.id)).toEqual(["1", "3"]);
+    // Branch 2 is not ahead of the target (nothing to merge); 1 and 3 are.
+    const ahead = new Set(["1", "3"]);
+    expect(
+      completedFrom(results, (i) => ahead.has(i.id)).map((i) => i.id),
+    ).toEqual(["1", "3"]);
+  });
+});
+
+describe("orchestrate merge gate (regression: a branch left ahead by a prior loop must still merge)", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+
+  // A repo whose `main` has one commit and whose deterministic per-issue branch
+  // carries an EXTRA, unmerged commit — the state an interrupted earlier loop
+  // leaves behind (the worker committed, but the merge never landed).
+  function repoWithStrandedBranch(branch: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-strand-"));
+    tmps.push(dir);
+    const git = (...args: string[]): void => {
+      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+    };
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "Test");
+    writeFileSync(join(dir, "base.txt"), "base");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    git("switch", "-qc", branch);
+    writeFileSync(join(dir, "work.txt"), "work");
+    git("add", ".");
+    git("commit", "-qm", "stranded work from a prior loop");
+    git("switch", "-q", "main");
+    return dir;
+  }
+
+  it("branchAheadOf: true only when the branch carries commits not in the target", () => {
+    const branch = branchForIssue("42");
+    const dir = repoWithStrandedBranch(branch);
+    expect(branchAheadOf(dir, "main", branch)).toBe(true); // a prior loop's commit
+    expect(branchAheadOf(dir, "main", "main")).toBe(false); // nothing ahead of itself
+    expect(branchAheadOf(dir, "main", "sandcastle/issue-nope")).toBe(false); // unborn → fail-safe
+  });
+
+  it("merges the stranded branch even when this loop's worker produces no new commits", async () => {
+    const dir = repoWithStrandedBranch(branchForIssue("42"));
+    const runNames: string[] = [];
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      run: async (args) => {
+        runNames.push(String(args.name));
+        if (args.name === "Planner") return { output: { issues: [issue("42")] } };
+        return { output: { issues: [] } };
+      },
+      // The worker finds the work already on the branch and commits nothing new.
+      createSandbox: async () => ({
+        run: async () => ({ commits: [] }),
+        close: async () => {},
+      }),
+    };
+
+    await orchestrate({
+      cwd: dir,
+      targetBranch: "main",
+      maxLoops: 1,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: createMemoryLogger().child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    // The branch carries an unmerged commit, so the merge phase MUST run — the
+    // earlier bug skipped it because the worker produced no commits THIS loop.
+    expect(runNames).toContain("Merger");
   });
 });
 

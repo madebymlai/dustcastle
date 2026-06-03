@@ -97,25 +97,28 @@ export function mergeArgs(issues: readonly PlannedIssue[]): Record<string, strin
   };
 }
 
-// The result of one issue's implement→review pipeline: the issue plus the
-// commits it accumulated (implementer + reviewer). Only the count matters here.
+// The result of one issue's implement→review pipeline. Merge eligibility is decided
+// from the branch's state versus the target (see {@link branchAheadOf}), not from
+// this loop's commit count, so the outcome carries only the issue.
 export interface IssueOutcome {
   readonly issue: PlannedIssue;
-  readonly commits: readonly unknown[];
 }
 
-// Of the parallel per-issue outcomes, the completed ones are those that
-// fulfilled (didn't throw) and actually committed work. Only these advance to
-// the merge phase; order is preserved.
+// Of the parallel per-issue outcomes, the mergeable ones are those whose pipeline
+// fulfilled (didn't throw) AND whose branch carries commits not yet in the target
+// (`isMergeable`). Keying on branch-ahead-of-target rather than "committed this loop"
+// is what lets a branch left ahead by an earlier, interrupted loop still merge;
+// order is preserved.
 export function completedFrom(
   results: readonly PromiseSettledResult<IssueOutcome>[],
+  isMergeable: (issue: PlannedIssue) => boolean,
 ): PlannedIssue[] {
   return results
     .filter(
       (r): r is PromiseFulfilledResult<IssueOutcome> => r.status === "fulfilled",
     )
-    .filter((r) => r.value.commits.length > 0)
-    .map((r) => r.value.issue);
+    .map((r) => r.value.issue)
+    .filter(isMergeable);
 }
 
 // ── The live multi-phase loop (gated: needs a pi+bd sandbox image, a host pi
@@ -156,6 +159,7 @@ export interface OrchestrateDeps {
     selection: NonNullable<ReturnType<typeof loadModelSelection>>,
   ): sandcastle.AgentProvider;
   currentGitBranch(cwd: string): string;
+  branchAheadOf(cwd: string, targetBranch: string, branch: string): boolean;
   withProvisionedSandbox<T>(
     opts: ProvisionOptions,
     body: (sandbox: ProvisionedSandbox) => Promise<T>,
@@ -169,6 +173,7 @@ const liveOrchestrateDeps: OrchestrateDeps = {
   loadModelSelection,
   buildPiAgent,
   currentGitBranch,
+  branchAheadOf,
   withProvisionedSandbox,
   run: sandcastle.run as unknown as OrchestrateDeps["run"],
   createSandbox: sandcastle.createSandbox as unknown as OrchestrateDeps["createSandbox"],
@@ -264,7 +269,9 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
         ),
       );
 
-      const completed = completedFrom(outcomes);
+      const completed = completedFrom(outcomes, (issue) =>
+        deps.branchAheadOf(opts.cwd, targetBranch, issue.branch),
+      );
       if (completed.length === 0) {
         logger.info(
           { event: "skip_merge", loop, completedCount: 0 },
@@ -331,17 +338,19 @@ async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
       promptArgs: implementArgs(issue),
       maxIterations: phaseConfig("implement").maxIterations,
     });
-    if (impl.commits.length === 0) {
-      return { issue, commits: [] };
+    // The reviewer only runs if the implementer committed something to review; its
+    // own commits (if any) land on the branch and are picked up by the merge gate,
+    // which reads branch-ahead-of-target rather than this pipeline's return value.
+    if (impl.commits.length > 0) {
+      await sandbox.run({
+        agent,
+        name: "Reviewer",
+        promptFile: orchestrationPromptPath("review"),
+        promptArgs: reviewArgs(issue, targetBranch),
+        maxIterations: phaseConfig("review").maxIterations,
+      });
     }
-    const review = await sandbox.run({
-      agent,
-      name: "Reviewer",
-      promptFile: orchestrationPromptPath("review"),
-      promptArgs: reviewArgs(issue, targetBranch),
-      maxIterations: phaseConfig("review").maxIterations,
-    });
-    return { issue, commits: [...impl.commits, ...review.commits] };
+    return { issue };
   } finally {
     await sandbox.close();
   }
@@ -352,4 +361,27 @@ function currentGitBranch(cwd: string): string {
     cwd,
     encoding: "utf8",
   }).trim();
+}
+
+/**
+ * Whether `branch` carries commits not yet in `targetBranch` — the merge-eligibility
+ * signal. Deterministic per-issue branch names accumulate progress ACROSS loops (see
+ * {@link branchForIssue}), so the question is whether the branch is ahead of the
+ * target, NOT whether the worker committed in THIS loop: a branch left ahead by an
+ * earlier (interrupted) loop must still merge. An unknown/unborn branch — or any git
+ * error — is "nothing to merge" (false), keeping the gate fail-safe.
+ */
+export function branchAheadOf(cwd: string, targetBranch: string, branch: string): boolean {
+  try {
+    const count = execFileSync(
+      "git",
+      ["rev-list", "--count", `${targetBranch}..${branch}`],
+      // Capture stdout; silence stderr so the common unborn-branch case (git's
+      // "fatal: ambiguous argument") doesn't spam the console — we handle it below.
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    return Number(count) > 0;
+  } catch {
+    return false; // unknown/unborn branch — nothing to merge
+  }
 }
