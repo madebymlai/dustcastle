@@ -8,7 +8,8 @@ import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/pl
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore, storeHashOf, type Provisioned } from "../store/index.js";
 import { nixPortableRunner, type NixRunner } from "../store/nix.js";
-import { storePool } from "../store/storePool.js";
+import { storePool, type StorePoolOptions } from "../store/storePool.js";
+import type { Pool } from "../store/pool.js";
 import {
   depsCacheDecision,
   populateCommand,
@@ -220,17 +221,23 @@ export interface ProvisionOptions extends PrepareOptions {
   /**
    * Override the auto-GC plumbing (ADR 0007). After the run completes, dustcastle
    * upserts this project's recency record + a persistent recency root, then spawns
-   * the detached `__autogc` one-shot. Tests/e2e set `disabled: true` (don't touch
-   * `~` or spawn a child) or inject the runner / dirs / spawn fn; production uses
-   * the dustcastle-owned home + a real nix-portable spawn.
+   * the detached `__autogc` one-shot. Tests/e2e inject the runner / dirs and a no-op
+   * `spawn` (which suppresses the child), or inject `makeStorePool` (below) for a stub
+   * pool; production uses the dustcastle-owned home + a real nix-portable spawn.
    */
   readonly autoGc?: {
-    readonly disabled?: boolean;
     readonly run?: NixRunner;
     readonly recencyDir?: string;
     readonly recencyRootsDir?: string;
     readonly spawn?: () => void;
   };
+  /**
+   * Inject the Store pool at the seam (ADR 0012/0015). A factory called with the run's
+   * `StorePoolOptions`; defaults to `storePool`. A test passes a stub so it can assert
+   * the run's pin → warm → release through the pool without touching `~` or nix — the
+   * GC mechanism itself is tested at the pool layer (`storePool.test.ts`).
+   */
+  readonly makeStorePool?: (opts: StorePoolOptions) => Pool;
 }
 
 export interface RunOptions extends ProvisionOptions {
@@ -360,7 +367,8 @@ export async function withProvisionedSandbox<T>(
     // and the recency index; no out-of-band registerScopedRoots/registerRecencyRoot
     // /upsertRecency calls remain.
     projectKey = gcProjectKey(prepared);
-    pool = storePool({
+    const makeStorePool = opts.makeStorePool ?? storePool;
+    pool = makeStorePool({
       run: opts.gcRoots?.run ?? opts.autoGc?.run ?? nixPortableRunner(),
       dir: opts.autoGc?.recencyDir ?? DUSTCASTLE_HOME,
       ...(opts.gcRoots?.gcrootsDir !== undefined ? { gcrootsDir: opts.gcRoots.gcrootsDir } : {}),
@@ -440,9 +448,8 @@ export async function withProvisionedSandbox<T>(
   }
 }
 
-/** Spawn the detached `__autogc` one-shot, unless disabled/injected (ADR 0007). Never throws. */
+/** Spawn the detached `__autogc` one-shot, unless an injected `spawn` overrides it (ADR 0007). Never throws. */
 function triggerAutoGc(opts: ProvisionOptions): void {
-  if (opts.autoGc?.disabled === true) return;
   try {
     if (opts.autoGc?.spawn !== undefined) opts.autoGc.spawn();
     else spawnAutoGc({ logger: subsystemLogger(opts.logger, "gc") });
