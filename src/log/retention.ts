@@ -2,7 +2,7 @@ import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { noopLogger, type Logger } from "./index.js";
 
-export const FLIGHT_RECORDER_CEILING_BYTES = 2 ** 24;
+export const FLIGHT_RECORDER_CEILING_BYTES = 16 * 1024 * 1024;
 
 export interface RunLogEntry {
   readonly path: string;
@@ -24,35 +24,35 @@ export interface PruneRunLogsOptions {
 }
 
 export function runsToEvict(entries: readonly RunLogEntry[], ceilingBytes: number): string[] {
-  const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+  const totalBytes = totalRunLogBytes(entries);
   if (totalBytes <= ceilingBytes) return [];
 
   let bytesAfterEviction = totalBytes;
-  const evicted: string[] = [];
-  const oldestFirst = [...entries].sort((a, b) => a.createdAtMs - b.createdAtMs || a.path.localeCompare(b.path));
+  const pathsToEvict: string[] = [];
+  const oldestFirst = [...entries].sort(compareOldestRunLogFirst);
 
   for (const entry of oldestFirst) {
     if (bytesAfterEviction <= ceilingBytes) break;
-    evicted.push(entry.path);
+    pathsToEvict.push(entry.path);
     bytesAfterEviction -= entry.bytes;
   }
-  return evicted;
+  return pathsToEvict;
 }
 
 export function pruneRunLogs(opts: PruneRunLogsOptions): PruneRunLogsReport {
   const logger = opts.logger ?? noopLogger;
   const ceilingBytes = opts.ceilingBytes ?? FLIGHT_RECORDER_CEILING_BYTES;
   const entries = readRunLogEntries(opts.runsDir);
-  const bytesBefore = entries.reduce((sum, entry) => sum + entry.bytes, 0);
-  const paths = runsToEvict(entries, ceilingBytes);
-  const entryByPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const bytesBefore = totalRunLogBytes(entries);
+  const pathsToEvict = runsToEvict(entries, ceilingBytes);
+  const bytesByPath = new Map(entries.map((entry) => [entry.path, entry.bytes]));
 
   let bytesFreed = 0;
   let runsDeleted = 0;
-  for (const path of paths) {
+  for (const path of pathsToEvict) {
     try {
       rmSync(path, { force: true });
-      bytesFreed += entryByPath.get(path)?.bytes ?? 0;
+      bytesFreed += bytesByPath.get(path) ?? 0;
       runsDeleted += 1;
     } catch (e) {
       logger.warn({ err: (e as Error).message, path }, "flight-recorder run log eviction failed (best-effort)");
@@ -66,6 +66,14 @@ export function pruneRunLogs(opts: PruneRunLogsOptions): PruneRunLogsReport {
     logger.debug({ bytesBefore, ceilingBytes }, "flight-recorder run logs within ceiling");
   }
   return { bytesBefore, bytesAfter, bytesFreed, runsDeleted };
+}
+
+function totalRunLogBytes(entries: readonly RunLogEntry[]): number {
+  return entries.reduce((sum, entry) => sum + entry.bytes, 0);
+}
+
+function compareOldestRunLogFirst(a: RunLogEntry, b: RunLogEntry): number {
+  return a.createdAtMs - b.createdAtMs || a.path.localeCompare(b.path);
 }
 
 function readRunLogEntries(runsDir: string): RunLogEntry[] {

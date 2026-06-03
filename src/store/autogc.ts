@@ -106,7 +106,7 @@ export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
     // Still run the flight-recorder prune under the lock; the two cleanups share the
     // one post-run lifecycle, but recorder retention is independent of pool GC.
     logger.warn({ err: (e as Error).message }, "sweep failed (best-effort, run unaffected)");
-    return { ...NOOP, runLogs: pruneFlightRecorder(opts, logger) };
+    return { ...NOOP, runLogs: pruneFlightRecorderLogs(opts, logger) };
   } finally {
     try {
       closeSync(fd);
@@ -136,7 +136,7 @@ function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
   const before = overCeiling({ storeBytes: storeBytes + cacheBytes(), freeBytes: free, totalBytes: total });
   if (!before.over) {
     logger.info({ storeBytes: storeBytes + cacheBytes() }, "store+cache within ceiling — nothing to sweep");
-    const runLogs = pruneFlightRecorder(opts, logger);
+    const runLogs = pruneFlightRecorderLogs(opts, logger);
     return { swept: false, reason: before.reason, storeBytes, freedBytes: 0, runLogs };
   }
   logger.info({ reason: before.reason, storeBytes: storeBytes + cacheBytes() }, "over ceiling — sweeping");
@@ -165,11 +165,19 @@ function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
 
   const freedBytes = optimise.bytesFreed + (gc?.bytesFreed ?? 0) + cacheFreed;
   appendSweepLog(opts, freedBytes, gc);
-  const runLogs = pruneFlightRecorder(opts, logger);
-  return { swept: true, reason: before.reason, storeBytes, freedBytes, runLogs, optimise, ...(gc !== undefined ? { gc } : {}) };
+  const runLogs = pruneFlightRecorderLogs(opts, logger);
+  return {
+    swept: true,
+    reason: before.reason,
+    storeBytes,
+    freedBytes,
+    runLogs,
+    optimise,
+    ...(gc !== undefined ? { gc } : {}),
+  };
 }
 
-function pruneFlightRecorder(opts: AutoGcOptions, logger: Logger): PruneRunLogsReport {
+function pruneFlightRecorderLogs(opts: AutoGcOptions, logger: Logger): PruneRunLogsReport {
   try {
     return pruneRunLogs({
       runsDir: opts.runLogDir ?? join(opts.dir, "runs"),
