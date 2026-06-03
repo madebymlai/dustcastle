@@ -58,7 +58,7 @@ function provisionedMessage(log: ProvisionedLogEvent): string {
       (toolchain) =>
         `    ${toolchain.ecosystem.padEnd(7)}: ${toolchain.version ?? "(default)"}  ${toolchain.storePath}`,
     ),
-    "    deps       : installed in-Sandbox (ADR 0012)",
+    "    deps       : installed in-Sandbox",
     `    egress     : ${egressMessage(log.egress)}`,
     "    /nix/store mounted read-only into the sandbox",
   ];
@@ -74,12 +74,10 @@ function sweptMessage(log: SweptLogEvent): string {
 }
 
 function ordinaryMessage(log: MessageFormatLog): string {
-  const msg = stringValue(log.msg);
-  const mod = stringValue(log.mod);
-  if (mod !== undefined && msg !== undefined) return `${mod}: ${msg}`;
-  if (msg !== undefined) return msg;
-  if (mod !== undefined) return `${mod}:`;
-  return "";
+  // The message only — `mod` is dustcastle's internal module taxonomy
+  // (egress/store/orchestrate/gc), an implementation detail a watching user should
+  // not have to decode. It stays in the JSON flight recorder, not on the console.
+  return stringValue(log.msg) ?? "";
 }
 
 function egressMessage(egress: ProvisionedEgressLog): string {

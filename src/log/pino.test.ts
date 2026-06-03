@@ -16,7 +16,10 @@ describe("loggerConfig", () => {
           {
             target: prettyTransport,
             level: "info",
-            options: { destination: 2, colorize: false, include: "msg" },
+            options: {
+              destination: 2,
+              ignore: "mod,event,ecosystems,mode,egress,toolchains,note,agent,line,sweptAt,freedBytes,pathsCollected",
+            },
           },
           {
             target: "pino/file",

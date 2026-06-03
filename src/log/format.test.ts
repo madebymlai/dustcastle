@@ -23,7 +23,7 @@ describe("messageFormat", () => {
       "    store mode : bwrap  (rootless nix-portable)",
       "    node   : 20.18.1  /nix/store/node-toolchain",
       "    python : (default)  /nix/store/python-toolchain",
-      "    deps       : installed in-Sandbox (ADR 0012)",
+      "    deps       : installed in-Sandbox",
       "    egress     : allowlist — build: [registry.npmjs.org, pypi.org]  agent: [api.openai.com]",
       "    /nix/store mounted read-only into the sandbox",
     ].join("\n"));
@@ -35,8 +35,9 @@ describe("messageFormat", () => {
     );
   });
 
-  it("renders ordinary records as mod-prefixed messages", () => {
-    expect(messageFormat({ mod: "gc", msg: "collecting" })).toBe("gc: collecting");
+  it("renders ordinary records as the bare message (mod stays out of the console)", () => {
+    // `mod` is implementation detail — it never reaches the console message; only msg does.
+    expect(messageFormat({ mod: "gc", msg: "collecting" })).toBe("collecting");
     expect(messageFormat({ msg: "hello" })).toBe("hello");
   });
 });
