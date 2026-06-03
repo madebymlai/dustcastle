@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
-import type { NixResult } from "../store/gc.js";
+import type { NixResult } from "../store/nix.js";
 import { runGcCommand } from "./gc.js";
 
 // `dustcastle gc` (ADR 0007/0012): the manual, user-invoked sweep — optimise then

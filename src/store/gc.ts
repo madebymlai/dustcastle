@@ -1,11 +1,14 @@
-import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { noopLogger, type Logger } from "../log/index.js";
 import { overCeiling, type CeilingReason } from "./ceiling.js";
-import { ensureNixPortableSync } from "./index.js";
-import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
+import {
+  addRootArgs,
+  nixPortableRunner,
+  type NixResult,
+  type NixRunner,
+} from "./nix.js";
 
 /**
  * Store lifecycle management (ADR 0007). Nix never garbage-collects by default, so
@@ -15,10 +18,9 @@ import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from
  * from under it, released on completion; (2) `nix-store --gc` on a policy, deleting
  * only unrooted paths; (3) `nix-store --optimise`, file-level hard-link dedup.
  *
- * The pure decisions (which paths root, command construction, report parsing) are
- * here and unit-tested; the imperative orchestration runs through nix-portable (the
- * same spawn shape as `runNixBuild`) behind an injected runner, so the command
- * sequence is unit-tested and the live `nix-store --gc` is gated.
+ * The nix-portable port (runner, command vocabulary, report parsers) lives in
+ * `nix.ts` — the single learnable surface for how to talk to nix. The root lifecycle
+ * (scoped + recency roots, prune) is here, driven through that port.
  */
 
 /** A store path a provision realizes, tagged by its role in the closure. */
@@ -79,31 +81,6 @@ export function recencyTailKeys(records: readonly RecencyRecord[], budgetBytes: 
  * below/in `ceiling.ts` live on; only their wrapper is gone.
  */
 
-/** `nix-store --add-root <link> --realise <path>` — register an (indirect) GC root. */
-export function addRootArgs(storePath: string, link: string): string[] {
-  return ["nix-store", "--add-root", link, "--realise", storePath];
-}
-
-/** `nix-store --gc` — delete every unreachable (unrooted) store path. */
-export function collectGarbageArgs(): string[] {
-  return ["nix-store", "--gc"];
-}
-
-/** `nix-store --optimise` — reclaim space by hard-linking identical files. */
-export function optimiseArgs(): string[] {
-  return ["nix-store", "--optimise"];
-}
-
-/**
- * Non-destructive GC query (`nix-store --gc --print-{dead,live}`): list the paths a
- * sweep WOULD delete (`dead`) or keep (`live`) without deleting anything. The
- * dry-run the policy layer (and the gated e2e) uses to prove a scoped root protects
- * its closure without endangering the shared warm store.
- */
-export function gcQueryArgs(which: "dead" | "live"): string[] {
-  return ["nix-store", "--gc", `--print-${which}`];
-}
-
 /** Sanitize a project key (a hash with `/`, `+`, `=`) into one filesystem-safe name. */
 function sanitizeKey(projectKey: string): string {
   return projectKey.replace(/[^A-Za-z0-9._-]/g, "_");
@@ -119,40 +96,10 @@ export function gcRootLink(gcrootsDir: string, projectKey: string, kind: RootPat
   return join(gcrootsDir, `${sanitizeKey(projectKey)}-${kind}`);
 }
 
-/** What a GC sweep collected — surfaced, never silent (ADR 0007). */
-export interface GcReport {
-  readonly pathsDeleted: number;
-  readonly bytesFreed: number;
-}
-
-/** What an optimise pass reclaimed by hard-linking. */
-export interface OptimiseReport {
-  readonly bytesFreed: number;
-  readonly filesLinked: number;
-}
-
-/** Parse `nix-store --gc` output: a `deleting "…"` line per path + a `N bytes freed` total. */
-export function parseGcReport(output: string): GcReport {
-  const pathsDeleted = (output.match(/^deleting /gm) ?? []).length;
-  const bytesFreed = Number(output.match(/(\d+)\s+bytes freed/)?.[1] ?? 0);
-  return { pathsDeleted, bytesFreed };
-}
-
-/** Parse `nix-store --optimise` output: `N bytes (… MiB) freed by hard-linking M files`. */
-export function parseOptimiseReport(output: string): OptimiseReport {
-  const match = output.match(/(\d+)\s+bytes.*?freed by hard-linking\s+(\d+)\s+files/s);
-  return { bytesFreed: Number(match?.[1] ?? 0), filesLinked: Number(match?.[2] ?? 0) };
-}
-
-/** The minimal result of a nix invocation the orchestration reasons about. */
-export interface NixResult {
-  readonly status: number | null;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-/** Runs `nix-portable <args>`. Injected in tests; defaults to a real nix-portable spawn. */
-export type NixRunner = (args: readonly string[]) => NixResult;
+// Re-exported from nix.ts so internal consumers (registerScopedRoots, etc.)
+// can still reach the nix port through the existing gc.ts import paths while
+// the rest of the repo migrates to importing from nix.ts directly.
+export { addRootArgs, nixPortableRunner, type NixResult, type NixRunner } from "./nix.js";
 
 /** A handle to a run's scoped GC roots: where they live, and how to release them. */
 export interface ScopedRootsHandle {
@@ -301,8 +248,8 @@ export function pruneRecencyRoots(opts: {
  * drives `collectPool` per pool; the manual `dustcastle gc` (`cli/gc.ts`) drives
  * `collectPools` over the Store + deps-cache pools with a zero budget. The Store pool
  * (`storePool.ts`) owns the optimise → prune-cold-roots → `nix-store --gc` mechanism;
- * `collectGarbageArgs`/`optimiseArgs`/`parseGcReport`/`parseOptimiseReport` live on as
- * its building blocks.
+ * `collectGarbageArgs`/`optimiseArgs`/`parseGcReport`/`parseOptimiseReport` live on in
+ * `nix.ts` as its building blocks.
  */
 
 /** The dustcastle-owned scoped-root directory under the rootless store install (ADR 0007/0008). */
@@ -315,16 +262,4 @@ export function defaultRecencyRootsDir(): string {
   return join(homedir(), ".dustcastle", "recency-roots");
 }
 
-/** A real nix-portable runner: same spawn shape as `runNixBuild` (NP_RUNTIME env). */
-export function nixPortableRunner(): NixRunner {
-  const nixPortable = ensureNixPortableSync();
-  const mode: RuntimeMode = chooseRuntimeMode({ unprivilegedUserns: unprivilegedUsernsAvailable() });
-  return (args: readonly string[]): NixResult => {
-    const r = spawnSync(nixPortable, [...args], {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      env: { ...process.env, NP_RUNTIME: mode },
-    });
-    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-  };
-}
+

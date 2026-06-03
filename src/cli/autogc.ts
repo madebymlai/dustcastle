@@ -5,7 +5,8 @@ import { noopLogger, type Logger } from "../log/index.js";
 import { autoGc, type AutoGcOptions } from "../store/autogc.js";
 import { diskSpace, measureStoreBytes } from "../store/ceiling.js";
 import { defaultDepsCacheDir } from "../store/depscache/index.js";
-import { defaultRecencyRootsDir, nixPortableRunner } from "../store/gc.js";
+import { defaultRecencyRootsDir } from "../store/gc.js";
+import { nixPortableRunner } from "../store/nix.js";
 
 /**
  * The hidden `dustcastle __autogc` child entry (ADR 0007) — the detached one-shot

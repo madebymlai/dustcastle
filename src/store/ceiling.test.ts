@@ -8,8 +8,8 @@ import {
   overCeiling,
   recencyBudgetBytes,
   storeCapBytes,
-  type NixResult,
 } from "./ceiling.js";
+import type { NixResult } from "./nix.js";
 
 // The hybrid high/low watermark (ADR 0007). A sweep fires when EITHER the Store
 // exceeds a disk-derived size cap (high watermark) OR free space on the Store's

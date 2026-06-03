@@ -3,20 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  addRootArgs,
-  collectGarbageArgs,
-  gcQueryArgs,
   gcRootLink,
-  optimiseArgs,
-  parseGcReport,
-  parseOptimiseReport,
   pruneRecencyRoots,
   registerRecencyRoot,
   registerScopedRoots,
   recencyTailKeys,
   rootStorePaths,
-  type NixResult,
 } from "./gc.js";
+import type { NixResult } from "./nix.js";
 
 // Store lifecycle (ADR 0007). The shared rootless /nix/store grows unbounded; 3b
 // keeps it lean WITHOUT collecting paths a live run still needs: scoped GC roots
@@ -35,50 +29,13 @@ describe("rootStorePaths (which paths a provision pins — ADR 0007)", () => {
   });
 });
 
-describe("command construction (driven through nix-portable — ADR 0007)", () => {
-  it("registers an indirect GC root with `nix-store --add-root <link> --realise <path>`", () => {
-    expect(addRootArgs("/nix/store/aaa-node", "/roots/proj-toolchain")).toEqual([
-      "nix-store",
-      "--add-root",
-      "/roots/proj-toolchain",
-      "--realise",
-      "/nix/store/aaa-node",
-    ]);
-  });
-
-  it("builds the collect-garbage and optimise invocations", () => {
-    expect(collectGarbageArgs()).toEqual(["nix-store", "--gc"]);
-    expect(optimiseArgs()).toEqual(["nix-store", "--optimise"]);
-  });
-
-  it("builds non-destructive dry-run queries (paths a sweep would keep/delete)", () => {
-    expect(gcQueryArgs("dead")).toEqual(["nix-store", "--gc", "--print-dead"]);
-    expect(gcQueryArgs("live")).toEqual(["nix-store", "--gc", "--print-live"]);
-  });
-
+describe("gcRootLink (sanitized root-link construction — ADR 0007)", () => {
   it("keys the scoped-root link by project + toolchain kind (ADR 0007)", () => {
     const link = gcRootLink("/roots", "sha256-AbC/d+e=", "toolchain");
     expect(link.startsWith("/roots/")).toBe(true);
     expect(link.endsWith("-toolchain")).toBe(true);
     // The link name is filesystem-safe (no slashes from the key leak through).
     expect(link.slice("/roots/".length)).not.toContain("/");
-  });
-});
-
-describe("report parsing (the surfaced, never-silent GC report — ADR 0007)", () => {
-  it("parses paths-deleted + bytes-freed from `nix-store --gc` output", () => {
-    const out =
-      'deleting "/nix/store/xxx-old"\ndeleting "/nix/store/yyy-old"\n8825586 bytes freed (8.42 MiB)\n';
-    expect(parseGcReport(out)).toEqual({ pathsDeleted: 2, bytesFreed: 8825586 });
-  });
-
-  it("parses bytes-freed + files-linked from `nix-store --optimise` output", () => {
-    const out = "541838819 bytes (516.74 MiB) freed by hard-linking 54143 files;\n";
-    expect(parseOptimiseReport(out)).toEqual({ bytesFreed: 541838819, filesLinked: 54143 });
-  });
-
-  it("reports nothing freed when the store is already lean", () => {
-    expect(parseGcReport("0 bytes freed (0.00 MiB)\n")).toEqual({ pathsDeleted: 0, bytesFreed: 0 });
   });
 });
 

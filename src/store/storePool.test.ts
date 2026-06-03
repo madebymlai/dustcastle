@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { gcRootLink, type NixResult } from "./gc.js";
+import { gcRootLink } from "./gc.js";
+import type { NixResult } from "./nix.js";
 import { collectPool } from "./pool.js";
 import { storePool, type StoreClosure } from "./storePool.js";
 import { upsertRecency } from "./recency.js";

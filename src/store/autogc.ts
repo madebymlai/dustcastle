@@ -2,8 +2,8 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync } 
 import { join } from "node:path";
 import { noopLogger, type Logger } from "../log/index.js";
 import { pruneRunLogs, type PruneRunLogsReport } from "../log/retention.js";
-import { overCeiling, recencyBudgetBytes, type CeilingReason, type NixRunner } from "./ceiling.js";
-import type { GcReport, OptimiseReport } from "./gc.js";
+import { overCeiling, recencyBudgetBytes, type CeilingReason } from "./ceiling.js";
+import type { GcReport, OptimiseReport, NixRunner } from "./nix.js";
 import { collectPool } from "./pool.js";
 import { depsCachePool } from "./depscache/index.js";
 import { storePool } from "./storePool.js";

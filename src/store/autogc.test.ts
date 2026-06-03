@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
 import { autoGc, readLastSweepLine } from "./autogc.js";
-import { gcRootLink, type NixResult } from "./gc.js";
+import { gcRootLink } from "./gc.js";
+import type { NixResult } from "./nix.js";
 import { upsertRecency } from "./recency.js";
 
 // The detached one-shot's brain (ADR 0007): lock → measure → load recency → plan →

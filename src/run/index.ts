@@ -7,13 +7,12 @@ import { deriveEgress, gitRemoteHost, type EgressDecision } from "../sandbox/egr
 import { planSandbox, type EcosystemPlan, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore, storeHashOf, type Provisioned } from "../store/index.js";
+import { nixPortableRunner, type NixRunner } from "../store/nix.js";
 import {
   defaultGcRootsDir,
   defaultRecencyRootsDir,
-  nixPortableRunner,
   registerRecencyRoot,
   registerScopedRoots,
-  type NixRunner,
 } from "../store/gc.js";
 import { closureSizeBytes } from "../store/ceiling.js";
 import { upsertRecency } from "../store/recency.js";

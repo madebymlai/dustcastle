@@ -3,11 +3,10 @@ import {
   optimiseArgs,
   parseGcReport,
   parseOptimiseReport,
-  pruneRecencyRoots,
-  registerScopedRoots,
   type NixRunner,
   type OptimiseReport,
-} from "./gc.js";
+} from "./nix.js";
+import { pruneRecencyRoots, registerScopedRoots } from "./gc.js";
 import { closureSizeBytes, measureStoreBytes } from "./ceiling.js";
 import { loadRecency } from "./recency.js";
 import { noopLogger, type Logger } from "../log/index.js";

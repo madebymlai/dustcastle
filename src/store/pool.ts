@@ -1,4 +1,5 @@
-import { recencyTailKeys, type GcReport, type OptimiseReport } from "./gc.js";
+import { recencyTailKeys } from "./gc.js";
+import type { GcReport, OptimiseReport } from "./nix.js";
 
 /**
  * The reusable GC pool interface (ADR 0012). dustcastle's GC is already a pure

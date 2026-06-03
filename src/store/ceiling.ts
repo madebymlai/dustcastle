@@ -1,5 +1,5 @@
 import { statfsSync } from "node:fs";
-import type { NixRunner } from "./gc.js";
+import type { NixRunner } from "./nix.js";
 
 /**
  * The disk-derived hybrid ceiling (ADR 0007). Nix never garbage-collects by
@@ -20,9 +20,6 @@ import type { NixRunner } from "./gc.js";
  * / `diskSpace`).
  */
 
-// Re-exported so callers (ceiling.test.ts, autogc) get the nix runner contract
-// from one place without reaching into gc.ts internals.
-export type { NixResult, NixRunner } from "./gc.js";
 
 // Lean defaults: keep the Store a small, disk-scaled slice — never hog disk. On a
 // 500 GB disk the Store triggers a sweep at ~50 GB and collects down to ~35 GB warm
