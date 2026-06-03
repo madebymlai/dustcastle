@@ -11,9 +11,6 @@ result-*
 .dustcastle/
 /store-build/
 
-# Throwaway spike (kept as reference until v1 supersedes it; never committed)
-spike-go-store/
-
 # Test scratch
 /test/.tmp/
 
