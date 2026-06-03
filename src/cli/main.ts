@@ -18,11 +18,7 @@ Usage:
   dustcastle model      Choose the pi agent model (saved globally; every project
                         uses it). Run automatically the first time you 'run'.
   dustcastle gc         Sweep the shared Nix Store now (optimise + collect unrooted
-                        paths). Active runs stay protected by their scoped roots.
-
-  dustcastle run takes no arguments: it detects the ecosystem, realizes the
-  Toolchain into the shared Store, provisions the Sandbox from it, and drives
-  the plan → execute+review → merge loop (ADR 0002).`;
+                        paths). Active runs stay protected by their scoped roots.`;
 
 function createCliLogger() {
   return createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
