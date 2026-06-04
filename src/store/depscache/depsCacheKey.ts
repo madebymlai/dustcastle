@@ -1,8 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Detection } from "../../detect/index.js";
 import { packageManagerDescriptor } from "../../ecosystems/index.js";
+
+const DEPS_CACHE_KEY_VERSION = "2";
 
 /**
  * The deps-cache key for one ecosystem (ADR 0012, dustcastle-8od; dustcastle-8iv.2):
@@ -28,28 +30,32 @@ export function depsCacheKey(projectDir: string, detection: Detection): string |
 
   const { lockfiles } = packageManagerDescriptor(detection.packageManager);
   const hash = createHash("sha256");
-  hashField(hash, "key-version", "2");
-  hashField(hash, "ecosystem", detection.ecosystem);
-  hashField(hash, "package-manager", detection.packageManager);
-  hashField(hash, "toolchain-version", detection.toolchainVersion ?? "");
+  hashDetectionInputs(hash, detection);
 
-  let found = false;
-  for (const name of lockfiles) {
-    const path = join(projectDir, name);
-    if (!existsSync(path)) continue;
+  let hasLockfile = false;
+  for (const lockfileName of lockfiles) {
+    const lockfilePath = join(projectDir, lockfileName);
+    if (!existsSync(lockfilePath)) continue;
     // Fold the lockfile NAME in too, so two managers' identically-empty lockfiles
     // (unlikely, but possible) never collide on the same key.
-    hashField(hash, "lockfile-name", name);
-    hashField(hash, "lockfile-contents", readFileSync(path));
-    found = true;
+    hashField(hash, "lockfile-name", lockfileName);
+    hashField(hash, "lockfile-contents", readFileSync(lockfilePath));
+    hasLockfile = true;
   }
   // No lockfile on disk ⇒ no stable key (a manifest-only ecosystem the loose flag
   // missed still degrades safely to "not cached").
-  if (!found) return undefined;
+  if (!hasLockfile) return undefined;
   return hash.digest("hex");
 }
 
-function hashField(hash: ReturnType<typeof createHash>, name: string, value: string | Buffer): void {
+function hashDetectionInputs(hash: Hash, detection: Detection): void {
+  hashField(hash, "key-version", DEPS_CACHE_KEY_VERSION);
+  hashField(hash, "ecosystem", detection.ecosystem);
+  hashField(hash, "package-manager", detection.packageManager);
+  hashField(hash, "toolchain-version", detection.toolchainVersion ?? "");
+}
+
+function hashField(hash: Hash, name: string, value: string | Buffer): void {
   hash.update(name);
   hash.update("\0");
   hash.update(String(value.length));

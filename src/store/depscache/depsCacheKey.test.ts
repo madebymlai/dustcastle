@@ -10,46 +10,54 @@ import { depsCacheKey } from "./index.js";
 // Package Manager + lockfile contents. A loose / no-lockfile ecosystem has no stable
 // key (undefined), so it is never cached.
 
-const dirs: string[] = [];
+const projectDirs: string[] = [];
 function projectDir(): string {
-  const d = mkdtempSync(join(tmpdir(), "dustcastle-cachekey-"));
-  dirs.push(d);
-  return d;
+  const dir = mkdtempSync(join(tmpdir(), "dustcastle-cachekey-"));
+  projectDirs.push(dir);
+  return dir;
 }
 afterEach(() => {
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+  let dir = projectDirs.pop();
+  while (dir !== undefined) {
+    rmSync(dir, { recursive: true, force: true });
+    dir = projectDirs.pop();
+  }
 });
 
-const npm: Detection = { ecosystem: "node", packageManager: "npm" };
-const go: Detection = { ecosystem: "go", packageManager: "go" };
+const nodeNpm: Detection = { ecosystem: "node", packageManager: "npm" };
+const goModules: Detection = { ecosystem: "go", packageManager: "go" };
 
 describe("depsCacheKey (locked deps key — ADR 0012, dustcastle-8od)", () => {
   it("is a stable hash of the manager's lockfile contents", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
 
-    const key = depsCacheKey(dir, npm);
-    expect(key).toBeDefined();
-    // Stable: the same lockfile contents hash to the same key.
-    expect(depsCacheKey(dir, npm)).toBe(key);
+    const firstKey = depsCacheKey(dir, nodeNpm);
+    const secondKey = depsCacheKey(dir, nodeNpm);
+
+    expect(firstKey).toBeDefined();
+    expect(secondKey).toBe(firstKey);
   });
 
   it("changes when the lockfile contents change (a new lockfile ⇒ a new entry)", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
-    const before = depsCacheKey(dir, npm);
+    const originalKey = depsCacheKey(dir, nodeNpm);
+
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3,"name":"x"}');
-    const after = depsCacheKey(dir, npm);
-    expect(after).not.toBe(before);
+    const changedKey = depsCacheKey(dir, nodeNpm);
+
+    expect(changedKey).not.toBe(originalKey);
   });
 
   it("changes when the resolved Toolchain version changes", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
 
-    expect(depsCacheKey(dir, { ...npm, toolchainVersion: "20.18.0" })).not.toBe(
-      depsCacheKey(dir, { ...npm, toolchainVersion: "22.12.0" }),
-    );
+    const node20Key = depsCacheKey(dir, { ...nodeNpm, toolchainVersion: "20.18.0" });
+    const node22Key = depsCacheKey(dir, { ...nodeNpm, toolchainVersion: "22.12.0" });
+
+    expect(node20Key).not.toBe(node22Key);
   });
 
   it("changes when the Package Manager changes, all else equal", () => {
@@ -57,60 +65,72 @@ describe("depsCacheKey (locked deps key — ADR 0012, dustcastle-8od)", () => {
     writeFileSync(join(dir, "package-lock.json"), "same locked deps\n");
     writeFileSync(join(dir, "pnpm-lock.yaml"), "same locked deps\n");
 
-    expect(depsCacheKey(dir, { ...npm, toolchainVersion: "22.12.0" })).not.toBe(
-      depsCacheKey(dir, {
-        ecosystem: "node",
-        packageManager: "pnpm",
-        toolchainVersion: "22.12.0",
-      }),
-    );
+    const npmKey = depsCacheKey(dir, { ...nodeNpm, toolchainVersion: "22.12.0" });
+    const pnpmKey = depsCacheKey(dir, {
+      ecosystem: "node",
+      packageManager: "pnpm",
+      toolchainVersion: "22.12.0",
+    });
+
+    expect(npmKey).not.toBe(pnpmKey);
   });
 
   it("changes when the Ecosystem changes", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), "same locked deps\n");
 
-    expect(
-      depsCacheKey(dir, { ecosystem: "node", packageManager: "npm", toolchainVersion: "22.12.0" }),
-    ).not.toBe(
-      depsCacheKey(dir, {
-        ecosystem: "python",
-        packageManager: "npm",
-        toolchainVersion: "22.12.0",
-      }),
-    );
+    const nodeKey = depsCacheKey(dir, {
+      ecosystem: "node",
+      packageManager: "npm",
+      toolchainVersion: "22.12.0",
+    });
+    const pythonKey = depsCacheKey(dir, {
+      ecosystem: "python",
+      packageManager: "npm",
+      toolchainVersion: "22.12.0",
+    });
+
+    expect(nodeKey).not.toBe(pythonKey);
   });
 
   it("is stable across irrelevant repo changes", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
-    const before = depsCacheKey(dir, npm);
+    const originalKey = depsCacheKey(dir, nodeNpm);
 
     writeFileSync(join(dir, "README.md"), "changed prose\n");
+    const changedRepoKey = depsCacheKey(dir, nodeNpm);
 
-    expect(depsCacheKey(dir, npm)).toBe(before);
+    expect(changedRepoKey).toBe(originalKey);
   });
 
   it("includes every present lockfile for managers with companion lockfiles", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "go.mod"), "module example.com/app\n");
     writeFileSync(join(dir, "go.sum"), "example.com/dep v1 h1:abc\n");
-    const before = depsCacheKey(dir, go);
+    const originalKey = depsCacheKey(dir, goModules);
 
     writeFileSync(join(dir, "go.sum"), "example.com/dep v1 h1:def\n");
+    const changedKey = depsCacheKey(dir, goModules);
 
-    expect(depsCacheKey(dir, go)).not.toBe(before);
+    expect(changedKey).not.toBe(originalKey);
   });
 
   it("is undefined for a loose / no-lockfile ecosystem (no stable key ⇒ not cached)", () => {
     const dir = projectDir();
     // package.json present but NO lockfile → loose.
     writeFileSync(join(dir, "package.json"), "{}");
-    expect(depsCacheKey(dir, { ...npm, loose: true })).toBeUndefined();
+
+    const key = depsCacheKey(dir, { ...nodeNpm, loose: true });
+
+    expect(key).toBeUndefined();
   });
 
   it("is undefined when the manager's lockfile is absent on disk", () => {
     const dir = projectDir();
-    expect(depsCacheKey(dir, npm)).toBeUndefined();
+
+    const key = depsCacheKey(dir, nodeNpm);
+
+    expect(key).toBeUndefined();
   });
 });
