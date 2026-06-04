@@ -61,6 +61,19 @@ describe("depsCacheKey (project deps fingerprint — ADR 0016)", () => {
     expect(changedKey).not.toBe(originalKey);
   });
 
+  it("includes dependency file names, not only their contents", () => {
+    const manifestOnlyDir = projectDir();
+    writeFileSync(join(manifestOnlyDir, "package.json"), "{}\n");
+
+    const lockfileOnlyDir = projectDir();
+    writeFileSync(join(lockfileOnlyDir, "package-lock.json"), "{}\n");
+
+    const manifestKey = depsCacheKey(manifestOnlyDir, nodeNpm);
+    const lockfileKey = depsCacheKey(lockfileOnlyDir, nodeNpm);
+
+    expect(manifestKey).not.toBe(lockfileKey);
+  });
+
   it("yields a stable defined key for a loose / no-lockfile ecosystem", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package.json"), "{}");

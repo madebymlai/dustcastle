@@ -40,8 +40,12 @@ export function depsCacheDecision(projectDir: string, detection: Detection, cach
   const stageDir = ecosystemFor(detection.ecosystem).sandbox.stageDir;
   return {
     depsKey,
-    hit: existsSync(contentPath(cacheDir, depsKey, stageDir)) && existsSync(completeMarker(cacheDir, depsKey)),
+    hit: completeEntryExists(cacheDir, depsKey, stageDir),
   };
+}
+
+function completeEntryExists(cacheDir: string, depsKey: string, stageDir: string): boolean {
+  return existsSync(contentPath(cacheDir, depsKey, stageDir)) && existsSync(completeMarker(cacheDir, depsKey));
 }
 
 /** The path inputs shared by the pure deps-cache shell command builders. */
@@ -75,11 +79,16 @@ export function restoreCommand(restore: DepsCacheCommandInput): string {
   const src = contentPath(restore.cacheDir, restore.depsKey, restore.stageDir);
   const marker = completeMarker(restore.cacheDir, restore.depsKey);
   const sentinel = installSuccessSentinel(restore.stageDir);
-  return (
-    `if [ -f '${marker}' ] && [ -d '${src}' ]; then ` +
-    `rm -f '${sentinel}' && rm -rf '${restore.stageDir}' && cp -RL '${src}' '${restore.stageDir}' && chmod -R u+rwX '${restore.stageDir}' && touch '${cacheEntryDir}'; ` +
-    `fi`
-  );
+  const stageDir = restore.stageDir;
+  const restoreSteps = shellAnd([
+    `rm -f ${shellQuote(sentinel)}`,
+    `rm -rf ${shellQuote(stageDir)}`,
+    `cp -RL ${shellQuote(src)} ${shellQuote(stageDir)}`,
+    `chmod -R u+rwX ${shellQuote(stageDir)}`,
+    `touch ${shellQuote(cacheEntryDir)}`,
+  ]);
+
+  return `if [ -f ${shellQuote(marker)} ] && [ -d ${shellQuote(src)} ]; then ${restoreSteps}; fi`;
 }
 
 /**
@@ -93,9 +102,24 @@ export function populateCommand(populate: DepsCacheCommandInput): string {
   const tmp = `${dest}.tmp`;
   const marker = completeMarker(populate.cacheDir, populate.depsKey);
   const sentinel = installSuccessSentinel(populate.stageDir);
-  return (
-    `if [ -f '${sentinel}' ] && [ -d '${populate.stageDir}' ]; then ` +
-    `mkdir -p '${cacheEntryDir}' && rm -f '${marker}' && rm -rf '${tmp}' && cp -RL '${populate.stageDir}' '${tmp}' && rm -rf '${dest}' && mv '${tmp}' '${dest}' && touch '${marker}'; ` +
-    `fi`
-  );
+  const stageDir = populate.stageDir;
+  const populateSteps = shellAnd([
+    `mkdir -p ${shellQuote(cacheEntryDir)}`,
+    `rm -f ${shellQuote(marker)}`,
+    `rm -rf ${shellQuote(tmp)}`,
+    `cp -RL ${shellQuote(stageDir)} ${shellQuote(tmp)}`,
+    `rm -rf ${shellQuote(dest)}`,
+    `mv ${shellQuote(tmp)} ${shellQuote(dest)}`,
+    `touch ${shellQuote(marker)}`,
+  ]);
+
+  return `if [ -f ${shellQuote(sentinel)} ] && [ -d ${shellQuote(stageDir)} ]; then ${populateSteps}; fi`;
+}
+
+function shellAnd(commands: readonly string[]): string {
+  return commands.join(" && ");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

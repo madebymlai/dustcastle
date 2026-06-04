@@ -20,7 +20,7 @@ export interface EcosystemPlan {
   readonly provisioned: Provisioned;
   readonly detection: Detection;
   /**
-   * The host-side deps-cache decision for this ecosystem (ADR 0012, dustcastle-8od).
+   * The host-side deps-cache decision for this ecosystem (ADR 0016).
    * Absent for a caller that does not cache (the prior always-install behavior).
    */
   readonly cache?: DepsCacheDecision;
@@ -73,14 +73,14 @@ export interface SandboxPlan {
   readonly setupCommands: string[];
   /**
    * Commands to run on the HOST before the Sandbox starts (sandcastle
-   * hooks.host.onWorktreeReady): the deps-cache RESTORE copies (ADR 0012). On a cache
+   * hooks.host.onWorktreeReady): the deps-cache RESTORE copies (ADR 0016). On a cache
    * hit, the assembled deps are copied from the deps-key entry into the worktree's
    * stage dir (cp -RL + chmod self-heal, the same shape the old Store staging used).
    * Empty when every ecosystem misses (or no caching) — then the install runs in-Sandbox.
    */
   readonly hostWorktreeReady: string[];
   /**
-   * The cache entries to POPULATE after the run completes (ADR 0012) — one per
+   * The cache entries to POPULATE after the run completes (ADR 0016) — one per
    * cache-missed ecosystem. The orchestration layer copies each worktree stage dir
    * into its deps-key entry once the in-Sandbox install has assembled it. Empty
    * when every ecosystem hit (or no caching is requested).
@@ -150,20 +150,24 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     const stageDir = sandbox.stageDir;
     const cache = e.cache;
 
-    if (cache !== undefined && cache.hit) {
+    if (cache === undefined) {
+      // No-cache caller: keep the old install-only behavior (git-exclude first, then install).
+      setupCommands.push(...setupFor(e.detection, { cachePopulateGuard: false }));
+      continue;
+    }
+
+    const requiredCacheDir = requireCacheDir(cacheDir);
+    if (cache.hit) {
       // HIT: restore from the cache on the host; the in-Sandbox setup is just the
       // git-exclude (no install, no registry traffic).
-      hostWorktreeReady.push(restoreCommand({ cacheDir: requireCacheDir(cacheDir), depsKey: cache.depsKey, stageDir }));
+      hostWorktreeReady.push(restoreCommand({ cacheDir: requiredCacheDir, depsKey: cache.depsKey, stageDir }));
       setupCommands.push(gitExclude(stageDir));
-    } else if (cache !== undefined) {
-      // MISS: install in-Sandbox with the poison-cache success sentinel, then populate.
-      setupCommands.push(...setupFor(e.detection, { poisonGuard: true }));
-      requireCacheDir(cacheDir);
-      populate.push({ depsKey: cache.depsKey, stageDir });
-    } else {
-      // No-cache caller: keep the old install-only behavior (git-exclude first, then install).
-      setupCommands.push(...setupFor(e.detection, { poisonGuard: false }));
+      continue;
     }
+
+    // MISS: install in-Sandbox with the success sentinel, then populate.
+    setupCommands.push(...setupFor(e.detection, { cachePopulateGuard: true }));
+    populate.push({ depsKey: cache.depsKey, stageDir });
   }
 
   return { podmanOptions, setupCommands, hostWorktreeReady, populate, egress };
@@ -209,11 +213,11 @@ function mergeEnv(ecosystems: readonly EcosystemPlan[]): Record<string, string> 
  * `installCommand` is REQUIRED on every descriptor (ADR 0012), so there is no
  * "no install command" branch — a half-added Ecosystem fails at `tsc`, not here.
  */
-function setupFor(detection: Detection, opts: { readonly poisonGuard: boolean }): string[] {
+function setupFor(detection: Detection, opts: { readonly cachePopulateGuard: boolean }): string[] {
   const { sandbox } = ecosystemFor(detection.ecosystem);
   const stageDir = sandbox.stageDir;
   const { installCommand } = packageManagerDescriptor(detection.packageManager);
-  if (!opts.poisonGuard) return [gitExclude(stageDir), ...installCommand];
+  if (!opts.cachePopulateGuard) return [gitExclude(stageDir), ...installCommand];
 
   const sentinel = installSuccessSentinel(stageDir);
   return [gitExclude(stageDir), gitExclude(sentinel), installWithSuccessSentinel(installCommand, sentinel)];

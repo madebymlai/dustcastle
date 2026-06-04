@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Detection } from "../../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../../ecosystems/index.js";
 
-const DEPS_CACHE_KEY_VERSION = "3";
+const DEPS_CACHE_KEY_VERSION = "4";
 
 /**
  * The deps-cache key for one ecosystem (ADR 0016): a project deps fingerprint over
@@ -18,9 +18,7 @@ export function depsCacheKey(projectDir: string, detection: Detection): string {
   hashDetectionInputs(hash, detection);
 
   for (const fileName of depsInputFiles(detection)) {
-    const filePath = join(projectDir, fileName);
-    if (!existsSync(filePath)) continue;
-    hashField(hash, "deps-file-contents", readFileSync(filePath));
+    hashDepsInputFile(hash, projectDir, fileName);
   }
 
   return hash.digest("hex");
@@ -29,14 +27,26 @@ export function depsCacheKey(projectDir: string, detection: Detection): string {
 function depsInputFiles(detection: Detection): string[] {
   const ecosystem = ecosystemFor(detection.ecosystem);
   const manager = packageManagerDescriptor(detection.packageManager);
-  const files: string[] = [];
+  return uniqueInOrder([...ecosystem.manifests, ...manager.lockfiles]);
+}
+
+function uniqueInOrder(values: readonly string[]): string[] {
+  const unique: string[] = [];
   const seen = new Set<string>();
-  for (const file of [...ecosystem.manifests, ...manager.lockfiles]) {
-    if (seen.has(file)) continue;
-    seen.add(file);
-    files.push(file);
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
   }
-  return files;
+  return unique;
+}
+
+function hashDepsInputFile(hash: Hash, projectDir: string, fileName: string): void {
+  const filePath = join(projectDir, fileName);
+  if (!existsSync(filePath)) return;
+
+  hashField(hash, "deps-file-name", fileName);
+  hashField(hash, "deps-file-contents", readFileSync(filePath));
 }
 
 function hashDetectionInputs(hash: Hash, detection: Detection): void {

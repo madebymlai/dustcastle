@@ -529,7 +529,7 @@ function classifyPopulateLine(line: string): StreamingLogLevel {
 }
 
 /**
- * Populate the deps cache after a run (ADR 0012, dustcastle-8od): for each cache-MISS
+ * Populate the deps cache after a run (ADR 0016): for each cache-MISS
  * ecosystem, copy the worktree's assembled stage dir into its deps-key entry, so the
  * next Sandbox on the same fingerprint restores instead of re-installing. Runs on the
  * host in the worktree (the bind-mount path's worktree IS the project dir). Best-effort
