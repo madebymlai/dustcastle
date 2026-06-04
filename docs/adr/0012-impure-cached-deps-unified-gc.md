@@ -6,6 +6,8 @@ accepted — **supersedes [ADR 0004](0004-project-deps-pure-default-explicit-imp
 
 **Amendment (dustcastle-6ta):** the "frozen when a lockfile is present, resolving fallback when not" install contract is realised as a SINGLE resolving line per manager, not a frozen/resolving branch. The frozen variants (`npm ci`, `--frozen-lockfile`, `--require-hashes`) hard-fail without a lockfile, so a loose/lockless repo (a hand-written `requirements.txt` of bare names, a `package.json` with no lock) could not install at all. `npm install` / `pnpm install` / `pip install -r requirements.txt` honour a committed lockfile when present and resolve when not — `go mod download` / `cargo fetch` already had this shape. `detection.loose` no longer influences the install (it never did, which was the bug); it governs only cacheability (a loose resolve has no stable key → never cached).
 
+**Pointer:** [ADR 0016](0016-deps-cache-project-fingerprint-loose-cache.md) supersedes the loose/no-lockfile "never cached" clause above with a deps-fingerprint key and cached loose repos.
+
 ## Context
 
 The maintenance weight in `src/ecosystems` is the **Importer/FOD + impurity apparatus**: the per-Package-Manager Nix dep importers (`src/nix/*`), the impurity-prediction lock readers (`src/impurity/*`), the `impuritySignal`↔`impureInstall`↔`registryHost` biconditionals, the `allow/ask/deny` policy with its `.dustcastle/impure.json` marker, and the per-purity egress derivation. dustcastle's job is narrower than that machinery serves: **set up a sandbox for an agent on a repo, with no per-repo config.** We do not trade on hermetic, reproducible, offline-built deps (the trusted / own-repos threat model, ADR 0004's original framing).
