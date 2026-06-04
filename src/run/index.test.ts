@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,7 +12,7 @@ import {
 } from "./index.js";
 import { createMemoryLogger } from "../log/fake.js";
 import type { SandboxPlan } from "../sandbox/plan.js";
-import type { DepsCachePopulate } from "../store/depscache/index.js";
+import { completeMarker, installSuccessSentinel, type DepsCachePopulate } from "../store/depscache/index.js";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -114,15 +114,33 @@ describe("populateDepsCache", () => {
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, "dep.txt"), "hello");
 
-    const lockfileHash = "abc123";
-    const populate: DepsCachePopulate[] = [{ lockfileHash, stageDir }];
+    const depsKey = "abc123";
+    const populate: DepsCachePopulate[] = [{ depsKey, stageDir }];
 
     await populateDepsCache(dir, cacheDir, populate, logger);
 
     // The streamed "caching <dir> deps (key <hash>)" line reaches the logger at info,
-    // with the lockfile hash trimmed to 12 chars (the message IS the line — see emitLine).
+    // with the deps key trimmed to 12 chars (the message IS the line — see emitLine).
     expect(
       logger.records.some((r) => r.level === "info" && r.msg?.includes("deps (key abc123)") === true),
     ).toBe(true);
+  });
+
+  it("populates only after the in-Sandbox install success sentinel exists", async () => {
+    const logger = createMemoryLogger();
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-populate-sentinel-"));
+    tmps.push(dir);
+    const cacheDir = join(dir, "cache");
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", "dep.txt"), "hello");
+
+    const populate: DepsCachePopulate[] = [{ depsKey: "abc123", stageDir: "node_modules" }];
+    await populateDepsCache(dir, cacheDir, populate, logger);
+    expect(existsSync(join(cacheDir, "abc123", "node_modules"))).toBe(false);
+
+    writeFileSync(join(dir, installSuccessSentinel("node_modules")), "");
+    await populateDepsCache(dir, cacheDir, populate, logger);
+    expect(existsSync(join(cacheDir, "abc123", "node_modules", "dep.txt"))).toBe(true);
+    expect(existsSync(completeMarker(cacheDir, "abc123"))).toBe(true);
   });
 });

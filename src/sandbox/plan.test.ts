@@ -154,8 +154,10 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
         ecosystems: [{ provisioned: nodeProvisioned, detection: { ecosystem: "node", packageManager } }],
       }).setupCommands.at(-1);
 
-    expect(cmd("pnpm")).toBe("pnpm install");
-    expect(cmd("yarn")).toBe("yarn install");
+    expect(cmd("pnpm")).toContain("pnpm install");
+    expect(cmd("pnpm")).not.toContain("--frozen-lockfile");
+    expect(cmd("yarn")).toContain("yarn install");
+    expect(cmd("yarn")).not.toContain("--frozen-lockfile");
   });
 
   it("points the container's tooling at the egress proxy (production proxy by default)", () => {
@@ -262,14 +264,15 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
         { provisioned: pythonProvisioned, detection: { ecosystem: "python", packageManager: "pip", loose: true } },
       ],
     }).setupCommands;
-    expect(cmds.join("\n")).not.toContain("--require-hashes");
+    const joined = cmds.join("\n");
+    expect(joined).not.toContain("--require-hashes");
     expect(cmds.at(-1)).toBe("pip install -r requirements.txt --target site");
   });
 
   it("pip installs its committed requirements straight into ./site (no empty cp)", () => {
     const cmds = setup("pip");
-    // The install commands follow the prepended worktree git-exclude (dustcastle-8dk).
-    expect(cmds.slice(1)).toEqual(["pip install -r requirements.txt --target site"]);
+    // The install command follows the prepended worktree git-exclude.
+    expect(cmds.at(-1)).toContain("pip install -r requirements.txt --target site");
     expect(cmds.join("\n")).not.toContain("cp -RL");
   });
 
@@ -337,22 +340,22 @@ describe("planSandbox — polyglot Node + Python (ADR 0012 multi-ecosystem)", ()
   });
 });
 
-describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od)", () => {
+describe("planSandbox — deps-cache hit/miss decision (ADR 0016)", () => {
   // Per-ecosystem deps cache: the host decides hit/miss per ecosystem (keyed by its
-  // lockfile hash) and the plan emits the right hooks. HIT → restore from the cache
+  // deps key) and the plan emits the right hooks. HIT → restore from the cache
   // via host.onWorktreeReady (copy the assembled deps into the worktree's stage dir)
   // and run NO install. MISS → install in-Sandbox via sandbox.onSandboxReady, then
   // populate the cache entry from the worktree's stage dir after the run.
 
   it("a cache HIT restores via host.onWorktreeReady and runs NO install", () => {
     const plan = planSandbox({
-      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc123", hit: true } }],
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { depsKey: "abc123", hit: true } }],
       cacheDir: "/home/u/.dustcastle/deps-cache",
     });
 
     // Restore copies the assembled deps from the cache entry into the worktree's
     // stage dir, before the Sandbox starts (cp -RL + chmod self-heal, like the old
-    // Store staging). It targets node_modules and reads the lockfile-hash entry.
+    // Store staging). It targets node_modules and reads the deps-key entry.
     const restore = plan.hostWorktreeReady.join("\n");
     expect(restore).toContain("cp -RL");
     expect(restore).toContain("/home/u/.dustcastle/deps-cache/abc123/node_modules");
@@ -369,7 +372,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
   it("a cache HIT bumps the entry's recency so a frequently-used entry stays warm under GC", () => {
     const plan = planSandbox({
-      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc123", hit: true } }],
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { depsKey: "abc123", hit: true } }],
       cacheDir: "/home/u/.dustcastle/deps-cache",
     });
 
@@ -382,51 +385,52 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
 
   it("a cache MISS installs in-Sandbox, then populates the cache entry after the run", () => {
     const plan = planSandbox({
-      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "def456", hit: false } }],
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { depsKey: "def456", hit: false } }],
       cacheDir: "/home/u/.dustcastle/deps-cache",
     });
 
     // No restore copy on a miss.
     expect(plan.hostWorktreeReady).toEqual([]);
 
-    // The install runs in-Sandbox (npm install).
+    // The install runs in-Sandbox (npm install) and touches the success sentinel only after it succeeds.
     const setup = plan.setupCommands.join("\n");
-    expect(setup).toContain("npm install");
+    expect(setup).toContain("rm -f '.dustcastle-deps-install-success-node_modules' && npm install && touch '.dustcastle-deps-install-success-node_modules'");
 
     // The cache entry to populate after the run: the worktree's stage dir → the
-    // lockfile-hash entry dir.
+    // deps-key entry dir.
     expect(plan.populate).toEqual([
       {
-        lockfileHash: "def456",
+        depsKey: "def456",
         stageDir: "node_modules",
       },
     ]);
   });
 
-  it("a loose / no-lockfile ecosystem is never cached — always installs, never restores or populates", () => {
+  it("a loose / no-lockfile ecosystem is cacheable: a miss installs, then populates", () => {
     const plan = planSandbox({
       ecosystems: [
         {
           provisioned: nodeProvisioned,
           detection: { ...nodeDetection, loose: true },
-          // No lockfile hash ⇒ no stable key ⇒ not cacheable.
-          cache: { lockfileHash: undefined, hit: false },
+          cache: { depsKey: "loosekey", hit: false },
         },
       ],
       cacheDir: "/home/u/.dustcastle/deps-cache",
     });
 
     expect(plan.hostWorktreeReady).toEqual([]);
-    expect(plan.populate).toEqual([]);
-    expect(plan.setupCommands.join("\n")).toContain("npm install");
+    expect(plan.populate).toEqual([{ depsKey: "loosekey", stageDir: "node_modules" }]);
+    const setup = plan.setupCommands.join("\n");
+    expect(setup).toContain("npm install");
+    expect(setup).toContain("touch '.dustcastle-deps-install-success-node_modules'");
   });
 
   it("requires the run-level cache root for cacheable decisions", () => {
     expect(() =>
       planSandbox({
-        ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc123", hit: true } }],
+        ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { depsKey: "abc123", hit: true } }],
       }),
-    ).toThrow("cacheDir is required when a deps-cache decision has a lockfile hash");
+    ).toThrow("cacheDir is required when a deps-cache decision is supplied");
   });
 
   it("with no cache info at all (default), behaves like a miss with no caching", () => {
@@ -435,7 +439,9 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] });
     expect(plan.hostWorktreeReady).toEqual([]);
     expect(plan.populate).toEqual([]);
-    expect(plan.setupCommands.join("\n")).toContain("npm install");
+    const setup = plan.setupCommands.join("\n");
+    expect(setup).toContain("npm install");
+    expect(setup).not.toContain("dustcastle-deps-install-success");
   });
 
   it("a polyglot repo mixes hit + miss across its ecosystems in one Sandbox", () => {
@@ -447,11 +453,11 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     // Node HITS its cache; Python MISSES its.
     const plan = planSandbox({
       ecosystems: [
-        { provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "nodehash", hit: true } },
+        { provisioned: nodeProvisioned, detection: nodeDetection, cache: { depsKey: "nodehash", hit: true } },
         {
           provisioned: pythonProvisioned,
           detection: { ecosystem: "python", packageManager: "pip" },
-          cache: { lockfileHash: "pyhash", hit: false },
+          cache: { depsKey: "pyhash", hit: false },
         },
       ],
       cacheDir: "/c",
@@ -468,13 +474,13 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0012, dustcastle-8od
     expect(restore).not.toContain("/c/pyhash");
     // Only Python is populated after the run.
     expect(plan.populate).toEqual([
-      { lockfileHash: "pyhash", stageDir: "site" },
+      { depsKey: "pyhash", stageDir: "site" },
     ]);
   });
 
   it("a restore self-heals permissions the way the old Store staging did (chmod)", () => {
     const plan = planSandbox({
-      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { lockfileHash: "abc", hit: true } }],
+      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection, cache: { depsKey: "abc", hit: true } }],
       cacheDir: "/c",
     });
     expect(plan.hostWorktreeReady.join("\n")).toContain("chmod");

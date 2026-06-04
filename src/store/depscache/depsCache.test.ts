@@ -3,13 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Detection } from "../../detect/index.js";
-import { depsCacheDecision, populateCommand, restoreCommand } from "./index.js";
+import { completeMarker, depsCacheDecision, installSuccessSentinel, populateCommand, restoreCommand } from "./index.js";
 
-// The host-side deps-cache hit/miss decision + populate (ADR 0012, dustcastle-8od).
-// dustcastle decides hit/miss host-side per ecosystem, keyed by the lockfile hash:
-//   - a lockfile present + a cache entry on disk ⇒ HIT (restore, no install);
-//   - a lockfile present + no entry yet ⇒ MISS (install, then populate);
-//   - a loose / no-lockfile ecosystem ⇒ no key ⇒ never cached (always installs).
+// The host-side deps-cache hit/miss decision + copy builders (ADR 0016). Every
+// detected ecosystem gets a deps fingerprint. HIT requires a complete cached stage;
+// MISS installs in-Sandbox, then populate copies only after the install success sentinel.
 // The cache root is run-level config, so decisions do not carry cacheDir.
 
 const dirs: string[] = [];
@@ -24,68 +22,77 @@ afterEach(() => {
 
 const npm: Detection = { ecosystem: "node", packageManager: "npm" };
 
-describe("depsCacheDecision (host-side hit/miss — ADR 0012, dustcastle-8od)", () => {
-  it("HIT: a present lockfile with an existing cache entry restores", () => {
+describe("depsCacheDecision (host-side hit/miss — ADR 0016)", () => {
+  it("HIT: a populated entry for a fingerprint restores", () => {
     const project = tmp();
     const cacheDir = tmp();
     writeFileSync(join(project, "package-lock.json"), "{}");
-    // Seed the cache entry for this lockfile hash so it is a hit.
-    const decisionMiss = depsCacheDecision(project, npm, cacheDir);
-    mkdirSync(join(cacheDir, decisionMiss!.lockfileHash!), { recursive: true });
+    const miss = depsCacheDecision(project, npm, cacheDir);
+    mkdirSync(join(cacheDir, miss.depsKey, "node_modules"), { recursive: true });
+    writeFileSync(completeMarker(cacheDir, miss.depsKey), "");
 
     const decision = depsCacheDecision(project, npm, cacheDir);
-    expect(decision).toBeDefined();
-    expect(decision).toEqual({
-      hit: true,
-      lockfileHash: decisionMiss!.lockfileHash,
-    });
+    expect(decision).toEqual({ hit: true, depsKey: miss.depsKey });
   });
 
-  it("MISS: a present lockfile with no entry yet is a miss", () => {
+  it("MISS: a fingerprint with no complete entry yet is a miss", () => {
     const project = tmp();
     const cacheDir = tmp();
     writeFileSync(join(project, "package-lock.json"), "{}");
 
     const decision = depsCacheDecision(project, npm, cacheDir);
-    expect(decision).toBeDefined();
-    expect(decision!.hit).toBe(false);
-    expect(decision!.lockfileHash).toBeDefined();
+    expect(decision.hit).toBe(false);
+    expect(decision.depsKey).toBeDefined();
   });
 
-  it("UNCACHEABLE: a loose / no-lockfile ecosystem yields no decision (always installs)", () => {
+  it("MISS: a loose / no-lockfile ecosystem is still cacheable by deps fingerprint", () => {
     const project = tmp();
     const cacheDir = tmp();
-    writeFileSync(join(project, "package.json"), "{}"); // no lockfile
-    expect(depsCacheDecision(project, { ...npm, loose: true }, cacheDir)).toBeUndefined();
+    writeFileSync(join(project, "package.json"), "{}");
+
+    const decision = depsCacheDecision(project, { ...npm, loose: true }, cacheDir);
+    expect(decision.hit).toBe(false);
+    expect(decision.depsKey).toBeDefined();
+  });
+
+  it("treats an entry dir without complete cached content as a miss (poison self-heal)", () => {
+    const project = tmp();
+    const cacheDir = tmp();
+    writeFileSync(join(project, "package-lock.json"), "{}");
+    const decision = depsCacheDecision(project, npm, cacheDir);
+    mkdirSync(join(cacheDir, decision.depsKey), { recursive: true });
+
+    expect(depsCacheDecision(project, npm, cacheDir).hit).toBe(false);
   });
 });
 
-describe("deps-cache shell command builders (copy assembled deps — ADR 0012)", () => {
+describe("deps-cache shell command builders (copy assembled deps — ADR 0016)", () => {
   it("restores a hit from the cache content path and touches the entry dir for recency", () => {
     const cmd = restoreCommand({
       cacheDir: "/c",
-      lockfileHash: "abc",
+      depsKey: "abc",
       stageDir: "node_modules",
     });
 
     expect(cmd).toBe(
-      "if [ -d '/c/abc/node_modules' ]; then " +
-        "rm -rf 'node_modules' && cp -RL '/c/abc/node_modules' 'node_modules' && chmod -R u+rwX 'node_modules' && touch '/c/abc'; " +
+      "if [ -f '/c/abc/.dustcastle-deps-cache-complete' ] && [ -d '/c/abc/node_modules' ]; then " +
+        "rm -f '.dustcastle-deps-install-success-node_modules' && rm -rf 'node_modules' && cp -RL '/c/abc/node_modules' 'node_modules' && chmod -R u+rwX 'node_modules' && touch '/c/abc'; " +
         "fi",
     );
   });
 
-  it("populates the cache content path from the worktree's assembled stage dir", () => {
+  it("populates only when the install success sentinel is present, excluding the sentinel from the cached stage", () => {
     const cmd = populateCommand({
       cacheDir: "/c",
-      lockfileHash: "abc",
+      depsKey: "abc",
       stageDir: "node_modules",
     });
 
     expect(cmd).toBe(
-      "if [ -d 'node_modules' ]; then " +
-        "mkdir -p '/c/abc' && rm -rf '/c/abc/node_modules' && cp -RL 'node_modules' '/c/abc/node_modules'; " +
+      "if [ -f '.dustcastle-deps-install-success-node_modules' ] && [ -d 'node_modules' ]; then " +
+        "mkdir -p '/c/abc' && rm -f '/c/abc/.dustcastle-deps-cache-complete' && rm -rf '/c/abc/node_modules.tmp' && cp -RL 'node_modules' '/c/abc/node_modules.tmp' && rm -rf '/c/abc/node_modules' && mv '/c/abc/node_modules.tmp' '/c/abc/node_modules' && touch '/c/abc/.dustcastle-deps-cache-complete'; " +
         "fi",
     );
+    expect(cmd).not.toContain(`cp -RL '${installSuccessSentinel("node_modules")}'`);
   });
 });

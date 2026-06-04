@@ -49,9 +49,9 @@ export interface PrepareOptions {
    */
   readonly agentModelHosts?: readonly string[];
   /**
-   * Override the deps-cache root (ADR 0012, dustcastle-8od). Tests/e2e inject a
-   * scratch dir; production defaults to `~/.dustcastle/deps-cache`. The assembled
-   * Project Deps are cached here, one entry per ecosystem keyed by its lockfile hash.
+   * Override the deps-cache root (ADR 0016). Tests/e2e inject a scratch dir;
+   * production defaults to `~/.dustcastle/deps-cache`. The assembled Project Deps
+   * are cached here, one entry per ecosystem keyed by its deps fingerprint.
    */
   readonly depsCacheDir?: string;
   /**
@@ -124,14 +124,14 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   // egress, abort BEFORE provisioning (no unconfined fallback — ADR 0005/0010).
   await opts.beforeProvision?.(egress);
 
-  // The deps-cache root (ADR 0012, dustcastle-8od): the host-owned cache, one entry
-  // per ecosystem keyed by its lockfile hash.
+  // The deps-cache root (ADR 0016): the host-owned cache, one entry per ecosystem
+  // keyed by its deps fingerprint.
   const cacheDir = opts.depsCacheDir ?? defaultDepsCacheDir();
 
   // Provision EACH detected Ecosystem's Toolchain into the shared Store (ADR 0012:
   // the Store realizes only Toolchains; deps install in-Sandbox). A polyglot repo
   // provisions every Toolchain. Decide each ecosystem's deps-cache hit/miss host-side
-  // (keyed by its lockfile hash), so the plan emits restore-vs-install per ecosystem.
+  // (keyed by its deps fingerprint), so the plan emits restore-vs-install per ecosystem.
   const logger = opts.logger ?? noopLogger;
   const ecosystems = await mapNonEmptySequential(detections, async (detection): Promise<EcosystemPlan> => {
     const cache = depsCacheDecision(opts.cwd, detection, cacheDir);
@@ -145,7 +145,7 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
     return {
       detection,
       provisioned,
-      ...(cache !== undefined ? { cache } : {}),
+      cache,
     };
   });
 
@@ -389,16 +389,15 @@ export async function withProvisionedSandbox<T>(
       }
     }
 
-    // Pin EVERY detected ecosystem's deps-cache entry (ADR 0012, dustcastle-8od), so a
-    // concurrent GC sweep never evicts assembled deps out from under the live run —
-    // the deps-cache analogue of the Store's scoped roots. A polyglot repo pins all of
-    // its entries; released on completion (the finally). Uncacheable (loose) ecosystems
-    // have no entry and contribute no pin.
+    // Pin EVERY detected ecosystem's deps-cache entry (ADR 0016), so a concurrent GC
+    // sweep never evicts assembled deps out from under the live run — the deps-cache
+    // analogue of the Store's scoped roots. A polyglot repo pins all of its entries;
+    // released on completion (the finally).
     for (const eco of prepared.ecosystems) {
-      const hash = eco.cache?.lockfileHash;
-      if (hash !== undefined) {
-        cachePool.pin(hash);
-        cachePinnedKeys.push(hash);
+      const depsKey = eco.cache?.depsKey;
+      if (depsKey !== undefined) {
+        cachePool.pin(depsKey);
+        cachePinnedKeys.push(depsKey);
       }
     }
 
@@ -423,12 +422,12 @@ export async function withProvisionedSandbox<T>(
       withSetupHooks: (callerHooks) => withSetupHooks(callerHooks, prepared.plan),
     });
 
-    // Populate the deps cache for each cache-MISS ecosystem (ADR 0012, dustcastle-8od)
-    // AFTER the run completes — the unambiguous timing, since sandcastle runs
-    // `host.onSandboxReady` concurrently with the in-Sandbox install (not after it),
-    // so it cannot be relied on to land once the deps are assembled. Copies each
-    // worktree stage dir into its lockfile-hash entry. Best-effort: a failed populate
-    // only risks a later cache miss, never the run.
+    // Populate the deps cache for each cache-MISS ecosystem (ADR 0016) AFTER the run
+    // completes — the unambiguous timing, since sandcastle runs `host.onSandboxReady`
+    // concurrently with the in-Sandbox install (not after it), so it cannot be relied
+    // on to land once the deps are assembled. Copies each worktree stage dir into its
+    // deps-key entry, gated by the install-success sentinel. Best-effort: a failed
+    // populate only risks a later cache miss, never the run.
     await populateDepsCache(opts.cwd, cacheDir, prepared.plan.populate, depsLogger);
 
     return result;
@@ -531,8 +530,8 @@ function classifyPopulateLine(line: string): StreamingLogLevel {
 
 /**
  * Populate the deps cache after a run (ADR 0012, dustcastle-8od): for each cache-MISS
- * ecosystem, copy the worktree's assembled stage dir into its lockfile-hash entry, so
- * the next Sandbox on the same lockfile restores instead of re-installing. Runs on the
+ * ecosystem, copy the worktree's assembled stage dir into its deps-key entry, so the
+ * next Sandbox on the same fingerprint restores instead of re-installing. Runs on the
  * host in the worktree (the bind-mount path's worktree IS the project dir). Best-effort
  * per entry — a failed copy only risks a later cache miss, never the run.
  */
@@ -544,12 +543,12 @@ export async function populateDepsCache(
 ): Promise<void> {
   for (const entry of populate) {
     const warnPopulateFailed = (detail: string): void => {
-      logger.warn({ lockfileHash: entry.lockfileHash, detail }, "populate deps-cache entry failed (best-effort)");
+      logger.warn({ depsKey: entry.depsKey, detail }, "populate deps-cache entry failed (best-effort)");
     };
 
     try {
       const command = populateCommand({ cacheDir, ...entry });
-      const verboseCommand = `echo "caching ${entry.stageDir} deps (key ${entry.lockfileHash.slice(0, 12)})" >&2; ${command}`;
+      const verboseCommand = `echo "caching ${entry.stageDir} deps (key ${entry.depsKey.slice(0, 12)})" >&2; ${command}`;
       const result = await runStreamingAsync("sh", ["-c", verboseCommand], {
         cwd,
         logger,
@@ -557,7 +556,7 @@ export async function populateDepsCache(
         classifyLine: classifyPopulateLine,
       });
       if (result.status === 0) {
-        logger.debug({ lockfileHash: entry.lockfileHash, stageDir: entry.stageDir }, "populated deps-cache entry");
+        logger.debug({ depsKey: entry.depsKey, stageDir: entry.stageDir }, "populated deps-cache entry");
       } else {
         warnPopulateFailed(result.stderr.slice(-2000).trim());
       }

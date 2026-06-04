@@ -125,8 +125,8 @@ export interface PackageManagerDescriptor {
    * common loose case, and the byte-reproducibility they buy is out of scope (ADR
    * 0012). go/cargo already had this shape; node/python converged onto it. Its
    * assembled output is what the deps cache stores (only for lock-grade repos — a
-   * loose resolve has no stable key, so it is never cached). uv/poetry prepend their
-   * own `export` step before the shared pip install.
+   * loose resolves are cached by ADR 0016's manifest/lockfile fingerprint). uv/poetry
+   * prepend their own `export` step before the shared pip install.
    *
    * REQUIRED on EVERY descriptor (go/cargo included): there is no pure-vs-impure
    * decision any more, so every detected manager installs in-Sandbox — proven at

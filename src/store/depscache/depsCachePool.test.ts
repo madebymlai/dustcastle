@@ -6,7 +6,7 @@ import { collectPool } from "../pool.js";
 import { depsCachePool } from "./index.js";
 
 // The deps-cache pool (ADR 0012, dustcastle-8od): the SECOND pool behind the reusable
-// GC interface. Its mechanism is lockfile-hash-keyed directories under the dustcastle
+// GC interface. Its mechanism is deps-fingerprint-keyed directories under the dustcastle
 // home — `evict` removes a dir, there is no `optimise`. These tests drive it through
 // the SAME pool-agnostic brain (collectPool) the Store pool uses, so one recency/
 // ceiling brain manages both. The load-bearing assertion: a pinned (active) entry —
@@ -31,7 +31,7 @@ function seedEntry(root: string, hash: string, stageDir: string, bytes: number):
 }
 
 describe("depsCachePool (the deps cache behind the reusable pool interface — ADR 0012)", () => {
-  it("entries are one per lockfile-hash directory, sized + timestamped from disk", () => {
+  it("entries are one per deps-fingerprint directory, sized + timestamped from disk", () => {
     const root = cacheRoot();
     seedEntry(root, "hashA", "node_modules", 100);
     seedEntry(root, "hashB", "site", 50);
@@ -53,7 +53,7 @@ describe("depsCachePool (the deps cache behind the reusable pool interface — A
     expect(pool.measure()).toBe(0);
   });
 
-  it("evicts a cold entry by REMOVING its lockfile-hash directory", () => {
+  it("evicts a cold entry by REMOVING its deps-fingerprint directory", () => {
     const root = cacheRoot();
     seedEntry(root, "cold", "node_modules", 100);
     const pool = depsCachePool({ cacheDir: root });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { requirementsIsLockGrade } from "./python-loose.js";
 
 // Loose-manifest detection for Python (ADR 0006c, laimk-hse.5). A Python repo is
-// LOOSE — resolved fresh by the single resolving install and never cached — when its
+// LOOSE — resolved by the single resolving install and surfaced as unpinned — when its
 // declared deps are not lock-grade:
 //   - an unpinned (no `==`) or hash-less requirements.txt (the common case), or
 //   - an abstract pyproject.toml with no requirements.txt and no lock.

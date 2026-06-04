@@ -5,10 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Detection } from "../../detect/index.js";
 import { depsCacheKey } from "./index.js";
 
-// The deps-cache key (ADR 0012, dustcastle-8od; dustcastle-8iv.2) is the stable
-// cache entry name for one locked ecosystem: resolved Toolchain version + Ecosystem +
-// Package Manager + lockfile contents. A loose / no-lockfile ecosystem has no stable
-// key (undefined), so it is never cached.
+// The deps-cache key (ADR 0016) is the stable cache entry name for one ecosystem:
+// resolved Toolchain version + Ecosystem + Package Manager + dependency-determining
+// files present for that Ecosystem (manifests ∪ selected manager lockfiles). The
+// loose flag is informational; lockless repos are cacheable by their manifest inputs.
 
 const projectDirs: string[] = [];
 function projectDir(): string {
@@ -27,7 +27,7 @@ afterEach(() => {
 const nodeNpm: Detection = { ecosystem: "node", packageManager: "npm" };
 const goModules: Detection = { ecosystem: "go", packageManager: "go" };
 
-describe("depsCacheKey (locked deps key — ADR 0012, dustcastle-8od)", () => {
+describe("depsCacheKey (project deps fingerprint — ADR 0016)", () => {
   it("is a stable hash of the manager's lockfile contents", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
@@ -48,6 +48,28 @@ describe("depsCacheKey (locked deps key — ADR 0012, dustcastle-8od)", () => {
     const changedKey = depsCacheKey(dir, nodeNpm);
 
     expect(changedKey).not.toBe(originalKey);
+  });
+
+  it("changes when a loose manifest's dependency inputs change", () => {
+    const dir = projectDir();
+    writeFileSync(join(dir, "package.json"), '{"dependencies":{"left-pad":"^1.3.0"}}');
+    const originalKey = depsCacheKey(dir, { ...nodeNpm, loose: true });
+
+    writeFileSync(join(dir, "package.json"), '{"dependencies":{"left-pad":"^1.3.0","is-odd":"^3.0.1"}}');
+    const changedKey = depsCacheKey(dir, { ...nodeNpm, loose: true });
+
+    expect(changedKey).not.toBe(originalKey);
+  });
+
+  it("yields a stable defined key for a loose / no-lockfile ecosystem", () => {
+    const dir = projectDir();
+    writeFileSync(join(dir, "package.json"), "{}");
+
+    const firstKey = depsCacheKey(dir, { ...nodeNpm, loose: true });
+    const secondKey = depsCacheKey(dir, { ...nodeNpm, loose: true });
+
+    expect(firstKey).toBeDefined();
+    expect(secondKey).toBe(firstKey);
   });
 
   it("changes when the resolved Toolchain version changes", () => {
@@ -104,7 +126,7 @@ describe("depsCacheKey (locked deps key — ADR 0012, dustcastle-8od)", () => {
     expect(changedRepoKey).toBe(originalKey);
   });
 
-  it("includes every present lockfile for managers with companion lockfiles", () => {
+  it("includes every present manifest/lockfile once for managers with overlapping companion files", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "go.mod"), "module example.com/app\n");
     writeFileSync(join(dir, "go.sum"), "example.com/dep v1 h1:abc\n");
@@ -116,21 +138,11 @@ describe("depsCacheKey (locked deps key — ADR 0012, dustcastle-8od)", () => {
     expect(changedKey).not.toBe(originalKey);
   });
 
-  it("is undefined for a loose / no-lockfile ecosystem (no stable key ⇒ not cached)", () => {
-    const dir = projectDir();
-    // package.json present but NO lockfile → loose.
-    writeFileSync(join(dir, "package.json"), "{}");
-
-    const key = depsCacheKey(dir, { ...nodeNpm, loose: true });
-
-    expect(key).toBeUndefined();
-  });
-
-  it("is undefined when the manager's lockfile is absent on disk", () => {
+  it("still returns a fingerprint when no dependency files are present", () => {
     const dir = projectDir();
 
     const key = depsCacheKey(dir, nodeNpm);
 
-    expect(key).toBeUndefined();
+    expect(key).toBeDefined();
   });
 });

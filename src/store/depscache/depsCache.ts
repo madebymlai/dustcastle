@@ -1,105 +1,101 @@
 import { existsSync } from "node:fs";
 import type { Detection } from "../../detect/index.js";
+import { ecosystemFor } from "../../ecosystems/index.js";
 import { depsCacheKey } from "./depsCacheKey.js";
 import { contentPath, entryDir } from "./layout.js";
 
+const COMPLETE_MARKER = ".dustcastle-deps-cache-complete";
+
 /**
- * The host-side deps-cache decision for ONE ecosystem (ADR 0012, dustcastle-8od).
- * The decision is only the query result: the ecosystem's stable cache key plus
- * whether that key is already present. The cache root is run-level configuration
- * supplied once to the Sandbox plan / command builders, not repeated here.
+ * The host-side deps-cache decision for ONE ecosystem (ADR 0016). The decision is
+ * only the query result: the ecosystem's stable deps fingerprint plus whether that
+ * fingerprint already holds a complete assembled stage dir.
  */
 export interface DepsCacheDecision {
-  /**
-   * The ecosystem's lockfile hash — the cache key. Undefined for a loose / no-lockfile
-   * ecosystem, which has no stable key, so it is never cached (always installs in-Sandbox).
-   */
-  readonly lockfileHash: string | undefined;
-  /**
-   * Whether the cache holds an assembled entry for this lockfile hash. A HIT restores
-   * via `host.onWorktreeReady` and runs no install; a MISS installs in-Sandbox, then
-   * populates the cache entry after the run.
-   */
+  /** The ecosystem's project deps fingerprint — every detected ecosystem is cacheable. */
+  readonly depsKey: string;
+  /** HIT restores and skips install; MISS installs in-Sandbox, then populates after the run. */
   readonly hit: boolean;
 }
 
 /**
- * One ecosystem's cache entry to POPULATE after the run completes (ADR 0012). On a
- * cache miss, the host copies the worktree's assembled stage dir into the lockfile-hash
- * entry dir once the in-Sandbox install has run. The cache root is supplied once by
- * the run-level caller and combined with this descriptor by the cache module's layout owner.
+ * One ecosystem's cache entry to POPULATE after the run completes. On a cache miss,
+ * the host copies the worktree's assembled stage dir into the deps-key entry dir once
+ * the in-Sandbox install has succeeded.
  */
 export interface DepsCachePopulate {
-  /** The lockfile hash keying this ecosystem's cache entry. */
-  readonly lockfileHash: string;
+  /** The project deps fingerprint keying this ecosystem's cache entry. */
+  readonly depsKey: string;
   /** The worktree-relative stage dir the in-Sandbox install assembled (`node_modules`/`site`/`vendor`). */
   readonly stageDir: string;
 }
 
 /**
- * The host-side deps-cache hit/miss decision for one ecosystem (ADR 0012,
- * dustcastle-8od). dustcastle owns the cache (under the dustcastle home) and decides
- * per ecosystem, keyed by that ecosystem's lockfile hash:
- *   - a lockfile present + an assembled entry on disk for its hash ⇒ HIT (the plan
- *     restores via `host.onWorktreeReady`, no install / no registry traffic);
- *   - a lockfile present + no entry yet ⇒ MISS (the plan installs in-Sandbox, then
- *     the entry is populated after the run);
- *   - a loose / no-lockfile ecosystem ⇒ no stable key ⇒ NOT cached (`undefined`), so
- *     it always installs in-Sandbox.
- *
- * Returns `undefined` for the uncacheable case so the plan falls through to "install,
- * don't cache"; otherwise the {@link DepsCacheDecision} the plan emits hooks from.
+ * The host-side deps-cache hit/miss decision for one ecosystem. Every detected
+ * Ecosystem produces a deps fingerprint; a hit requires both the staged content and
+ * the cache-complete marker, so a crashed/partial populate self-heals as a miss.
  */
-export function depsCacheDecision(
-  projectDir: string,
-  detection: Detection,
-  cacheDir: string,
-): DepsCacheDecision | undefined {
-  const lockfileHash = depsCacheKey(projectDir, detection);
-  if (lockfileHash === undefined) return undefined; // loose / no lockfile → never cached
+export function depsCacheDecision(projectDir: string, detection: Detection, cacheDir: string): DepsCacheDecision {
+  const depsKey = depsCacheKey(projectDir, detection);
+  const stageDir = ecosystemFor(detection.ecosystem).sandbox.stageDir;
   return {
-    lockfileHash,
-    hit: existsSync(entryDir(cacheDir, lockfileHash)),
+    depsKey,
+    hit: existsSync(contentPath(cacheDir, depsKey, stageDir)) && existsSync(completeMarker(cacheDir, depsKey)),
   };
 }
 
 /** The path inputs shared by the pure deps-cache shell command builders. */
 export interface DepsCacheCommandInput extends DepsCachePopulate {
-  /** The deps-cache root holding lockfile-hash-keyed entry dirs. */
+  /** The deps-cache root holding deps-keyed entry dirs. */
   readonly cacheDir: string;
 }
 
 /**
- * The host-side deps-cache RESTORE for one ecosystem (ADR 0012, dustcastle-8od).
- * Copies the assembled deps from `<cacheDir>/<lockfileHash>/<stageDir>` into the
- * worktree's `<stageDir>` before the Sandbox starts. On a hit it also touches the
- * entry dir so the GC pool's mtime-based recency tracks actual use.
+ * The worktree success sentinel for one stage dir. The install chain removes it before
+ * running and touches it only after every Package Manager command succeeds; populate is
+ * gated on it. It lives outside the stage dir, so it is never copied into the cached
+ * or restored stage dir.
+ */
+export function installSuccessSentinel(stageDir: string): string {
+  return `.dustcastle-deps-install-success-${stageDir.replace(/[^A-Za-z0-9_.-]/g, "_")}`;
+}
+
+/** Cache-entry completeness marker, outside the restored stage dir. */
+export function completeMarker(cacheDir: string, depsKey: string): string {
+  return `${entryDir(cacheDir, depsKey)}/${COMPLETE_MARKER}`;
+}
+
+/**
+ * The host-side deps-cache RESTORE for one ecosystem. Copies the assembled deps from
+ * `<cacheDir>/<depsKey>/<stageDir>` into the worktree before the Sandbox starts and
+ * touches the entry dir so the GC pool's mtime-based recency tracks actual use.
  */
 export function restoreCommand(restore: DepsCacheCommandInput): string {
-  const cacheEntryDir = entryDir(restore.cacheDir, restore.lockfileHash);
-  const src = contentPath(restore.cacheDir, restore.lockfileHash, restore.stageDir);
+  const cacheEntryDir = entryDir(restore.cacheDir, restore.depsKey);
+  const src = contentPath(restore.cacheDir, restore.depsKey, restore.stageDir);
+  const marker = completeMarker(restore.cacheDir, restore.depsKey);
+  const sentinel = installSuccessSentinel(restore.stageDir);
   return (
-    `if [ -d '${src}' ]; then ` +
-    `rm -rf '${restore.stageDir}' && cp -RL '${src}' '${restore.stageDir}' && chmod -R u+rwX '${restore.stageDir}' && touch '${cacheEntryDir}'; ` +
+    `if [ -f '${marker}' ] && [ -d '${src}' ]; then ` +
+    `rm -f '${sentinel}' && rm -rf '${restore.stageDir}' && cp -RL '${src}' '${restore.stageDir}' && chmod -R u+rwX '${restore.stageDir}' && touch '${cacheEntryDir}'; ` +
     `fi`
   );
 }
 
 /**
- * The host-side command that POPULATES one ecosystem's cache entry after the run
- * (ADR 0012): copy the worktree's assembled stage dir into its lockfile-hash entry,
- * dereferencing symlinks (`cp -RL`, the same shape the restore uses). Guarded on the
- * stage dir existing (a failed install leaves nothing to cache) and idempotent (it
- * replaces any partial prior entry), so re-running is safe. Runs after `run()` returns
- * — the unambiguous timing, since sandcastle runs `host.onSandboxReady` concurrently
- * with the in-Sandbox install, not after it.
+ * The host-side command that POPULATES one ecosystem's cache entry after the run.
+ * The copy is gated on the install success sentinel and uses an atomic temp dir +
+ * cache-complete marker, so failed installs or interrupted copies do not become hits.
  */
 export function populateCommand(populate: DepsCacheCommandInput): string {
-  const cacheEntryDir = entryDir(populate.cacheDir, populate.lockfileHash);
-  const dest = contentPath(populate.cacheDir, populate.lockfileHash, populate.stageDir);
+  const cacheEntryDir = entryDir(populate.cacheDir, populate.depsKey);
+  const dest = contentPath(populate.cacheDir, populate.depsKey, populate.stageDir);
+  const tmp = `${dest}.tmp`;
+  const marker = completeMarker(populate.cacheDir, populate.depsKey);
+  const sentinel = installSuccessSentinel(populate.stageDir);
   return (
-    `if [ -d '${populate.stageDir}' ]; then ` +
-    `mkdir -p '${cacheEntryDir}' && rm -rf '${dest}' && cp -RL '${populate.stageDir}' '${dest}'; ` +
+    `if [ -f '${sentinel}' ] && [ -d '${populate.stageDir}' ]; then ` +
+    `mkdir -p '${cacheEntryDir}' && rm -f '${marker}' && rm -rf '${tmp}' && cp -RL '${populate.stageDir}' '${tmp}' && rm -rf '${dest}' && mv '${tmp}' '${dest}' && touch '${marker}'; ` +
     `fi`
   );
 }

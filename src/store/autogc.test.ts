@@ -80,7 +80,7 @@ describe("autoGc (the detached sweep orchestration — ADR 0007)", () => {
   it("over the ceiling: cold deps-cache entries are evicted too (the cache is swept, not just the Store)", () => {
     const home = dir();
     const cacheDir = join(home, "deps-cache");
-    // Two lockfile-hash-keyed cache entries (30 bytes each → 60 total). cap (total/10)
+    // Two deps-fingerprint-keyed cache entries (30 bytes each → 60 total). cap (total/10)
     // is 50, so the cache alone trips the cap; the byte-budget (35) keeps the recently
     // -used "hot" entry and evicts the stale one.
     const hot = join(cacheDir, "hotlockhash");

@@ -67,8 +67,8 @@ function detectEcosystem(
   });
 
   // A manifest with no lockfile is resolvable-but-unpinned (loose): the single
-  // resolving install resolves it fresh in-Sandbox, and it is never cached (no stable
-  // lockfile hash to key on; ADR 0006c, ADR 0012 + dustcastle-6ta).
+  // resolving install resolves it in-Sandbox. ADR 0016 makes this flag informational
+  // only for caching; loose ecosystems are cached by a manifest/lockfile fingerprint.
   // For Node this is structurally "manifest present, no lockfile" — Go's manifests
   // (go.mod/go.sum) ARE its lockfiles, so a present Go manifest always implies a
   // present lockfile. Python overrides with a CONTENT-based reader, because its

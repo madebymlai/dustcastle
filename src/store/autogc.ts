@@ -133,7 +133,7 @@ export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
 /** The sweep body (runs under the lock): plan → optimise-first → re-check → conditional gc → prune → log. */
 function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
   // The two managed pools behind ONE brain (ADR 0012): the Store (Toolchain closures)
-  // and the deps cache (assembled Project Deps, lockfile-hash-keyed). The Store keeps
+  // and the deps cache (assembled Project Deps, deps-fingerprint-keyed). The Store keeps
   // the injected `measure` as its ceiling input (the nix accounting the child wires);
   // its mechanism (optimise / prune cold roots + `nix-store --gc`) lives in `storePool`.
   // The cache shares the disk, so its bytes count toward the cap and its cold tail is

@@ -2,7 +2,12 @@ import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { AGENT_SPEC, imageRef } from "./image.js";
 import type { Detection } from "../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../ecosystems/index.js";
-import { restoreCommand, type DepsCacheDecision, type DepsCachePopulate } from "../store/depscache/index.js";
+import {
+  installSuccessSentinel,
+  restoreCommand,
+  type DepsCacheDecision,
+  type DepsCachePopulate,
+} from "../store/depscache/index.js";
 import type { Provisioned } from "../store/index.js";
 import { EGRESS_NETWORK, productionProxyUrl, proxyEnv } from "./confine.js";
 import { deriveEgress, type EgressDecision } from "./egress.js";
@@ -31,7 +36,7 @@ export interface SandboxPlanSpec {
   readonly ecosystems: EcosystemPlans;
   /**
    * The deps-cache root (under the dustcastle home) shared by every ecosystem in this
-   * run. Required when any cache decision with a stable lockfile hash is supplied.
+   * run. Required when any deps-cache decision is supplied.
    */
   readonly cacheDir?: string;
   /**
@@ -69,7 +74,7 @@ export interface SandboxPlan {
   /**
    * Commands to run on the HOST before the Sandbox starts (sandcastle
    * hooks.host.onWorktreeReady): the deps-cache RESTORE copies (ADR 0012). On a cache
-   * hit, the assembled deps are copied from the lockfile-hash entry into the worktree's
+   * hit, the assembled deps are copied from the deps-key entry into the worktree's
    * stage dir (cp -RL + chmod self-heal, the same shape the old Store staging used).
    * Empty when every ecosystem misses (or no caching) — then the install runs in-Sandbox.
    */
@@ -77,8 +82,8 @@ export interface SandboxPlan {
   /**
    * The cache entries to POPULATE after the run completes (ADR 0012) — one per
    * cache-missed ecosystem. The orchestration layer copies each worktree stage dir
-   * into its lockfile-hash entry once the in-Sandbox install has assembled it. Empty
-   * when every ecosystem hit (or is uncacheable).
+   * into its deps-key entry once the in-Sandbox install has assembled it. Empty
+   * when every ecosystem hit (or no caching is requested).
    */
   readonly populate: DepsCachePopulate[];
   /** The egress decision applied, surfaced for the CLI (ADR 0005). */
@@ -104,9 +109,8 @@ const DEFAULT_IMAGE = imageRef(AGENT_SPEC);
  * no patch.
  */
 export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
-  // Every detected Ecosystem (ADR 0012): each provisions its Toolchain and either
-  // restores its deps from the cache (hit) or installs them in-Sandbox (miss /
-  // uncacheable).
+  // Every detected Ecosystem (ADR 0016): each provisions its Toolchain and either
+  // restores its deps from the cache (hit) or installs them in-Sandbox (miss).
   const ecosystems = spec.ecosystems;
   const primaryEcosystem = ecosystems[0];
   const cacheDir = spec.cacheDir;
@@ -134,11 +138,10 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     network: egress.kind === "none" ? "none" : EGRESS_NETWORK,
   };
 
-  // Per ecosystem (ADR 0012, dustcastle-8od): a cache HIT restores the assembled deps
-  // on the host before the Sandbox starts (host.onWorktreeReady) and runs no install;
-  // a MISS (or an uncacheable loose ecosystem) installs in-Sandbox via the hook, and a
-  // MISS additionally populates its cache entry from the worktree after the run. A
-  // polyglot repo freely mixes hit + miss across its ecosystems in one Sandbox.
+  // Per ecosystem (ADR 0016): a cache HIT restores the assembled deps on the host
+  // before the Sandbox starts and emits no install command; a MISS installs in-Sandbox
+  // via a success-sentinel-guarded hook, then populates its cache entry from the
+  // worktree after the run. A polyglot repo freely mixes hit + miss across ecosystems.
   const setupCommands: string[] = [];
   const hostWorktreeReady: string[] = [];
   const populate: DepsCachePopulate[] = [];
@@ -146,21 +149,20 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     const { sandbox } = ecosystemFor(e.detection.ecosystem);
     const stageDir = sandbox.stageDir;
     const cache = e.cache;
-    const lockfileHash = cache?.lockfileHash;
 
-    if (cache !== undefined && lockfileHash !== undefined && cache.hit) {
+    if (cache !== undefined && cache.hit) {
       // HIT: restore from the cache on the host; the in-Sandbox setup is just the
       // git-exclude (no install, no registry traffic).
-      hostWorktreeReady.push(restoreCommand({ cacheDir: requireCacheDir(cacheDir), lockfileHash, stageDir }));
+      hostWorktreeReady.push(restoreCommand({ cacheDir: requireCacheDir(cacheDir), depsKey: cache.depsKey, stageDir }));
       setupCommands.push(gitExclude(stageDir));
+    } else if (cache !== undefined) {
+      // MISS: install in-Sandbox with the poison-cache success sentinel, then populate.
+      setupCommands.push(...setupFor(e.detection, { poisonGuard: true }));
+      requireCacheDir(cacheDir);
+      populate.push({ depsKey: cache.depsKey, stageDir });
     } else {
-      // MISS / uncacheable: install in-Sandbox (git-exclude first, then the install).
-      setupCommands.push(...setupFor(e.detection));
-      if (cache !== undefined && lockfileHash !== undefined) {
-        // A real miss (stable key, no entry yet): populate the cache after the run.
-        requireCacheDir(cacheDir);
-        populate.push({ lockfileHash, stageDir });
-      }
+      // No-cache caller: keep the old install-only behavior (git-exclude first, then install).
+      setupCommands.push(...setupFor(e.detection, { poisonGuard: false }));
     }
   }
 
@@ -169,7 +171,7 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
 
 function requireCacheDir(cacheDir: string | undefined): string {
   if (cacheDir === undefined) {
-    throw new Error("cacheDir is required when a deps-cache decision has a lockfile hash");
+    throw new Error("cacheDir is required when a deps-cache decision is supplied");
   }
   return cacheDir;
 }
@@ -207,11 +209,18 @@ function mergeEnv(ecosystems: readonly EcosystemPlan[]): Record<string, string> 
  * `installCommand` is REQUIRED on every descriptor (ADR 0012), so there is no
  * "no install command" branch — a half-added Ecosystem fails at `tsc`, not here.
  */
-function setupFor(detection: Detection): string[] {
+function setupFor(detection: Detection, opts: { readonly poisonGuard: boolean }): string[] {
   const { sandbox } = ecosystemFor(detection.ecosystem);
-  const exclude = gitExclude(sandbox.stageDir);
+  const stageDir = sandbox.stageDir;
   const { installCommand } = packageManagerDescriptor(detection.packageManager);
-  return [exclude, ...installCommand];
+  if (!opts.poisonGuard) return [gitExclude(stageDir), ...installCommand];
+
+  const sentinel = installSuccessSentinel(stageDir);
+  return [gitExclude(stageDir), gitExclude(sentinel), installWithSuccessSentinel(installCommand, sentinel)];
+}
+
+function installWithSuccessSentinel(installCommand: readonly string[], sentinel: string): string {
+  return [`rm -f '${sentinel}'`, ...installCommand, `touch '${sentinel}'`].join(" && ");
 }
 
 /**

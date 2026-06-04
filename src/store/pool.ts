@@ -68,7 +68,7 @@ export interface PoolEvictReport {
 /**
  * A garbage-collectable pool behind the unified GC brain (ADR 0012). Each pool
  * supplies its own mechanism; the Store pool maps these onto nix-portable, a future
- * deps-cache pool onto lockfile-hash-keyed directories.
+ * deps-cache pool onto deps-fingerprint-keyed directories.
  */
 export interface Pool {
   /** The pool's total resident size in bytes (the cap half of the disk-derived ceiling). */
@@ -130,7 +130,7 @@ export function collectPool(pool: Pool, opts: CollectPoolOptions): PoolSweepRepo
  * The unified GC interface over MORE THAN ONE pool (ADR 0012, dustcastle-8od): sweep
  * each pool through the same pool-agnostic brain (`collectPool`) and aggregate what
  * was freed. The Store pool (Toolchain closures) and the deps-cache pool (assembled
- * Project Deps keyed by lockfile hash) plug in side by side, so one recency/ceiling
+ * Project Deps keyed by deps fingerprint) plug in side by side, so one recency/ceiling
  * brain manages both — there is no second hand-rolled GC. Each pool keeps its own
  * pins, so a live run that pinned its active entry in EACH pool has neither evicted.
  * The optimise flag is forwarded; a pool with no `optimise` (the deps cache) ignores it.

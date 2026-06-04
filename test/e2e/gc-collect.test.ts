@@ -186,7 +186,7 @@ describe("autoGc destructive (ADR 0007 — real optimise-first → conditional g
 
 // The deps-cache analogue of the destructive Store sweeps above (ADR 0012,
 // dustcastle-8od): the SAME pool brain (`collectPool`) drives the second pool — the
-// lockfile-hash-keyed deps cache. Pure filesystem (no nix/podman), so it runs in the
+// deps-fingerprint-keyed deps cache. Pure filesystem (no nix/podman), so it runs in the
 // bare suite too; it proves the unified GC interface evicts the cache's cold byte-LRU
 // tail while the warm tail (and any pinned live-run entry) survives.
 describe("deps-cache pool under the unified GC brain (ADR 0012 — collectPool over the cache)", () => {
@@ -202,7 +202,7 @@ describe("deps-cache pool under the unified GC brain (ADR 0012 — collectPool o
     return cacheDir;
   }
 
-  it("evicts the cold lockfile-hash entry while the warm byte-budget tail survives", () => {
+  it("evicts the cold deps-key entry while the warm byte-budget tail survives", () => {
     const cacheDir = seedTwoEntries("dustcastle-depscache-gc-");
     const pool = depsCachePool({ cacheDir, lastUsedAt: { warm: 1000, cold: 1 } });
 

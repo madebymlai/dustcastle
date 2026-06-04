@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { detect } from "../../src/detect/index.js";
 import { physPath, provisionStore, type Provisioned } from "../../src/store/index.js";
-import { depsCacheDecision } from "../../src/store/depscache/index.js";
+import { completeMarker, depsCacheDecision } from "../../src/store/depscache/index.js";
 import { planSandbox } from "../../src/sandbox/plan.js";
 import { stageSampleProject } from "./fixture.js";
 
@@ -50,11 +50,11 @@ function toolchainOnly(): Provisioned {
   };
 }
 
-describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () => {
+describe("deps cache (ADR 0016) — keyed by deps fingerprint", () => {
   // A pure exercise of the host-side cache decision + the plan hooks it drives: no
   // Store/Sandbox needed, so it runs in the bare suite too. The heavy in-Sandbox
   // restore/install is exercised by the run-tests above (node-run et al.).
-  it("misses (installs + populates) until the lockfile-hash entry exists, then hits (restores)", () => {
+  it("misses (installs + populates) until the deps-key entry exists, then hits (restores)", () => {
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-depscache-"));
     tmps.push(dir);
     const cacheDir = join(dir, "cache");
@@ -66,29 +66,30 @@ describe("deps cache (ADR 0012, dustcastle-8od) — keyed by lockfile hash", () 
     const detection = detect(projectDir)[0]!;
     expect(detection.ecosystem).toBe("node");
 
-    // MISS: a lockfile is present (stable key) but no assembled entry on disk yet.
-    const miss = depsCacheDecision(projectDir, detection, cacheDir)!;
-    expect(miss.lockfileHash).toBeTruthy();
+    // MISS: a deps fingerprint is present but no assembled entry on disk yet.
+    const miss = depsCacheDecision(projectDir, detection, cacheDir);
+    expect(miss.depsKey).toBeTruthy();
     expect(miss.hit).toBe(false);
 
     // On a MISS the plan installs in-Sandbox (`npm install`) and schedules a populate;
     // nothing is restored on the host. (A committed lockfile is still honoured by the
-    // resolving install — and a lock-grade repo still caches by its lockfile hash.)
+    // resolving install — and a lock-grade repo still caches by its deps key.)
     const missPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: miss }], cacheDir });
     expect(missPlan.setupCommands.join("\n")).toContain("npm install");
     expect(missPlan.hostWorktreeReady).toEqual([]);
     expect(missPlan.populate).toHaveLength(1);
-    expect(missPlan.populate[0]!.lockfileHash).toBe(miss.lockfileHash);
+    expect(missPlan.populate[0]!.depsKey).toBe(miss.depsKey);
 
-    // Populate the lockfile-hash entry → the decision flips to a HIT.
-    mkdirSync(join(cacheDir, miss.lockfileHash!), { recursive: true });
-    const hit = depsCacheDecision(projectDir, detection, cacheDir)!;
+    // Populate the deps-key entry → the decision flips to a HIT.
+    mkdirSync(join(cacheDir, miss.depsKey, "node_modules"), { recursive: true });
+    writeFileSync(completeMarker(cacheDir, miss.depsKey), "");
+    const hit = depsCacheDecision(projectDir, detection, cacheDir);
     expect(hit.hit).toBe(true);
 
     // On a HIT the plan restores from the cache on the host (host.onWorktreeReady),
     // runs no install (`npm install` absent — just the git-exclude), and no populate.
     const hitPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: hit }], cacheDir });
-    expect(hitPlan.hostWorktreeReady.join("\n")).toContain(join(cacheDir, hit.lockfileHash!));
+    expect(hitPlan.hostWorktreeReady.join("\n")).toContain(join(cacheDir, hit.depsKey));
     expect(hitPlan.setupCommands.join("\n")).not.toContain("npm install");
     expect(hitPlan.populate).toEqual([]);
   });

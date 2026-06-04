@@ -11,14 +11,13 @@
  *
  * The install no longer branches on this (ADR 0012, dustcastle-6ta): a single
  * resolving `pip install -r requirements.txt` handles both — pip auto-verifies the
- * hashes of a lock-grade file and resolves a loose one. Lock-grade-ness now governs
- * ONE thing: CACHEABILITY. A lock-grade file has a stable content hash, so its
- * assembled deps are cached by it; a loose file resolves afresh (versions can drift),
- * so it has no stable key and is never cached (see `depsCacheKey`).
+ * hashes of a lock-grade file and resolves a loose one. ADR 0016 also keeps cacheability
+ * on one path: loose is informational, and the deps cache key fingerprints the present
+ * manifest/lockfile inputs either way.
  *
  * Conservative throughout: anything undefined/empty/unparseable reads NOT
- * lock-grade, so it is treated as loose (resolve + never cache) rather than silently
- * trusting a half-pinned file as a stable lockfile.
+ * lock-grade, so it is surfaced as loose rather than silently trusting a half-pinned
+ * file as a stable lockfile.
  */
 
 /**
@@ -26,8 +25,8 @@
  * True ONLY when the file declares at least one requirement AND every requirement line
  * is exactly `==`-pinned and carries at least one `--hash=` (pip's hash-checking
  * contract). An empty file, a bare package name, a loose constraint (`>=`/`~=`), a
- * hash-less pin, or any mixed line makes it NOT lock-grade — it resolves afresh and is
- * not cached.
+ * hash-less pin, or any mixed line makes it NOT lock-grade — detection surfaces it as
+ * loose.
  */
 export function requirementsIsLockGrade(text: string | undefined): boolean {
   if (typeof text !== "string") return false;

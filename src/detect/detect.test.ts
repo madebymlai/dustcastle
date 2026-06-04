@@ -199,7 +199,7 @@ describe("detect — JS/Node ecosystem (ADR 0006 slice 2)", () => {
 
   it("flags a lockless package.json as a loose manifest (ADR 0006c)", () => {
     // A resolvable-but-unpinned manifest: the single resolving install resolves it
-    // fresh in-Sandbox, and it is never cached (no stable lockfile hash to key on).
+    // in-Sandbox; ADR 0016 keeps this `loose` flag informational for caching.
     const dir = repo({ "package.json": JSON.stringify({ name: "app" }) });
 
     expect(detect(dir)[0]).toMatchObject({ ecosystem: "node", loose: true });
@@ -237,7 +237,7 @@ describe("detect — Rust ecosystem (Cargo, dustcastle-gy5.2)", () => {
     expect(detect(dir)).toContainEqual({ ecosystem: "rust", packageManager: "cargo" });
   });
 
-  it("flags a lockless Cargo.toml as a loose manifest (resolved fresh, never cached)", () => {
+  it("flags a lockless Cargo.toml as a loose manifest (informational)", () => {
     const dir = repo({
       "Cargo.toml": '[package]\nname = "sample"\nversion = "0.1.0"\nedition = "2021"\n',
     });
@@ -355,7 +355,7 @@ describe("detect — Python ecosystem (ADR 0006 amendment, laimk-hse.2)", () => 
   // Loose-manifest detection (ADR 0006c, laimk-hse.5). Unlike Node, where
   // requirements-presence implies a lockfile, a Python requirements.txt counts as a
   // stable lockfile ONLY when it is lock-grade (== + --hash). A loose one is flagged
-  // `loose` so the single resolving install resolves it fresh and it is never cached.
+  // `loose` so callers can surface the unpinned input; caching still uses a fingerprint.
   it("flags an UNPINNED requirements.txt as loose (ADR 0006c)", () => {
     const dir = repo({ "requirements.txt": "idna\nurllib3\n" });
 

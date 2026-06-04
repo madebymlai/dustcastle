@@ -1,11 +1,11 @@
 import { join } from "node:path";
 
-/** The opaque pool entry directory for one lockfile-hash-keyed deps-cache entry. */
-export function entryDir(cacheDir: string, lockfileHash: string): string {
-  return join(cacheDir, lockfileHash);
+/** The cache entry directory for one project deps fingerprint. */
+export function entryDir(cacheDir: string, depsKey: string): string {
+  return join(cacheDir, depsKey);
 }
 
-/** The run-facing path to one ecosystem's assembled deps within a cache entry. */
-export function contentPath(cacheDir: string, lockfileHash: string, stageDir: string): string {
-  return join(entryDir(cacheDir, lockfileHash), stageDir);
+/** The cached/restored content path for one ecosystem's assembled stage dir. */
+export function contentPath(cacheDir: string, depsKey: string, stageDir: string): string {
+  return join(entryDir(cacheDir, depsKey), stageDir);
 }

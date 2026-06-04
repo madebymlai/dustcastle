@@ -1,5 +1,7 @@
 export {
+  completeMarker,
   depsCacheDecision,
+  installSuccessSentinel,
   populateCommand,
   restoreCommand,
   type DepsCacheCommandInput,

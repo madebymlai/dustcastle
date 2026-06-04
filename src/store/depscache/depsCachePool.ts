@@ -6,18 +6,18 @@ import type { Pool, PoolEntry, PoolEvictReport } from "../pool.js";
 import { entryDir } from "./layout.js";
 
 /**
- * The deps-cache pool (ADR 0012, dustcastle-8od) — the SECOND pool behind the reusable
- * GC interface (`pool.ts`). Where the Store pool's mechanism is `nix-store --gc` over
- * the shared /nix/store, this pool's mechanism is plain **lockfile-hash-keyed
- * directories** under the dustcastle home: one entry per ecosystem, keyed by that
- * ecosystem's lockfile hash, holding its assembled Project Deps (the stage dir an
+ * The deps-cache pool (ADR 0016) — the SECOND pool behind the reusable GC interface
+ * (`pool.ts`). Where the Store pool's mechanism is `nix-store --gc` over the shared
+ * /nix/store, this pool's mechanism is plain **deps-fingerprint-keyed directories**
+ * under the dustcastle home: one entry per ecosystem, keyed by that ecosystem's deps
+ * fingerprint, holding its assembled Project Deps (the stage dir an
  * in-Sandbox install produced — `node_modules`/`site`/`vendor`). It maps the interface
  * onto the filesystem:
  *   - `measure`  → the total resident size of every entry dir;
  *   - `entries`  → one record per `<cacheDir>/<hash>` dir (its size + mtime as recency);
  *   - `pin`/`release` → an in-memory set (a live run pins ALL its deps-cache entries);
  *   - `evict`    → remove the cold hash dirs (a pinned entry is never removed);
- *   - `optimise` → ABSENT — there is no file-level dedup across lockfiles (out of
+ *   - `optimise` → ABSENT — there is no file-level dedup across deps keys (out of
  *     scope; the cache keys whole assembled-dep sets, not nix-style hard-linking).
  *
  * The pure brain (`collectPool`) drives it exactly as it drives the Store pool, so one
@@ -30,7 +30,7 @@ export function defaultDepsCacheDir(): string {
 }
 
 export interface DepsCachePoolOptions {
-  /** The deps-cache root holding the lockfile-hash-keyed entry dirs. */
+  /** The deps-cache root holding the deps-fingerprint-keyed entry dirs. */
   readonly cacheDir: string;
   /**
    * Override an entry's last-used timestamp (epoch ms) by key — injected in tests so
@@ -42,13 +42,13 @@ export interface DepsCachePoolOptions {
   readonly logger?: Logger;
 }
 
-/** Construct the deps-cache pool over lockfile-hash-keyed directories (ADR 0012). */
+/** Construct the deps-cache pool over deps-fingerprint-keyed directories (ADR 0016). */
 export function depsCachePool(opts: DepsCachePoolOptions): Pool {
   const logger = opts.logger ?? noopLogger;
   // A live run pins ALL its deps-cache entries; a pinned key is never evicted.
   const pinned = new Set<string>();
 
-  const listHashDirs = (): string[] => {
+  const listEntryDirs = (): string[] => {
     try {
       return readdirSync(opts.cacheDir, { withFileTypes: true })
         .filter((d) => d.isDirectory())
@@ -59,14 +59,14 @@ export function depsCachePool(opts: DepsCachePoolOptions): Pool {
   };
 
   return {
-    measure: (): number => listHashDirs().reduce((sum, hash) => sum + dirBytes(entryDir(opts.cacheDir, hash)), 0),
+    measure: (): number => listEntryDirs().reduce((sum, key) => sum + dirBytes(entryDir(opts.cacheDir, key)), 0),
 
     entries: (): PoolEntry[] =>
-      listHashDirs().map((hash) => {
-        const dir = entryDir(opts.cacheDir, hash);
+      listEntryDirs().map((key) => {
+        const dir = entryDir(opts.cacheDir, key);
         return {
-          key: hash,
-          lastUsedAt: opts.lastUsedAt?.[hash] ?? dirMtime(dir),
+          key,
+          lastUsedAt: opts.lastUsedAt?.[key] ?? dirMtime(dir),
           bytes: dirBytes(dir),
         };
       }),
@@ -98,8 +98,8 @@ export function depsCachePool(opts: DepsCachePoolOptions): Pool {
       logger.debug({ entriesEvicted, bytesFreed }, "deps-cache evicted cold entries");
       return { entriesEvicted, bytesFreed };
     },
-    // No `optimise`: the deps cache keys whole assembled-dep sets by lockfile hash;
-    // cross-lockfile file-level dedup is explicitly out of scope (ADR 0012).
+    // No `optimise`: the deps cache keys whole assembled-dep sets by deps fingerprint;
+    // cross-key file-level dedup is explicitly out of scope (ADR 0016).
   };
 }
 
