@@ -5,10 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Detection } from "../../detect/index.js";
 import { depsCacheKey } from "./index.js";
 
-// The deps-cache key (ADR 0012, dustcastle-8od) is that ecosystem's LOCKFILE HASH —
-// the stable key the cache entry is stored under, so a repeat Sandbox on the same
-// lockfile restores instead of re-installing. A loose / no-lockfile ecosystem has no
-// stable key (undefined), so it is never cached.
+// The deps-cache key (ADR 0012, dustcastle-8od; dustcastle-8iv.2) is the stable
+// cache entry name for one locked ecosystem: resolved Toolchain version + Ecosystem +
+// Package Manager + lockfile contents. A loose / no-lockfile ecosystem has no stable
+// key (undefined), so it is never cached.
 
 const dirs: string[] = [];
 function projectDir(): string {
@@ -23,7 +23,7 @@ afterEach(() => {
 const npm: Detection = { ecosystem: "node", packageManager: "npm" };
 const go: Detection = { ecosystem: "go", packageManager: "go" };
 
-describe("depsCacheKey (the lockfile hash — ADR 0012, dustcastle-8od)", () => {
+describe("depsCacheKey (locked deps key — ADR 0012, dustcastle-8od)", () => {
   it("is a stable hash of the manager's lockfile contents", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
@@ -41,6 +41,54 @@ describe("depsCacheKey (the lockfile hash — ADR 0012, dustcastle-8od)", () => 
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3,"name":"x"}');
     const after = depsCacheKey(dir, npm);
     expect(after).not.toBe(before);
+  });
+
+  it("changes when the resolved Toolchain version changes", () => {
+    const dir = projectDir();
+    writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
+
+    expect(depsCacheKey(dir, { ...npm, toolchainVersion: "20.18.0" })).not.toBe(
+      depsCacheKey(dir, { ...npm, toolchainVersion: "22.12.0" }),
+    );
+  });
+
+  it("changes when the Package Manager changes, all else equal", () => {
+    const dir = projectDir();
+    writeFileSync(join(dir, "package-lock.json"), "same locked deps\n");
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "same locked deps\n");
+
+    expect(depsCacheKey(dir, { ...npm, toolchainVersion: "22.12.0" })).not.toBe(
+      depsCacheKey(dir, {
+        ecosystem: "node",
+        packageManager: "pnpm",
+        toolchainVersion: "22.12.0",
+      }),
+    );
+  });
+
+  it("changes when the Ecosystem changes", () => {
+    const dir = projectDir();
+    writeFileSync(join(dir, "package-lock.json"), "same locked deps\n");
+
+    expect(
+      depsCacheKey(dir, { ecosystem: "node", packageManager: "npm", toolchainVersion: "22.12.0" }),
+    ).not.toBe(
+      depsCacheKey(dir, {
+        ecosystem: "python",
+        packageManager: "npm",
+        toolchainVersion: "22.12.0",
+      }),
+    );
+  });
+
+  it("is stable across irrelevant repo changes", () => {
+    const dir = projectDir();
+    writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
+    const before = depsCacheKey(dir, npm);
+
+    writeFileSync(join(dir, "README.md"), "changed prose\n");
+
+    expect(depsCacheKey(dir, npm)).toBe(before);
   });
 
   it("includes every present lockfile for managers with companion lockfiles", () => {
