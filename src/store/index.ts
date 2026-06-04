@@ -134,10 +134,11 @@ async function provision(
 // Rebuild artifacts that never belong in the Toolchain build input even if a project
 // commits them: VCS metadata, nix build outputs, and per-ecosystem dependency/cache
 // dirs rebuilt from the lockfile in-Sandbox (node's `node_modules`/Go's `vendor`,
-// Python's `.venv` + dev caches — often hundreds of MB). The committed tree already
-// excludes untracked junk; this is the "rebuilt, so excluded from the Nix input" set,
-// pruned from the checkout so a project that mistakenly *tracks* node_modules can't
-// bloat the staged build input.
+// Python's virtualenv under either convention — `.venv` or a bare `venv` (a torch/CUDA
+// venv runs to GBs) — plus dev caches). The committed tree already excludes untracked
+// junk; this is the "rebuilt, so excluded from the Nix input" set, pruned from the
+// checkout so a project that mistakenly *tracks* node_modules can't bloat the staged
+// build input.
 const STAGE_SKIP: ReadonlySet<string> = new Set([
   ".git",
   "vendor",
@@ -145,6 +146,7 @@ const STAGE_SKIP: ReadonlySet<string> = new Set([
   "result",
   "node_modules",
   ".venv",
+  "venv",
   ".tox",
   "__pycache__",
   ".mypy_cache",

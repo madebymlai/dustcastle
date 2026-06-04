@@ -159,8 +159,8 @@ describe("isStageableSource (the staged-build-source filter)", () => {
     expect(isStageableSource(`/proj/${CARGO_HOME_BASENAME}`)).toBe(false);
   });
 
-  it("excludes Python envs and dev caches (.venv and the rest — the node_modules analogues)", () => {
-    for (const name of [".venv", ".tox", "__pycache__", ".mypy_cache", ".pytest_cache"]) {
+  it("excludes Python envs and dev caches (.venv, bare venv, and the rest — the node_modules analogues)", () => {
+    for (const name of [".venv", "venv", ".tox", "__pycache__", ".mypy_cache", ".pytest_cache"]) {
       expect(isStageableSource(`/proj/${name}`)).toBe(false);
       // nested too — cpSync filters every entry by basename
       expect(isStageableSource(`/proj/pkg/${name}`)).toBe(false);
