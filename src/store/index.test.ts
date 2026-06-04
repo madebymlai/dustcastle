@@ -266,6 +266,52 @@ describe("stageSource (stages the committed tree for reproducible Store inputs)"
     expect(lstatSync(join(src, "link.txt")).isSymbolicLink()).toBe(true);
   });
 
+  it("tells git archive to pass Git-LFS pointers through, never smudge them to their payload", () => {
+    // The bloat behind a tmpfs overflow: git-lfs smudged 135-byte pointers into 3.4 GB of
+    // model weights during `git archive`. A config-sim fixture can't prove suppression —
+    // with git-lfs installed, production's archive routes through its global `process`
+    // filter regardless of repo-local config — so assert the contract at the boundary:
+    // a git shim records the archive invocation, and staging must hand it the LFS
+    // pass-through flags (plus the git-lfs env knob), exactly like the fake-git test below.
+    const dir = gitProject();
+    const shimDir = mkdtempSync(join(tmpdir(), "dustcastle-lfsgit-"));
+    tmps.push(shimDir);
+    const recPath = join(shimDir, "archive-call.json");
+    const shim = join(shimDir, "git");
+    writeFileSync(
+      shim,
+      "#!/usr/bin/env node\n" +
+        "const fs = require('fs');\n" +
+        "const a = process.argv.slice(2);\n" +
+        'if (a.includes("rev-parse")) { process.stdout.write("deadbeef\\n"); process.exit(0); }\n' +
+        'if (a.includes("archive")) {\n' +
+        '  fs.writeFileSync(a[a.indexOf("-o") + 1], Buffer.alloc(1024)); // a valid empty tar\n' +
+        "  fs.writeFileSync(process.env.DUSTCASTLE_GIT_REC, JSON.stringify({ argv: a, lfsSkip: process.env.GIT_LFS_SKIP_SMUDGE }));\n" +
+        "  process.exit(0);\n" +
+        "}\n" +
+        "process.exit(0);\n",
+    );
+    chmodSync(shim, 0o755);
+    const savedPath = process.env.PATH;
+    const savedRec = process.env.DUSTCASTLE_GIT_REC;
+    process.env.PATH = `${shimDir}:${savedPath ?? ""}`;
+    process.env.DUSTCASTLE_GIT_REC = recPath;
+    try {
+      stageSource(dir, destDir());
+    } finally {
+      process.env.PATH = savedPath;
+      if (savedRec === undefined) delete process.env.DUSTCASTLE_GIT_REC;
+      else process.env.DUSTCASTLE_GIT_REC = savedRec;
+    }
+    const call = JSON.parse(readFileSync(recPath, "utf8")) as { argv: string[]; lfsSkip?: string };
+    // Disable the LFS filter three ways + the git-lfs env knob, so a repo's pointers stage
+    // as their tiny pointer bytes, not the gigabytes of payload they reference.
+    expect(call.argv).toContain("filter.lfs.smudge=");
+    expect(call.argv).toContain("filter.lfs.process=");
+    expect(call.argv).toContain("filter.lfs.required=false");
+    expect(call.lfsSkip).toBe("1");
+  });
+
   it("errors with an actionable 'commit first' message outside a git work tree", () => {
     // No working-dir fallback: a non-git project has no committed source to build.
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-stage-nogit-"));

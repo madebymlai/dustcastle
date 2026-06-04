@@ -190,10 +190,33 @@ export function stageSource(projectDir: string, dest: string): void {
 }
 
 /**
+ * Git config that makes `git archive` pass Git-LFS pointers through verbatim instead of
+ * smudging them to their full payload. The Store stages source ONLY to build the
+ * Toolchain (ADR 0012); an LFS-tracked model or dataset is runtime data the Toolchain
+ * build never reads. Left to smudge, a repo's 135-byte pointers expand to their real
+ * content in the tarball — one product repo turned a 317 MB tree into a 3.66 GB archive
+ * (3.4 GB of ONNX weights), overflowing a tmpfs `$TMPDIR`. Emptying the LFS filter (and
+ * marking it not-required so the now-empty filter is not itself an error) stages the tiny
+ * pointers instead, so the build input is the source, not the gigabytes it will never
+ * read. `GIT_LFS_SKIP_SMUDGE` covers the same intent for git-lfs's long-running `process`
+ * filter. The Sandbox run path (sandcastle's `git worktree add`) is separate and still
+ * materializes LFS content the agent actually needs.
+ */
+const ARCHIVE_GIT_FLAGS = [
+  "-c",
+  "filter.lfs.smudge=",
+  "-c",
+  "filter.lfs.process=",
+  "-c",
+  "filter.lfs.required=false",
+] as const;
+
+/**
  * Materialize the committed tree at HEAD into `dest` via `git archive` piped through
  * `tar` (a temp tarball keeps huge trees off the heap; symlinks — even dangling ones
- * — survive as the link entries git stored). `assertCommittedTree` answers "is there a
- * commit to read?" up front, so any failure of `git archive` here is a genuine
+ * — survive as the link entries git stored). LFS pointers are staged verbatim, not
+ * smudged to their payload (see {@link ARCHIVE_GIT_FLAGS}). `assertCommittedTree` answers
+ * "is there a commit to read?" up front, so any failure of `git archive` here is a genuine
  * I/O/environment fault — a full `$TMPDIR` writing the tarball, say — and is surfaced
  * verbatim, never disguised as the misleading "nothing committed, commit first".
  */
@@ -203,8 +226,8 @@ function archiveCommittedTree(projectDir: string, dest: string): void {
     const tarPath = join(tarDir, "src.tar");
     const archive = spawnSync(
       "git",
-      ["-C", projectDir, "archive", "--format=tar", "-o", tarPath, "HEAD"],
-      { encoding: "utf8" },
+      ["-C", projectDir, ...ARCHIVE_GIT_FLAGS, "archive", "--format=tar", "-o", tarPath, "HEAD"],
+      { encoding: "utf8", env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" } },
     );
     if (archive.status !== 0) {
       const detail = archive.stderr.trim() || archive.error?.message || `exit ${archive.status}`;
