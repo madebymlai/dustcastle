@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -63,6 +64,12 @@ function fakeNixPortable(body: string): string {
 }
 
 describe("provisionStore dispatch", () => {
+  // The scratch build dir lives in tmpdir as `dustcastle-build-<rand>`; provisionStore
+  // is its only producer here. Diff the set before/after so the assertion ignores any
+  // orphans an earlier (real) run left in /tmp and pins only what THIS call leaks.
+  const listBuildDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith("dustcastle-build-"));
+  const newBuildDirs = (before: string[]) => listBuildDirs().filter((n) => !before.includes(n));
+
   it("rejects an unknown manager with the Registry's honest miss error", async () => {
     // The closed `PackageManager` union (laimk-mhg.6) makes a name outside the
     // Registry unrepresentable in well-typed code, so this case CASTS to exercise
@@ -106,6 +113,30 @@ describe("provisionStore dispatch", () => {
 
     expect(error?.message).toContain(stderr.slice(-2000));
     expect(error?.message).not.toContain("HEAD");
+  });
+
+  it("removes its scratch build dir after a successful provision (no /tmp leak)", async () => {
+    const before = listBuildDirs();
+    await provisionStore({
+      projectDir: stagedProject(),
+      detection: { ecosystem: "node", packageManager: "npm" },
+      nixPortable: fakeNixPortable("process.stdout.write('/nix/store/abc-toolchain\\n');"),
+    });
+    expect(newBuildDirs(before)).toEqual([]);
+  });
+
+  it("removes its scratch build dir even when the build fails (no /tmp leak)", async () => {
+    // The leak that filled a tmpfs: every provision mkdtemp'd a build dir and never
+    // removed it. Cleanup must run on the failure path too, not just the happy one.
+    const before = listBuildDirs();
+    await expect(
+      provisionStore({
+        projectDir: stagedProject(),
+        detection: { ecosystem: "node", packageManager: "npm" },
+        nixPortable: fakeNixPortable("process.exit(7);"),
+      }),
+    ).rejects.toThrow();
+    expect(newBuildDirs(before)).toEqual([]);
   });
 });
 
@@ -251,5 +282,38 @@ describe("stageSource (stages the committed tree for reproducible Store inputs)"
     git(dir, "init", "-q");
     writeFileSync(join(dir, "package.json"), "{}");
     expect(() => stageSource(dir, destDir())).toThrowError(/nothing committed to stage.*commit/s);
+  });
+
+  it("surfaces the real git error (not 'commit first') when archiving a committed tree fails", () => {
+    // The bug behind a disk-full $TMPDIR: HEAD has a real commit, but `git archive`
+    // fails writing its tarball. The old code read any non-zero archive exit as
+    // "nothing committed", sending the user to chase a non-existent "commit first"
+    // fix. A fake `git` on PATH passes the rev-parse guard (HEAD is a commit) yet
+    // fails the archive with a disk-full message, which must be reported verbatim.
+    const dir = gitProject();
+    const shimDir = mkdtempSync(join(tmpdir(), "dustcastle-fakegit-"));
+    tmps.push(shimDir);
+    const shim = join(shimDir, "git");
+    writeFileSync(
+      shim,
+      "#!/usr/bin/env node\n" +
+        "const a = process.argv.slice(2);\n" +
+        'if (a.includes("archive")) { process.stderr.write("fatal: write error: No space left on device\\n"); process.exit(128); }\n' +
+        'if (a.includes("rev-parse")) { process.stdout.write("deadbeef\\n"); process.exit(0); }\n' +
+        "process.exit(0);\n",
+    );
+    chmodSync(shim, 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${savedPath ?? ""}`;
+    let message = "";
+    try {
+      stageSource(dir, destDir());
+    } catch (error) {
+      message = (error as Error).message;
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    expect(message).toMatch(/No space left on device/);
+    expect(message).not.toMatch(/nothing committed/);
   });
 });

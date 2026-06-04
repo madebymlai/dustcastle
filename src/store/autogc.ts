@@ -1,7 +1,9 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noopLogger, type Logger } from "../log/index.js";
 import { pruneRunLogs, type PruneRunLogsReport } from "../log/retention.js";
+import { sweepOrphanedScratch } from "./scratch.js";
 import { overCeiling, recencyBudgetBytes, type CeilingReason } from "./ceiling.js";
 import type { GcReport, OptimiseReport, NixRunner } from "./nix.js";
 import { collectPool } from "./pool.js";
@@ -75,6 +77,14 @@ export interface AutoGcOptions {
   readonly runLogDir?: string;
   /** Override the flight-recorder retention ceiling (defaults to 16 MiB). */
   readonly runLogCeilingBytes?: number;
+  /**
+   * The dir holding throwaway provisioning scratch trees (defaults to the OS temp dir).
+   * The post-run pass reaps crash-leaked orphans here — the SIGKILL/OOM case where the
+   * in-process `withTempDir` cleanup could not run. Injected in tests.
+   */
+  readonly scratchTmpDir?: string;
+  /** Override the scratch-orphan staleness threshold (defaults to 6h inside the reaper). */
+  readonly scratchMaxAgeMs?: number;
 }
 
 const NOOP: AutoGcReport = { swept: false, reason: "none", storeBytes: 0, freedBytes: 0 };
@@ -100,6 +110,9 @@ export function autoGc(opts: AutoGcOptions): AutoGcReport | "skipped" {
   }
 
   try {
+    // Reap crash-leaked provisioning scratch orphans first — independent of the Store
+    // ceiling and best-effort, so it runs on every locked pass even if `sweep` throws.
+    reapScratchOrphans(opts, logger);
     return sweep(opts, logger);
   } catch (e) {
     // Best-effort: a failed/hung Store/cache sweep must never throw out of the detached child.
@@ -175,6 +188,20 @@ function sweep(opts: AutoGcOptions, logger: Logger): AutoGcReport {
     optimise,
     ...(gc !== undefined ? { gc } : {}),
   };
+}
+
+/** Best-effort orphan-scratch reap — wraps the reaper so a failure can never break the sweep. */
+function reapScratchOrphans(opts: AutoGcOptions, logger: Logger): void {
+  try {
+    sweepOrphanedScratch({
+      tmpDir: opts.scratchTmpDir ?? tmpdir(),
+      now: opts.now,
+      ...(opts.scratchMaxAgeMs !== undefined ? { maxAgeMs: opts.scratchMaxAgeMs } : {}),
+      logger,
+    });
+  } catch (e) {
+    logger.warn({ err: (e as Error).message }, "scratch-orphan reap failed (best-effort)");
+  }
 }
 
 function pruneFlightRecorderLogs(opts: AutoGcOptions, logger: Logger): PruneRunLogsReport {

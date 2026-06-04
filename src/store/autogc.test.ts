@@ -220,6 +220,29 @@ describe("autoGc (the detached sweep orchestration — ADR 0007)", () => {
     // The lock was released despite the failure (a later sweep is not blocked).
     expect(existsSync(join(home, "gc.lock"))).toBe(false);
   });
+
+  it("reaps a dead-owner scratch orphan but spares a live owner's dir (post-run pass, even under the ceiling)", () => {
+    const home = dir();
+    const scratchTmpDir = dir(); // isolated stand-in for the OS temp dir
+    // A SIGKILL'd run's leftover: owner PID 1 (init) is never our live run → reap.
+    const orphan = mkdtempSync(join(scratchTmpDir, "dustcastle-build-1-"));
+    // A concurrent live build, owned by THIS process → must survive the reaper.
+    const live = mkdtempSync(join(scratchTmpDir, `dustcastle-build-${process.pid}-`));
+
+    const report = autoGc({
+      run: () => OK(),
+      measure: () => 20, // under the ceiling: the store sweep is a no-op...
+      disk: diskSeq([{ free: 500, total: 1000 }]),
+      dir: home,
+      recencyRootsDir: join(home, "recency-roots"),
+      now: () => 1_700_000_000_000,
+      scratchTmpDir,
+    });
+
+    expect(report).not.toBe("skipped");
+    expect(existsSync(orphan)).toBe(false); // ...the dead-owner orphan is still reclaimed
+    expect(existsSync(live)).toBe(true); // ...and a concurrent live build is never touched
+  });
 });
 
 describe("readLastSweepLine (the next-run surfacer — ADR 0007)", () => {

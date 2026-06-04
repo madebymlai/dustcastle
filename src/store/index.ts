@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { Detection } from "../detect/index.js";
 import { noopLogger, type Logger } from "../log/index.js";
@@ -9,6 +9,7 @@ import { packageManagerDescriptor, type PackageManagerDescriptor } from "../ecos
 import { runStreamingAsync, type StreamingLogLevel, type StreamingRunResult } from "../process/streaming.js";
 import { parseStorePath } from "./parse.js";
 import { chooseRuntimeMode, unprivilegedUsernsAvailable, type RuntimeMode } from "./runtime.js";
+import { ARCHIVE_SCRATCH_PREFIX, BUILD_SCRATCH_PREFIX, withTempDir } from "./scratch.js";
 
 export { physPath } from "./paths.js";
 export { parseStorePath, storeHashOf } from "./parse.js";
@@ -49,27 +50,34 @@ export async function provisionStore(spec: ProvisionSpec): Promise<Provisioned> 
   const mode = chooseRuntimeMode({ unprivilegedUserns: unprivilegedUsernsAvailable() });
   const pname = sanitizePname(basename(spec.projectDir));
 
-  const buildDir = mkdtempSync(join(tmpdir(), "dustcastle-build-"));
-  stageSource(spec.projectDir, join(buildDir, "src"));
+  // The build dir is pure scratch: `git archive` staging + the generated `default.nix`
+  // that nix-build reads. The realized Toolchain lands in the physical Nix store (and
+  // `--no-out-link` leaves no `result` symlink here), so once `provision` resolves the
+  // dir is disposable — `withTempDir` removes it, keeping a tmpfs `$TMPDIR` from filling
+  // with one orphaned 200MB–2GB staged tree per run. Returning the `provision` promise
+  // (not awaiting it here) lets `withTempDir` hold the dir until the build finishes.
+  return withTempDir(BUILD_SCRATCH_PREFIX, (buildDir) => {
+    stageSource(spec.projectDir, join(buildDir, "src"));
 
-  const logger = spec.logger ?? noopLogger;
-  const run = (args: string[]) => runNixBuild(nixPortable, mode, [buildDir, ...args], logger);
-  const ctx: BuildContext = { buildDir, pname, mode, physStoreRoot, run, logger };
+    const logger = spec.logger ?? noopLogger;
+    const run = (args: string[]) => runNixBuild(nixPortable, mode, [buildDir, ...args], logger);
+    const ctx: BuildContext = { buildDir, pname, mode, physStoreRoot, run, logger };
 
-  // Route by the Package Manager descriptor in the Ecosystem Registry (ADR 0001:
-  // internal curation, NOT a plugin system; ADR 0006: the lockfile names the
-  // manager, the manager carries the Toolchain expression). `detection.packageManager`
-  // is the closed `PackageManager` union narrowed once at detection, and the Registry
-  // is exhaustive over it by construction (architecture review candidate 2), so the
-  // store's old defensive `default:`/Registry-miss guard has retired — the lookup's
-  // own honest throw is the single never-drop-a-gate net (ADR 0004) if a caller
-  // ever widens the type.
-  const descriptor = packageManagerDescriptor(spec.detection.packageManager);
+    // Route by the Package Manager descriptor in the Ecosystem Registry (ADR 0001:
+    // internal curation, NOT a plugin system; ADR 0006: the lockfile names the
+    // manager, the manager carries the Toolchain expression). `detection.packageManager`
+    // is the closed `PackageManager` union narrowed once at detection, and the Registry
+    // is exhaustive over it by construction (architecture review candidate 2), so the
+    // store's old defensive `default:`/Registry-miss guard has retired — the lookup's
+    // own honest throw is the single never-drop-a-gate net (ADR 0004) if a caller
+    // ever widens the type.
+    const descriptor = packageManagerDescriptor(spec.detection.packageManager);
 
-  // No provision gate any more (ADR 0012): every manager — bun included — provisions
-  // its Toolchain into the Store and installs its Project Deps impurely in-Sandbox,
-  // so there is no gated state to honour here.
-  return provision(spec, ctx, descriptor);
+    // No provision gate any more (ADR 0012): every manager — bun included — provisions
+    // its Toolchain into the Store and installs its Project Deps impurely in-Sandbox,
+    // so there is no gated state to honour here.
+    return provision(spec, ctx, descriptor);
+  });
 }
 
 /** Shared per-provision state passed to the generic provisioner. */
@@ -182,33 +190,54 @@ export function stageSource(projectDir: string, dest: string): void {
 /**
  * Materialize the committed tree at HEAD into `dest` via `git archive` piped through
  * `tar` (a temp tarball keeps huge trees off the heap; symlinks — even dangling ones
- * — survive as the link entries git stored). Throws an actionable "commit first"
- * error when there is no committed tree to read (not a git work tree, git
- * unavailable, or no commit yet) — dustcastle builds the committed source, so an
- * empty/uncommitted project is a user error to surface, not to paper over.
+ * — survive as the link entries git stored). `assertCommittedTree` answers "is there a
+ * commit to read?" up front, so any failure of `git archive` here is a genuine
+ * I/O/environment fault — a full `$TMPDIR` writing the tarball, say — and is surfaced
+ * verbatim, never disguised as the misleading "nothing committed, commit first".
  */
 function archiveCommittedTree(projectDir: string, dest: string): void {
-  const tarDir = mkdtempSync(join(tmpdir(), "dustcastle-archive-"));
-  const tarPath = join(tarDir, "src.tar");
-  try {
+  assertCommittedTree(projectDir);
+  withTempDir(ARCHIVE_SCRATCH_PREFIX, (tarDir) => {
+    const tarPath = join(tarDir, "src.tar");
     const archive = spawnSync(
       "git",
       ["-C", projectDir, "archive", "--format=tar", "-o", tarPath, "HEAD"],
       { encoding: "utf8" },
     );
     if (archive.status !== 0) {
-      throw new Error(
-        "store: nothing committed to stage — dustcastle builds the project's committed source. " +
-          "Run `git init` if needed, then `git add -A && git commit` before provisioning." +
-          (archive.stderr.trim() ? `\n(git archive HEAD: ${archive.stderr.trim()})` : ""),
-      );
+      const detail = archive.stderr.trim() || archive.error?.message || `exit ${archive.status}`;
+      throw new Error(`store: failed to stage the committed tree (git archive HEAD):\n${detail}`);
     }
     const extract = spawnSync("tar", ["-xf", tarPath, "-C", dest], { encoding: "utf8" });
     if (extract.status !== 0) {
       throw new Error(`store: failed to extract committed tree:\n${extract.stderr}`);
     }
-  } finally {
-    rmSync(tarDir, { recursive: true, force: true });
+  });
+}
+
+/**
+ * Guard that HEAD names a real commit before staging — dustcastle builds the committed
+ * source, so an empty/uncommitted project is a user error to surface up front with an
+ * actionable "commit first" message. `git rev-parse --verify HEAD^{commit}` resolves
+ * only for a real commit; a repo with no commit yet, or no work tree at all, fails it.
+ * A missing/broken git is a distinct fault (the spawn itself errors) and is reported as
+ * such — never disguised as "nothing committed", which would send the user chasing a
+ * fix that does not exist.
+ */
+function assertCommittedTree(projectDir: string): void {
+  const head = spawnSync(
+    "git",
+    ["-C", projectDir, "rev-parse", "-q", "--verify", "HEAD^{commit}"],
+    { encoding: "utf8" },
+  );
+  if (head.error) {
+    throw new Error(`store: could not run git to read the committed tree:\n${head.error.message}`);
+  }
+  if (head.status !== 0) {
+    throw new Error(
+      "store: nothing committed to stage — dustcastle builds the project's committed source. " +
+        "Run `git init` if needed, then `git add -A && git commit` before provisioning.",
+    );
   }
 }
 
