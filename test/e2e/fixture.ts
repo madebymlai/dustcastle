@@ -114,17 +114,17 @@ export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
     port: 0,
     onDecision: (h, allowed) => log(`proxy ${allowed ? "ALLOW" : "DENY "} ${h}`),
   });
-  const proxyUrl = `http://${PROXY_MAP_ADDR}:${proxy.port}`;
+  const proxyAddress = `http://${PROXY_MAP_ADDR}:${proxy.port}`;
 
   const storeRoot = spec.prepared.ecosystems[0].provisioned.physStoreRoot;
   // The plan env carries the Toolchain on PATH + writable cache vars; override the
-  // proxy env to the LIVE ephemeral proxy (the plan baked the production proxy URL).
+  // proxy env to the LIVE ephemeral proxy (the plan baked the production proxy address).
   const env = {
     ...spec.prepared.plan.podmanOptions.env,
     ...confine({
       projectDir: spec.projectDir,
       packageManagers: spec.prepared.ecosystems.map((e) => e.detection.packageManager),
-      proxyAddress: proxyUrl,
+      proxyAddress,
     }).posture.env,
     HOME: "/root",
   };

@@ -87,7 +87,7 @@ export function confine(input: ConfineInput): Confinement {
     ...(remoteHost !== undefined ? { gitRemoteHost: remoteHost } : {}),
     ...(input.agentModelHosts !== undefined ? { agentModelHosts: input.agentModelHosts } : {}),
   });
-  const proxyAddress = input.proxyAddress ?? productionProxyUrl();
+  const proxyAddress = input.proxyAddress ?? productionProxyAddress();
   return {
     decision,
     posture: postureFor(decision, proxyAddress),
@@ -198,19 +198,19 @@ function uniqueHosts(hosts: readonly string[]): string[] {
 }
 
 /** Point a build's HTTP tooling (and npm) at the egress proxy. */
-function proxyEnv(proxyUrl: string): Record<string, string> {
+function proxyEnv(proxyAddress: string): Record<string, string> {
   return {
-    HTTP_PROXY: proxyUrl,
-    HTTPS_PROXY: proxyUrl,
-    http_proxy: proxyUrl,
-    https_proxy: proxyUrl,
-    npm_config_proxy: proxyUrl,
-    npm_config_https_proxy: proxyUrl,
+    HTTP_PROXY: proxyAddress,
+    HTTPS_PROXY: proxyAddress,
+    http_proxy: proxyAddress,
+    https_proxy: proxyAddress,
+    npm_config_proxy: proxyAddress,
+    npm_config_https_proxy: proxyAddress,
   };
 }
 
 /** How a sandbox addresses the production proxy: by container name on the internal net. */
-function productionProxyUrl(): string {
+function productionProxyAddress(): string {
   return `http://${EGRESS_PROXY_CONTAINER}:${EGRESS_PROXY_PORT}`;
 }
 
@@ -227,8 +227,7 @@ interface ProxyContainerSpec {
   readonly image: string;
   readonly externalNetwork: string;
   readonly allowlist: readonly string[];
-  readonly proxyEntrypoint: string;
-  readonly resolvConfPath?: string;
+  readonly resolvConfPath: string;
   readonly container?: string;
   readonly network?: string;
   readonly port?: number;
@@ -247,7 +246,8 @@ function proxyContainerRunArgs(spec: ProxyContainerSpec): string[] {
     network,
     "--network",
     spec.externalNetwork,
-    ...(spec.resolvConfPath ? ["-v", `${spec.resolvConfPath}:/etc/resolv.conf:ro`] : []),
+    "-v",
+    `${spec.resolvConfPath}:/etc/resolv.conf:ro`,
     "-e",
     `DUSTCASTLE_EGRESS_ALLOWLIST=${spec.allowlist.join(",")}`,
     "-e",
@@ -256,7 +256,7 @@ function proxyContainerRunArgs(spec: ProxyContainerSpec): string[] {
     "DUSTCASTLE_EGRESS_HOST=0.0.0.0",
     spec.image,
     "node",
-    spec.proxyEntrypoint,
+    DEFAULT_PROXY_ENTRYPOINT,
   ];
 }
 
@@ -314,6 +314,7 @@ async function ensureEgress(opts: EnsureEgressOptions): Promise<EgressHandle> {
 
   const image = await (opts.ensureProxyImage ?? defaultEnsureProxyImage)(logger);
   const resolvConfPath = provisionProxyResolvConf(opts.dustcastleHome);
+  const hostList = hosts.join(", ");
 
   const created = run(egressNetworkCreateArgs());
   const weCreatedNetwork = isOk(created);
@@ -329,7 +330,6 @@ async function ensureEgress(opts: EnsureEgressOptions): Promise<EgressHandle> {
       image,
       externalNetwork: opts.externalNetwork ?? DEFAULT_EXTERNAL_NETWORK,
       allowlist: hosts,
-      proxyEntrypoint: DEFAULT_PROXY_ENTRYPOINT,
       resolvConfPath,
     }),
   );
@@ -337,15 +337,15 @@ async function ensureEgress(opts: EnsureEgressOptions): Promise<EgressHandle> {
   const fail = (reason: string): never => {
     run(["rm", "-f", EGRESS_PROXY_CONTAINER]);
     if (weCreatedNetwork) run(["network", "rm", EGRESS_NETWORK]);
-    logger.error({ hosts: hosts.join(", "), reason }, "could not establish scoped egress proxy");
-    throw new Error(`dustcastle: could not establish the scoped egress proxy enforcing [${hosts.join(", ")}]. ${reason}`);
+    logger.error({ hosts: hostList, reason }, "could not establish scoped egress proxy");
+    throw new Error(`dustcastle: could not establish the scoped egress proxy enforcing [${hostList}]. ${reason}`);
   };
   if (!isOk(started)) fail(`Underlying podman error: ${started.stderr.trim()}`);
 
   const liveness = (opts.verifyAlive ?? defaultVerifyProxyAlive)(run, EGRESS_PROXY_CONTAINER);
   if (!liveness.alive) fail(`The proxy container started but is not serving:\n${liveness.detail.trim()}`);
 
-  logger.info({ container: EGRESS_PROXY_CONTAINER, hosts: hosts.join(", ") }, "proxy enforcing allowlist");
+  logger.info({ container: EGRESS_PROXY_CONTAINER, hosts: hostList }, "proxy enforcing allowlist");
   return {
     teardown: () => {
       run(["rm", "-f", EGRESS_PROXY_CONTAINER]);

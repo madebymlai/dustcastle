@@ -31,7 +31,7 @@ The egress guarantee was spread across four shallow modules, and the same decisi
 
 **Decision: a single `confine()` facade owns the whole guarantee.** `egress.ts` + `confine.ts` + `egress-runtime.ts` merge into one `sandbox/egress` module whose only public surface is `confine(input) → Confinement { decision, posture, enforce() }`:
 
-- `confine()` does all derivation internally (git remote host, git-dep scan, `deriveEgress` — now the **only** call site), computes the Sandbox's network **posture** (`{ network, env }`), and resolves the proxy address **once** (`input.proxyAddress ?? productionProxyUrl()`).
+- `confine()` does all derivation internally (git remote host, git-dep scan, `deriveEgress` — now the **only** call site), computes the Sandbox's network **posture** (`{ network, env }`), and resolves the proxy address **once** (`input.proxyAddress ?? productionProxyAddress()`).
 - `posture` is what the Sandbox plan drops into its podman options; the plan no longer imports any egress internal or branches on `egress.kind`.
 - `enforce()` brings up the **production backend only** (image → resolv.conf → `--internal` network → proxy → verify-alive) and returns `{ teardown }`. Liveness is the facade's **tested invariant**: `enforce()` throws if the proxy is not serving.
 - Only the facade may branch on `egress.kind` or name the proxy mechanics (network, URL, env, image, entrypoint, resolv.conf); the spec generators stop being public.

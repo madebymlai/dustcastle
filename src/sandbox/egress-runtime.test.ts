@@ -21,6 +21,8 @@ const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision 
   agentHosts,
 });
 
+const TEST_PROXY_IMAGE = "/test/dustcastle-egress-proxy:latest";
+
 const tmps: string[] = [];
 afterEach(() => {
   while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
@@ -34,9 +36,11 @@ function tempHome(): string {
 
 function ensureEgress(opts: { readonly egress: EgressDecision } & EnforceConfinementOptions) {
   const { egress, ...enforceOpts } = opts;
+  const defaultHome =
+    egress.kind === "allowlist" && enforceOpts.dustcastleHome === undefined ? { dustcastleHome: tempHome() } : {};
   return confinementFor(egress).enforce({
-    ensureProxyImage: async () => "/test/dustcastle-egress-proxy:latest",
-    dustcastleHome: tempHome(),
+    ensureProxyImage: async () => TEST_PROXY_IMAGE,
+    ...defaultHome,
     ...enforceOpts,
   });
 }

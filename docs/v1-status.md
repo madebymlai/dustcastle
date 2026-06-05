@@ -117,9 +117,9 @@ build's only way out — with two backends, one proxy:
 |---|---|---|
 | `src/sandbox/proxy.ts` | `startEgressProxy` — a CONNECT/HTTP forward proxy that tunnels only the allowlisted hosts (`isHostAllowed`: exact, never wildcard) and refuses the rest with 403. No TLS interception. The portable enforcement brain; runs the same in production and the e2e | 0005 |
 | `src/sandbox/proxy-main.ts` | Env-driven runnable entrypoint for the proxy (the production proxy *container* and the e2e's host-side process) | 0005 |
-| `src/sandbox/confine.ts` | Confinement spec generators. **Production (podman-native, host-OS-agnostic):** `egressNetworkCreateArgs` (`--internal` network, no route off-host) + `proxyContainerRunArgs` (a dual-homed proxy container) + `proxyEnv`/`productionProxyUrl`. **Fallback:** `confineRouteScript` — the pasta route-strip for privilege-stripped hosts | 0005 |
-| `src/sandbox/plan.ts` | On the allowlist path, routes the container's tooling through the proxy (`HTTP(S)_PROXY` + npm proxy vars); `proxyUrl` threadable by the orchestration layer | 0002, 0005 |
-| `src/run/index.ts` | Threads `proxyUrl` through `prepareRun` (production defaults to the proxy container; the e2e overrides with its host proxy) | 0005 |
+| `src/sandbox/confine.ts` | Confinement facade. It derives the standing allowlist, exposes the Sandbox posture (`network` + proxy env), and owns production enforcement (proxy image, external-resolver resolv.conf, `--internal` network, dual-homed proxy container). **Fallback:** `confineRouteScript` — the pasta route-strip for privilege-stripped hosts | 0005 |
+| `src/sandbox/plan.ts` | On the allowlist path, routes the container's tooling through the proxy (`HTTP(S)_PROXY` + npm proxy vars) from the supplied confinement posture | 0002, 0005 |
+| `src/run/index.ts` | Threads `proxyAddress` through `prepareRun` (production defaults to the proxy container; the e2e overrides with its host proxy) | 0005 |
 | `test/fixtures/node-impure-sample/` | Impure fixture: a real registry dep (`is-number`) + a local dep with a `postinstall`, so the lockfile reports `hasInstallScript` and the build resolves impure | 0004 |
 | `test/e2e/egress.test.ts` | The live gate (below) | 0004, 0005 |
 
