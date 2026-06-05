@@ -1,6 +1,10 @@
 import { generateNodeToolchain } from "./toolchain-nix.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
+// -----------------------------------------------------------------------------
+// Managers
+// -----------------------------------------------------------------------------
+
 /**
  * The Node Ecosystem descriptors (ADR 0006/0012). One Ecosystem, four Package
  * Managers (npm/pnpm/yarn/bun). Each manager's descriptor encodes — in one place —
@@ -75,6 +79,10 @@ export const NODE_MANAGERS = { bun, pnpm, yarn, npm } satisfies Partial<
   Record<PackageManager, PackageManagerDescriptor>
 >;
 
+// -----------------------------------------------------------------------------
+// Ecosystem descriptor
+// -----------------------------------------------------------------------------
+
 export const NODE_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "node",
   manifests: ["package.json"],
@@ -106,6 +114,10 @@ export const NODE_ECOSYSTEM: EcosystemDescriptor = {
   },
 };
 
+// -----------------------------------------------------------------------------
+// Declared manager resolution
+// -----------------------------------------------------------------------------
+
 /** Parse the package-manager name from package.json's `packageManager` field. */
 function readPackageManager(manifest: string | undefined): PackageManager | undefined {
   const pkg = parseJsonOr(manifest) as { packageManager?: unknown } | undefined;
@@ -115,6 +127,10 @@ function readPackageManager(manifest: string | undefined): PackageManager | unde
   // Only a curated manager counts; an unknown name falls back to lockfile inference.
   return isNodeManager(name) ? name : undefined;
 }
+
+// -----------------------------------------------------------------------------
+// Version resolution
+// -----------------------------------------------------------------------------
 
 /**
  * Read the Node version from package.json's strict `devEngines.runtime` contract
