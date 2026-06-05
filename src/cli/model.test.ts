@@ -153,6 +153,7 @@ describe("ensureModel", () => {
     expect(fetched).toBe(false);
     expect(term.output).toBe("");
     expect(term.errorOutput).toContain("no model configured — run `dustcastle model`");
+    expect(term.errorOutput).not.toContain("Run `pi` then `/login` to authenticate");
   });
 
   it("returns cancelled when the first-run picker is cancelled", async () => {

@@ -1,4 +1,5 @@
 import { loadModelSelection, writeModel } from "../config/global.js";
+import { EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS } from "./exit-codes.js";
 import { listPiModels, type PiModelOption } from "./pi-models.js";
 import { singleSelect } from "./select.js";
 import { processTerminal, type SelectIo, type Terminal } from "./terminal.js";
@@ -6,9 +7,6 @@ import { processTerminal, type SelectIo, type Terminal } from "./terminal.js";
 export type ModelLister = () => Map<string, PiModelOption[]>;
 export type EnsureModelOutcome = "proceed" | "cancelled" | "no-model";
 
-const EXIT_SUCCESS = 0;
-const EXIT_FAILURE = 1;
-const EXIT_INTERRUPT = 130;
 const NO_MODELS_MESSAGE =
   "dustcastle: no pi models found. Run `pi` then `/login` to authenticate, then re-run `dustcastle model`.\n";
 const NO_CONFIGURED_MODEL_MESSAGE =

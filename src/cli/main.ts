@@ -2,6 +2,7 @@
 import { configuredAgentModelHosts, DUSTCASTLE_HOME, loadModelSelection } from "../config/global.js";
 import { createLogger } from "../log/pino.js";
 import { logPosture, logSweep } from "./posture.js";
+import { EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
 import { prepareRun } from "../run/index.js";
 import { orchestrate } from "../run/orchestrate.js";
 import { readLastSweepLine } from "../store/autogc.js";
@@ -29,7 +30,7 @@ async function main(argv: string[]): Promise<number> {
   const command = argv[0] ?? "run";
   if (command === "-h" || command === "--help" || command === "help") {
     console.log(USAGE);
-    return 0;
+    return EXIT_SUCCESS;
   }
   if (command === "model") {
     return runModelCommand(processTerminal());
@@ -44,7 +45,7 @@ async function main(argv: string[]): Promise<number> {
   }
   if (command !== "run") {
     console.error(`dustcastle: unknown command '${command}'.\n\n${USAGE}`);
-    return 2;
+    return EXIT_USAGE;
   }
 
   const cwd = process.cwd();
@@ -54,8 +55,14 @@ async function main(argv: string[]): Promise<number> {
   // interactively — same as agentstack's install flow; `dustcastle model`
   // re-picks. Headless with no model fails fast before provisioning.
   const modelOutcome = await ensureModel(processTerminal());
-  if (modelOutcome === "cancelled") return 130;
-  if (modelOutcome === "no-model") return 1;
+  switch (modelOutcome) {
+    case "proceed":
+      break;
+    case "cancelled":
+      return EXIT_INTERRUPT;
+    case "no-model":
+      return EXIT_FAILURE;
+  }
 
   const rootLogger = createCliLogger();
 
@@ -85,7 +92,7 @@ async function main(argv: string[]): Promise<number> {
     logPosture(rootLogger, prepared, {
       note: "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
     });
-    return 0;
+    return EXIT_SUCCESS;
   }
 
   // A model is set: drive the parallel-planner-with-review loop (plan → execute+
@@ -103,13 +110,13 @@ async function main(argv: string[]): Promise<number> {
       });
     },
   });
-  return 0;
+  return EXIT_SUCCESS;
 }
 
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err: unknown) => {
     console.error(`dustcastle: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
+    process.exit(EXIT_FAILURE);
   },
 );
