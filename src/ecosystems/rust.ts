@@ -92,26 +92,31 @@ export function readRustToolchainVersion({ readVersionFile }: ToolchainVersionIn
   const tomlChannel = readRustToolchainToml(readVersionFile(RUST_TOOLCHAIN_TOML));
   if (tomlChannel !== undefined) return tomlChannel;
 
-  return nonEmpty(readVersionFile(LEGACY_RUST_TOOLCHAIN)?.trim());
+  const legacyChannel = readVersionFile(LEGACY_RUST_TOOLCHAIN);
+  if (legacyChannel === undefined) return undefined;
+  return nonEmpty(legacyChannel.trim());
 }
 
 /** Read `[toolchain] channel = "..."` from rust-toolchain.toml. */
 export function readRustToolchainToml(text: string | undefined): string | undefined {
   if (text === undefined) return undefined;
+  return readTomlTableScalar(text, TOOLCHAIN_TABLE, CHANNEL_KEY);
+}
 
-  let inToolchainTable = false;
-  for (const line of text.split(/\r?\n/)) {
-    const trimmedLine = stripTomlComment(line).trim();
-    if (trimmedLine.length === 0) continue;
+function readTomlTableScalar(text: string, table: string, key: string): string | undefined {
+  let currentTable: string | undefined;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (line.length === 0) continue;
 
-    if (trimmedLine.startsWith("[")) {
-      inToolchainTable = parseTomlTableHeader(trimmedLine) === TOOLCHAIN_TABLE;
+    if (line.startsWith("[")) {
+      currentTable = parseTomlTableHeader(line);
       continue;
     }
-    if (!inToolchainTable) continue;
+    if (currentTable !== table) continue;
 
-    const assignment = parseTomlAssignment(trimmedLine);
-    if (assignment?.key !== CHANNEL_KEY) continue;
+    const assignment = parseTomlAssignment(line);
+    if (assignment?.key !== key) continue;
     return readTomlScalar(assignment.value);
   }
 
