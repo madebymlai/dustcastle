@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readRustToolchainToml, readRustToolchainVersion } from "./rust-version.js";
+import { readRustToolchainToml, readRustToolchainVersion } from "./rust.js";
 
 // Rust's Toolchain version reader (dustcastle-gy5.3) records an explicit rustup
 // channel pin for detection/closure-keying, but it MUST NOT treat Cargo.toml's
