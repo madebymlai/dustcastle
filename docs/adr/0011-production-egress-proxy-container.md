@@ -41,5 +41,5 @@ The egress guarantee was spread across four shallow modules, and the same decisi
 **Consequences:**
 
 - The caller's `beforeProvision` block collapses to a single `confinement.enforce()`. `prepareRun` owns `confine()` (so `prepareWorkspace`'s reuse still derives a posture without standing up a proxy), and the `withProvisionedSandbox` bracket owns enforce + teardown — its ordering invariant (egress up → … → teardown) is untouched.
-- `EgressHandle` stops carrying `proxyUrl` (vestigial — never read on the production path). `ProvisionOptions.proxyImage` / `proxyEntrypoint` are removed (set by no caller); `PrepareOptions.proxyUrl` relocates to `confine`'s `proxyAddress` input — one resolved address, not a second source of truth.
+- `EgressHandle` stops carrying `proxyUrl` (vestigial — never read on the production path). `ProvisionOptions.proxyImage` / `proxyEntrypoint` are removed (set by no caller); the former proxy-URL override enters through `confine`'s `proxyAddress` input (surfaced by `PrepareOptions.proxyAddress`) — one resolved address, not a second source of truth.
 - Egress derivation has one call site, so the plan can no longer build a narrower allowlist than the run enforces.

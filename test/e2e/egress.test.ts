@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { confineRouteScript, egressHosts } from "../../src/sandbox/confine.js";
+import { confine, confineRouteScript, egressHosts } from "../../src/sandbox/confine.js";
 import { startEgressProxy, type EgressProxyHandle } from "../../src/sandbox/proxy.js";
 import { prepareRun } from "../../src/run/index.js";
 import { stageNodeImpureProject } from "./fixture.js";
@@ -83,11 +83,17 @@ describe("dustcastle run (slice 3: impure-allow egress enforcement, ADR 0004/000
       });
       expect(prepared.ecosystems[0].detection.ecosystem).toBe("node");
       expect(prepared.plan.egress.kind).toBe("allowlist");
+      const confinement = confine({
+        projectDir,
+        packageManagers: prepared.ecosystems.map((e) => e.detection.packageManager),
+        proxyAddress: PROXY_URL,
+      });
+      expect(prepared.plan.egress).toEqual(confinement.decision);
       // The standing allowlist the proxy enforces: the npm registry (no git remote on
       // a temp fixture). `egressHosts` is the flat union the proxy consumes.
-      const allowlist = egressHosts(prepared.plan.egress);
+      const allowlist = egressHosts(confinement.decision);
       expect(allowlist).toContain("registry.npmjs.org");
-      expect(prepared.plan.podmanOptions.network).toBe("dustcastle-egress");
+      expect(prepared.plan.podmanOptions.network).toBe(confinement.posture.network);
       expect(prepared.plan.podmanOptions.env?.HTTPS_PROXY).toBe(PROXY_URL);
       expect(prepared.plan.setupCommands.join("\n")).toContain("npm ci");
 

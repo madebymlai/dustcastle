@@ -2,15 +2,9 @@ import * as sandcastle from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
-import {
-  DEFAULT_PROXY_ENTRYPOINT,
-  confine,
-  provisionProxyResolvConf,
-  type Confinement,
-  type EgressHandle,
-} from "../sandbox/confine.js";
+import { confine, type Confinement, type EgressHandle } from "../sandbox/confine.js";
 import { planSandbox, type EcosystemPlan, type EcosystemPlans, type SandboxPlan } from "../sandbox/plan.js";
-import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
+import { AGENT_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore } from "../store/index.js";
 import { nixPortableRunner, type NixRunner } from "../store/nix.js";
 import { storePool, type StorePoolOptions } from "../store/storePool.js";
@@ -210,10 +204,6 @@ export interface ProvisionOptions extends PrepareOptions {
    * the run aborts before provisioning and this never fires.
    */
   readonly onPrepared?: (prepared: PreparedRun) => void;
-  /** In-container path to the proxy entrypoint for the production egress backend. */
-  readonly proxyEntrypoint?: string;
-  /** Image carrying a Node runtime for the egress proxy container. */
-  readonly proxyImage?: string;
   /**
    * Override the scoped GC-root plumbing (ADR 0007). Tests/e2e inject a nix runner
    * and a scratch gcroots dir; production defaults to a real nix-portable spawn
@@ -324,21 +314,7 @@ export async function withProvisionedSandbox<T>(
       // egress fails fast here, before any build work; dustcastle has no unconfined
       // fallback. Torn down in the finally whatever the outcome.
       beforeProvision: async (confinement) => {
-        // Only the allowlist path runs a proxy, so build its image lazily there —
-        // the dustcastle-owned image that actually carries the proxy code.
-        let image = opts.proxyImage;
-        if (image === undefined && confinement.decision.kind === "allowlist") {
-          image = await ensureImage(PROXY_SPEC, { logger: egressLogger });
-        }
-        // The proxy resolves allowlisted hosts through external resolvers, not the
-        // --internal net's aardvark (which would NXDOMAIN-poison resolution).
-        const resolvConfPath = confinement.decision.kind === "allowlist" ? provisionProxyResolvConf() : undefined;
-        egress = confinement.enforce({
-          proxyEntrypoint: opts.proxyEntrypoint ?? DEFAULT_PROXY_ENTRYPOINT,
-          ...(image !== undefined ? { image } : {}),
-          ...(resolvConfPath !== undefined ? { resolvConfPath } : {}),
-          logger: egressLogger,
-        });
+        egress = await confinement.enforce({ logger: egressLogger });
       },
     });
 

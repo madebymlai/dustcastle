@@ -41,38 +41,38 @@ const noRemoteProjectDir = mkdtempSync(join(tmpdir(), "dustcastle-plan-"));
 type LegacyPlanSpec = Omit<SandboxPlanSpec, "confinement"> & {
   readonly confinement?: Pick<Confinement, "decision" | "posture">;
   readonly egress?: EgressDecision;
-  readonly proxyUrl?: string;
+  readonly proxyAddress?: string;
 };
 
 function planSandbox(spec: LegacyPlanSpec) {
   const confinement = confinementForPlanSpec(spec);
-  const { egress: _egress, proxyUrl: _proxyUrl, ...rest } = spec;
+  const { egress: _egress, proxyAddress: _proxyAddress, ...rest } = spec;
   void _egress;
-  void _proxyUrl;
+  void _proxyAddress;
   return rawPlanSandbox({ ...rest, confinement });
 }
 
 function confinementForPlanSpec(spec: LegacyPlanSpec): Pick<Confinement, "decision" | "posture"> {
   if (spec.confinement !== undefined) return spec.confinement;
-  if (spec.egress !== undefined) return { decision: spec.egress, posture: postureFor(spec.egress, spec.proxyUrl) };
+  if (spec.egress !== undefined) return { decision: spec.egress, posture: postureFor(spec.egress, spec.proxyAddress) };
   return confine({
     projectDir: noRemoteProjectDir,
     packageManagers: spec.ecosystems.map((e) => e.detection.packageManager),
-    ...(spec.proxyUrl !== undefined ? { proxyAddress: spec.proxyUrl } : {}),
+    ...(spec.proxyAddress !== undefined ? { proxyAddress: spec.proxyAddress } : {}),
   });
 }
 
-function postureFor(decision: EgressDecision, proxyUrl = "http://dustcastle-egress-proxy:8118"): EgressPosture {
+function postureFor(decision: EgressDecision, proxyAddress = "http://dustcastle-egress-proxy:8118"): EgressPosture {
   if (decision.kind === "none") return { network: "none", env: {} };
   return {
     network: EGRESS_NETWORK,
     env: {
-      HTTP_PROXY: proxyUrl,
-      HTTPS_PROXY: proxyUrl,
-      http_proxy: proxyUrl,
-      https_proxy: proxyUrl,
-      npm_config_proxy: proxyUrl,
-      npm_config_https_proxy: proxyUrl,
+      HTTP_PROXY: proxyAddress,
+      HTTPS_PROXY: proxyAddress,
+      http_proxy: proxyAddress,
+      https_proxy: proxyAddress,
+      npm_config_proxy: proxyAddress,
+      npm_config_https_proxy: proxyAddress,
     },
   };
 }
@@ -220,10 +220,10 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
     expect(env.npm_config_proxy).toBe("http://dustcastle-egress-proxy:8118");
   });
 
-  it("lets the orchestration layer override the proxy url (the e2e's host proxy)", () => {
+  it("lets the orchestration layer override the proxy address through confine() (the e2e's host proxy)", () => {
     const env = planSandbox({
       ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }],
-      proxyUrl: "http://169.254.7.7:8118",
+      proxyAddress: "http://169.254.7.7:8118",
     }).podmanOptions.env ?? {};
 
     expect(env.HTTPS_PROXY).toBe("http://169.254.7.7:8118");

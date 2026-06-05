@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DUSTCASTLE_HOME } from "../config/global.js";
 import { ecosystemFor, packageManagerDescriptor, type PackageManager } from "../ecosystems/index.js";
 import { noopLogger, type Logger } from "../log/index.js";
-import { imageRef, PROXY_SPEC } from "./image.js";
+import { ensureImage, PROXY_SPEC } from "./image.js";
 
 /** The internal podman network an allowlisted sandbox attaches to (production backend). */
 export const EGRESS_NETWORK = "dustcastle-egress";
@@ -16,7 +16,7 @@ export const EGRESS_PROXY_PORT = 8118;
 /** The resolvers the production proxy container resolves allowlisted hosts through. */
 const EGRESS_PROXY_DNS: readonly string[] = ["1.1.1.1", "8.8.8.8"];
 /** The default in-container path the production proxy image is expected to bundle. */
-export const DEFAULT_PROXY_ENTRYPOINT = "/opt/dustcastle/proxy-main.js";
+const DEFAULT_PROXY_ENTRYPOINT = "/opt/dustcastle/proxy-main.js";
 
 export type EgressDecision =
   | { readonly kind: "none" }
@@ -49,18 +49,16 @@ export interface ConfineInput {
 }
 
 export interface EnforceConfinementOptions {
-  /** In-container path to the proxy entrypoint (`proxy-main.js`). */
-  readonly proxyEntrypoint?: string;
-  /** Image carrying a Node runtime for the proxy container. */
-  readonly image?: string;
-  /** Host path to the proxy's resolv.conf (external resolvers), bind-mounted in. */
-  readonly resolvConfPath?: string;
   /** The external network the proxy reaches the allowlisted registries through. */
   readonly externalNetwork?: string;
   /** Inject a podman runner (tests); defaults to a real `podman` spawn. */
   readonly run?: PodmanRunner;
   /** Inject liveness verification (tests); defaults to podman-log polling. */
   readonly verifyAlive?: (run: PodmanRunner, container: string) => ProxyLiveness;
+  /** Inject image provisioning (tests); production builds the dustcastle proxy image. */
+  readonly ensureProxyImage?: (logger: Logger) => Promise<string>;
+  /** Override dustcastle's home for materializing proxy prerequisites (tests). */
+  readonly dustcastleHome?: string;
   /** Structured progress logs. */
   readonly logger?: Logger;
 }
@@ -70,15 +68,16 @@ export interface Confinement {
   readonly decision: EgressDecision;
   /** The network/env posture the Sandbox plan drops into podman options. */
   readonly posture: EgressPosture;
-  /** Bring up the production confinement backend, returning its teardown handle. */
-  enforce(opts?: EnforceConfinementOptions): EgressHandle;
+  /** Bring up the production confinement backend, resolving to its teardown handle. */
+  enforce(opts?: EnforceConfinementOptions): Promise<EgressHandle>;
 }
 
 /**
  * The single Egress facade (ADR 0005/0010/0012): derive the standing allowlist,
  * resolve the proxy address once, expose the plan posture, and wrap the production
- * backend bring-up. The Sandbox plan consumes only `posture` and never re-derives or
- * branches on Egress internals.
+ * backend bring-up (proxy image → resolv.conf → internal network → live proxy).
+ * The Sandbox plan consumes only `posture` and never re-derives or branches on
+ * Egress internals.
  */
 export function confine(input: ConfineInput): Confinement {
   const remoteHost = gitRemoteHost(input.projectDir);
@@ -286,7 +285,6 @@ export interface PodmanResult {
 /** Runs a `podman <args>` command. Injected in tests; defaults to a real spawn. */
 export type PodmanRunner = (args: readonly string[]) => PodmanResult;
 
-const DEFAULT_PROXY_IMAGE = imageRef(PROXY_SPEC);
 const DEFAULT_EXTERNAL_NETWORK = "podman";
 const PROXY_LISTENING_EVENT = "listening";
 
@@ -308,11 +306,14 @@ interface EnsureEgressOptions extends EnforceConfinementOptions {
   readonly egress: EgressDecision;
 }
 
-function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
+async function ensureEgress(opts: EnsureEgressOptions): Promise<EgressHandle> {
   if (opts.egress.kind !== "allowlist") return NOOP;
   const run = opts.run ?? defaultPodman;
   const logger = opts.logger ?? noopLogger;
   const hosts = egressHosts(opts.egress);
+
+  const image = await (opts.ensureProxyImage ?? defaultEnsureProxyImage)(logger);
+  const resolvConfPath = provisionProxyResolvConf(opts.dustcastleHome);
 
   const created = run(egressNetworkCreateArgs());
   const weCreatedNetwork = isOk(created);
@@ -325,11 +326,11 @@ function ensureEgress(opts: EnsureEgressOptions): EgressHandle {
   run(["rm", "-f", EGRESS_PROXY_CONTAINER]);
   const started = run(
     proxyContainerRunArgs({
-      image: opts.image ?? DEFAULT_PROXY_IMAGE,
+      image,
       externalNetwork: opts.externalNetwork ?? DEFAULT_EXTERNAL_NETWORK,
       allowlist: hosts,
-      proxyEntrypoint: opts.proxyEntrypoint ?? DEFAULT_PROXY_ENTRYPOINT,
-      ...(opts.resolvConfPath !== undefined ? { resolvConfPath: opts.resolvConfPath } : {}),
+      proxyEntrypoint: DEFAULT_PROXY_ENTRYPOINT,
+      resolvConfPath,
     }),
   );
 
@@ -410,11 +411,15 @@ function isAlreadyExists(r: PodmanResult): boolean {
 }
 
 /** Materialize the proxy's external-resolver resolv.conf under the dustcastle home. */
-export function provisionProxyResolvConf(home: string = DUSTCASTLE_HOME): string {
+function provisionProxyResolvConf(home: string = DUSTCASTLE_HOME): string {
   mkdirSync(home, { recursive: true });
   const path = join(home, "egress-resolv.conf");
   writeFileSync(path, proxyResolvConf());
   return path;
+}
+
+function defaultEnsureProxyImage(logger: Logger): Promise<string> {
+  return ensureImage(PROXY_SPEC, { logger });
 }
 
 function defaultPodman(args: readonly string[]): PodmanResult {
