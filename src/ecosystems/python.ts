@@ -166,10 +166,10 @@ export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
  */
 function detectPythonLoose({ manifestPresent, hasLockfile, readFile }: LooseManifestInput): boolean {
   if (!manifestPresent) return false;
-  const requirements = readFile("requirements.txt");
-  if (requirements !== undefined) {
-    // requirements.txt present: lock-grade builds pure directly; otherwise resolve.
-    return !requirementsIsLockGrade(requirements);
+  const requirementsText = readFile("requirements.txt");
+  if (requirementsText !== undefined) {
+    // requirements.txt present: lock-grade is cacheable; otherwise it resolves fresh.
+    return !requirementsIsLockGrade(requirementsText);
   }
   // No requirements.txt: a uv.lock / poetry.lock is the lock (its in-Sandbox export
   // step produces requirements.txt). Loose only when there is no lock at all.
@@ -414,9 +414,15 @@ function highestStableSatisfying(
   available: readonly AvailableInterpreter[],
   spec: Pep440Range,
 ): AvailableInterpreter | undefined {
-  return [...available]
-    .filter((i) => i.prerelease !== true && spec.satisfies(i.minor))
-    .sort((a, b) => b.minor - a.minor)[0];
+  let highest: AvailableInterpreter | undefined;
+
+  for (const interpreter of available) {
+    if (interpreter.prerelease === true) continue;
+    if (!spec.satisfies(interpreter.minor)) continue;
+    if (highest === undefined || interpreter.minor > highest.minor) highest = interpreter;
+  }
+
+  return highest;
 }
 
 /** Human-readable list of available stable minors, for the actionable errors. */
@@ -453,48 +459,85 @@ function parsePep440Range(specifier: string): Pep440Range {
   };
 }
 
+type Pep440Operator = ">=" | ">" | "<=" | "<" | "==" | "!=" | "~=";
+
+interface Pep440Clause {
+  readonly operator: Pep440Operator;
+  readonly rawVersion: string;
+}
+
+const PEP440_CLAUSE_PATTERN = /^(>=|<=|==|!=|~=|>|<)\s*(.+)$/;
+
 /** One PEP 440 clause -> a predicate over the candidate minor (major assumed 3). */
 function parseClause(clause: string): (minor: number) => boolean {
-  const match = clause.match(/^(>=|<=|==|!=|~=|>|<)\s*(.+)$/);
-  if (match === null) {
+  const parsed = parsePep440Clause(clause);
+  if (parsed === undefined) {
     // An unrecognised clause is ignored rather than silently mis-resolving: it
     // can only widen, never wrongly narrow (a bad clause never fabricates a pin).
     return () => true;
   }
-  const op = match[1] as string;
-  const rawVersion = (match[2] as string).trim();
+  const { operator, rawVersion } = parsed;
 
   // The `==3.11.*` wildcard pins the minor exactly (patch wildcarded).
-  if (op === "==" && rawVersion.endsWith(".*")) {
+  if (operator === "==" && rawVersion.endsWith(".*")) {
     const target = parseVersionMinor(rawVersion.slice(0, -2));
-    return target === undefined ? () => true : (minor) => minor === target.minor && target.major === 3;
+    if (target === undefined) return () => true;
+    return (minor) => minor === target.minor && target.major === 3;
   }
 
   const target = parseVersionMinor(rawVersion);
   if (target === undefined) return () => true;
   // Compare at the minor grain against a same-major target (nixpkgs is all major 3).
-  const t = target.major === 3 ? target.minor : target.major > 3 ? Infinity : -Infinity;
+  const targetMinor = comparisonMinorFor(target);
 
-  switch (op) {
+  switch (operator) {
     case ">=":
-      return (minor) => minor >= t;
+      return (minor) => minor >= targetMinor;
     case ">":
       // `>3.10` excludes 3.10 itself (we resolve whole minors, patch treated as 0).
-      return (minor) => minor > t;
+      return (minor) => minor > targetMinor;
     case "<=":
-      return (minor) => minor <= t;
+      return (minor) => minor <= targetMinor;
     case "<":
-      return (minor) => minor < t;
+      return (minor) => minor < targetMinor;
     case "==":
-      return (minor) => minor === t;
+      return (minor) => minor === targetMinor;
     case "!=":
-      return (minor) => minor !== t;
+      return (minor) => minor !== targetMinor;
     case "~=":
       // `~=3.10` (compatible release) == `>=3.10,<4`; `~=3.10.0` == `>=3.10,<3.11`.
-      return rawVersion.split(".").length >= 3 ? (minor) => minor === t : (minor) => minor >= t;
-    default:
-      return () => true;
+      if (rawVersion.split(".").length >= 3) return (minor) => minor === targetMinor;
+      return (minor) => minor >= targetMinor;
   }
+}
+
+function parsePep440Clause(clause: string): Pep440Clause | undefined {
+  const match = clause.match(PEP440_CLAUSE_PATTERN);
+  const operator = match?.[1];
+  const rawVersion = match?.[2]?.trim();
+  if (!isPep440Operator(operator) || rawVersion === undefined) return undefined;
+  return { operator, rawVersion };
+}
+
+function isPep440Operator(value: string | undefined): value is Pep440Operator {
+  switch (value) {
+    case ">=":
+    case ">":
+    case "<=":
+    case "<":
+    case "==":
+    case "!=":
+    case "~=":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function comparisonMinorFor(target: PythonMinor): number {
+  if (target.major === 3) return target.minor;
+  if (target.major > 3) return Infinity;
+  return -Infinity;
 }
 
 /** Parse a `3` / `3.11` / `3.11.2` version head to a `major.minor` (minor defaults 0). */
