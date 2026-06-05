@@ -7,7 +7,6 @@ import { createMemoryLogger } from "../log/fake.js";
 import {
   confine,
   EGRESS_NETWORK,
-  EGRESS_PROXY_CONTAINER,
   isProxyListeningLogLine,
   type EgressDecision,
   type EnforceConfinementOptions,
@@ -89,6 +88,13 @@ function recorder(reply: (args: string[]) => PodmanResult = defaultReply) {
     return reply(a);
   };
   return { run, calls };
+}
+
+/** The container the proxy `run -d --name <c>` actually started — what teardown must remove. */
+function startedContainer(calls: string[][]): string {
+  const runCall = calls.find((c) => c[0] === "run");
+  expect(runCall).toBeDefined();
+  return runCall![runCall!.indexOf("--name") + 1]!;
 }
 
 describe("enforce() (the production egress backend orchestration — ADR 0005)", () => {
@@ -234,8 +240,8 @@ describe("enforce() (the production egress backend orchestration — ADR 0005)",
     await expect(ensureEgress({ egress: allow(["api.deepseek.com"]), run })).rejects.toThrow(
       /proxy container started but is not serving[\s\S]*Cannot find module/i,
     );
-    // A dead proxy leaves nothing behind: container removed, our network rolled back.
-    expect(calls.some((c) => c[0] === "rm" && c.includes(EGRESS_PROXY_CONTAINER))).toBe(true);
+    // A dead proxy leaves nothing behind: the container it started is removed, our network rolled back.
+    expect(calls.some((c) => c[0] === "rm" && c.includes(startedContainer(calls)))).toBe(true);
     expect(calls.some((c) => c[0] === "network" && c[1] === "rm" && c.includes(EGRESS_NETWORK))).toBe(true);
   });
 
@@ -272,9 +278,10 @@ describe("enforce() (the production egress backend orchestration — ADR 0005)",
       egress: allow(["x"]),
       run,
     });
+    const startedProxy = startedContainer(calls);
     calls.length = 0; // isolate the teardown calls
     handle.teardown();
-    expect(calls.some((c) => c[0] === "rm" && c.includes(EGRESS_PROXY_CONTAINER))).toBe(true);
+    expect(calls.some((c) => c[0] === "rm" && c.includes(startedProxy))).toBe(true);
     expect(calls.some((c) => c[0] === "network" && c[1] === "rm" && c.includes(EGRESS_NETWORK))).toBe(true);
   });
 });

@@ -9,9 +9,9 @@ import { ensureImage, PROXY_SPEC } from "./image.js";
 /** The internal podman network an allowlisted sandbox attaches to (production backend). */
 export const EGRESS_NETWORK = "dustcastle-egress";
 /** The dual-homed filtering-proxy container's name (resolvable via aardvark-dns). */
-export const EGRESS_PROXY_CONTAINER = "dustcastle-egress-proxy";
+const EGRESS_PROXY_CONTAINER = "dustcastle-egress-proxy";
 /** The port the proxy listens on (both backends). */
-export const EGRESS_PROXY_PORT = 8118;
+const EGRESS_PROXY_PORT = 8118;
 
 /** The resolvers the production proxy container resolves allowlisted hosts through. */
 const EGRESS_PROXY_DNS: readonly string[] = ["1.1.1.1", "8.8.8.8"];
