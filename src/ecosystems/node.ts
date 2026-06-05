@@ -114,6 +114,10 @@ export const NODE_ECOSYSTEM: EcosystemDescriptor = {
   },
 };
 
+// -----------------------------------------------------------------------------
+// Declared manager resolution
+// -----------------------------------------------------------------------------
+
 /** Parse the package-manager name from package.json's `packageManager` field. */
 function readPackageManager(manifest: string | undefined): PackageManager | undefined {
   const pkg = parseJsonOr(manifest) as { packageManager?: unknown } | undefined;
@@ -123,10 +127,6 @@ function readPackageManager(manifest: string | undefined): PackageManager | unde
   // Only a curated manager counts; an unknown name falls back to lockfile inference.
   return isNodeManager(name) ? name : undefined;
 }
-
-// -----------------------------------------------------------------------------
-// Loose detection
-// -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
 // Version resolution
