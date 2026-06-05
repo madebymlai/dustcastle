@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { runAutoGcCommand } from "./autogc.js";
 import { runGcCommand } from "./gc.js";
 import { ensureModel, runModelCommand } from "./model.js";
+import { processTerminal } from "./terminal.js";
 
 const USAGE = `dustcastle — a global toolchain manager for AI coding agent sandboxes.
 
@@ -31,7 +32,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (command === "model") {
-    return runModelCommand();
+    return runModelCommand(processTerminal());
   }
   if (command === "gc") {
     return runGcCommand({ logger: createCliLogger().child({ mod: "gc" }) });
@@ -52,7 +53,8 @@ async function main(argv: string[]): Promise<number> {
   // project-local config). The first run with no model configured picks one
   // interactively — same as agentstack's install flow; `dustcastle model`
   // re-picks. Headless with no model just provisions and says so below.
-  await ensureModel();
+  const modelOutcome = await ensureModel(processTerminal());
+  if (modelOutcome === "cancelled") return 130;
 
   const rootLogger = createCliLogger();
 

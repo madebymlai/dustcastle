@@ -1,14 +1,20 @@
 import { loadModelSelection, writeModel } from "../config/global.js";
 import { listPiModels, type PiModelOption } from "./pi-models.js";
 import { singleSelect } from "./select.js";
+import { processTerminal, type SelectIo, type Terminal } from "./terminal.js";
+
+export type ModelLister = () => Map<string, PiModelOption[]>;
+export type EnsureModelOutcome = "proceed" | "cancelled";
 
 /**
  * Interactively choose a pi model (provider → model), mirroring agentstack's
- * picker. Returns the `provider/model` value, or `undefined` when pi reports no
- * models (not installed, or not authenticated yet).
+ * picker. Returns the `provider/model` value, or `undefined` when there are no
+ * models or the operator cancels.
  */
-export async function chooseModel(): Promise<string | undefined> {
-  const byProvider = listPiModels();
+export async function chooseModel(
+  byProvider: Map<string, PiModelOption[]>,
+  io: SelectIo,
+): Promise<string | undefined> {
   if (byProvider.size === 0) return undefined;
 
   const providers = [...byProvider.keys()];
@@ -19,10 +25,12 @@ export async function chooseModel(): Promise<string | undefined> {
     const provider = await singleSelect(
       "Which provider?",
       providers.map((p) => ({ label: p, value: p })),
+      io,
     );
+    if (provider === undefined) return undefined;
     models = byProvider.get(provider)!;
   }
-  return singleSelect("Which model?", models);
+  return singleSelect("Which model?", models, io);
 }
 
 /**
@@ -30,35 +38,49 @@ export async function chooseModel(): Promise<string | undefined> {
  * the one model every project / every instance uses (there is no project-local
  * config). Returns a process exit code.
  */
-export async function runModelCommand(): Promise<number> {
-  if (!process.stdin.isTTY) {
-    console.error("dustcastle: `dustcastle model` needs an interactive terminal to pick a model.");
+export async function runModelCommand(
+  term: Terminal = processTerminal(),
+  listModels: ModelLister = listPiModels,
+  dir?: string,
+): Promise<number> {
+  if (!term.isTTY) {
+    term.error("dustcastle: `dustcastle model` needs an interactive terminal to pick a model.\n");
     return 1;
   }
-  const selected = await chooseModel();
-  if (selected === undefined) {
-    console.error(
-      "dustcastle: no pi models found. Run `pi` then `/login` to authenticate, then re-run `dustcastle model`.",
+
+  const byProvider = listModels();
+  if (byProvider.size === 0) {
+    term.error(
+      "dustcastle: no pi models found. Run `pi` then `/login` to authenticate, then re-run `dustcastle model`.\n",
     );
     return 1;
   }
-  writeModel(selected);
-  console.error(
-    `dustcastle: model set to ${selected} — saved to ~/.dustcastle/config.json (used by every project).`,
+
+  const selected = await chooseModel(byProvider, term);
+  if (selected === undefined) return 130;
+
+  writeModel(selected, dir !== undefined ? { dir } : {});
+  term.error(
+    `dustcastle: model set to ${selected} — saved to ~/.dustcastle/config.json (used by every project).\n`,
   );
   return 0;
 }
 
 /**
  * Ensure a global model is configured, picking one interactively on first use
- * (the "first run / install picks a model" path). Returns the selection, or
- * `undefined` when none could be chosen (headless with no model, or pi unavailable).
+ * (the "first run / install picks a model" path). Returns whether the caller may
+ * continue. Cancellation aborts cleanly; other no-selection paths preserve the
+ * existing ADR 0009 provisioning flow.
  */
-export async function ensureModel(): Promise<string | undefined> {
-  const existing = loadModelSelection();
-  if (existing !== undefined) return existing.model;
-  if (!process.stdin.isTTY) return undefined; // headless: never block on a picker
-  const code = await runModelCommand();
-  if (code !== 0) return undefined;
-  return loadModelSelection()?.model;
+export async function ensureModel(
+  term: Terminal = processTerminal(),
+  listModels: ModelLister = listPiModels,
+  dir?: string,
+): Promise<EnsureModelOutcome> {
+  const existing = loadModelSelection(dir);
+  if (existing !== undefined) return "proceed";
+  if (!term.isTTY) return "proceed"; // headless no-model semantics are handled by dustcastle-8kv.2
+
+  const code = await runModelCommand(term, listModels, dir);
+  return code === 130 ? "cancelled" : "proceed";
 }
