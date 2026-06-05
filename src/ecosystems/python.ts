@@ -1,17 +1,14 @@
 import { generatePythonToolchain } from "./toolchain-nix.js";
-import { requirementsIsLockGrade } from "./python-loose.js";
-import {
-  DEFAULT_PYTHON_INTERPRETERS,
-  parsePythonVersionFile,
-  readRequiresPython,
-  resolvePythonInterpreter,
-} from "./python-version.js";
 import type {
   EcosystemDescriptor,
   LooseManifestInput,
   PackageManager,
   PackageManagerDescriptor,
 } from "./types.js";
+
+// ============================================================================
+// Managers
+// ============================================================================
 
 /**
  * The shared in-Sandbox install for Python (ADR 0012): install the requirements into
@@ -106,6 +103,10 @@ export const PYTHON_MANAGERS = { uv, poetry, pip } satisfies Partial<
   Record<PackageManager, PackageManagerDescriptor>
 >;
 
+// ============================================================================
+// Ecosystem descriptor
+// ============================================================================
+
 export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "python",
   // The manifest markers that say "this directory is Python" (ADR 0006a).
@@ -150,6 +151,10 @@ export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
   },
 };
 
+// ============================================================================
+// Loose detection
+// ============================================================================
+
 /**
  * Decide whether a Python directory is a LOOSE manifest (ADR 0006c). A present
  * `requirements.txt` is pip's lockfile ONLY when it is lock-grade (every requirement
@@ -161,12 +166,465 @@ export const PYTHON_ECOSYSTEM: EcosystemDescriptor = {
  */
 function detectPythonLoose({ manifestPresent, hasLockfile, readFile }: LooseManifestInput): boolean {
   if (!manifestPresent) return false;
-  const requirements = readFile("requirements.txt");
-  if (requirements !== undefined) {
-    // requirements.txt present: lock-grade builds pure directly; otherwise resolve.
-    return !requirementsIsLockGrade(requirements);
+  const requirementsText = readFile("requirements.txt");
+  if (requirementsText !== undefined) {
+    // requirements.txt present: lock-grade is cacheable; otherwise it resolves fresh.
+    return !requirementsIsLockGrade(requirementsText);
   }
   // No requirements.txt: a uv.lock / poetry.lock is the lock (its in-Sandbox export
   // step produces requirements.txt). Loose only when there is no lock at all.
   return !hasLockfile;
+}
+
+/**
+ * Whether a `requirements.txt` is lock-grade — a stable, cacheable lock (not loose).
+ * True ONLY when the file declares at least one requirement AND every requirement line
+ * is exactly `==`-pinned and carries at least one `--hash=` (pip's hash-checking
+ * contract). An empty file, a bare package name, a loose constraint (`>=`/`~=`), a
+ * hash-less pin, or any mixed line makes it NOT lock-grade — detection surfaces it as
+ * loose.
+ */
+export function requirementsIsLockGrade(text: string | undefined): boolean {
+  if (typeof text !== "string") return false;
+  const requirements = requirementLines(text);
+  if (requirements.length === 0) return false;
+  return requirements.every(isHashPinnedRequirement);
+}
+
+/**
+ * The concrete requirement lines of a requirements.txt: the package specs, with
+ * each line's trailing line-continuation (`\`) and inline `--hash=` options folded
+ * back onto the spec they belong to. Comments, blank lines, and standalone pip
+ * option lines (`--index-url …`, `-r other.txt`) are dropped — they declare no
+ * requirement.
+ */
+function requirementLines(text: string): readonly string[] {
+  // Fold backslash line-continuations so a spec and its indented `--hash=` lines
+  // (the `uv pip compile` layout) read as ONE logical requirement.
+  const logical = text.replace(/\\\r?\n/g, " ");
+  const out: string[] = [];
+  for (const raw of logical.split("\n")) {
+    const line = stripRequirementsComment(raw).trim();
+    if (line.length === 0) continue;
+    // A standalone pip option line (begins with `-`) is config, not a requirement.
+    if (line.startsWith("-")) continue;
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * A requirement is lock-grade when it is exactly `==`-pinned (not `>=`/`~=`/bare)
+ * and carries at least one `--hash=`. The spec text is the part before the first
+ * `--hash`, so we test the pin on that head and the hash on the whole line.
+ */
+function isHashPinnedRequirement(line: string): boolean {
+  const head = line.split("--hash")[0] ?? line;
+  const exactlyPinned = /==\s*[^=\s]/.test(head) && !/[<>~!]=|[<>](?!=)/.test(head);
+  const hashed = /--hash=/.test(line);
+  return exactlyPinned && hashed;
+}
+
+/** Drop a `#` comment, honouring that a `#` inside a hash value never occurs (hashes are hex). */
+function stripRequirementsComment(line: string): string {
+  const hash = line.indexOf("#");
+  return hash === -1 ? line : line.slice(0, hash);
+}
+
+// ============================================================================
+// Version resolution (PEP 440 / requires-python)
+// Deliberately fenced inline here: dustcastle-f11 chose one file per Ecosystem,
+// so this cohesive PEP 440 reader lives in python.ts rather than a sibling module.
+// ============================================================================
+
+/**
+ * The Python Toolchain version resolver (laimk-hse.3) — a PURE deep block with no
+ * Store/Nix coupling (ADR 0006b: an Ecosystem owns "how to read its Toolchain
+ * version"). It has a small interface:
+ *
+ *   - {@link parsePythonVersionFile} reads `.python-version` to a `major.minor`
+ *     (the patch / pre-release suffix is dropped — `.python-version` pins a minor);
+ *   - {@link readRequiresPython} reads pyproject's `requires-python` (PEP 621) or
+ *     poetry's `python` (`^`/`~` normalised to a PEP 440 range);
+ *   - {@link resolvePythonInterpreter} maps `(.python-version, requires-python)`
+ *     onto the HIGHEST stable `python3XX` present in the pinned nixpkgs that
+ *     satisfies the constraint — an exact `.python-version` minor wins when it
+ *     satisfies, no constraint resolves to the default `python3`, and an
+ *     EOL/missing minor is an ACTIONABLE error, never a silent fallback.
+ *
+ * The available-interpreter set is DATA (a parameter), not hardcoded magic inside
+ * the resolver: {@link DEFAULT_PYTHON_INTERPRETERS} is what the descriptor wires
+ * in, discovered from the pinned nixpkgs (the `python3X` attrs it ships).
+ */
+
+/** A `major.minor` Python version (the grain `.python-version` and nixpkgs pin in). */
+export interface PythonMinor {
+  readonly major: number;
+  readonly minor: number;
+}
+
+/**
+ * One interpreter the pinned nixpkgs ships, as DATA: its nixpkgs attr (`python312`)
+ * and its minor (`12`). `prerelease` marks a not-yet-stable interpreter that is
+ * excluded from the DEFAULT candidate set (the highest-stable resolve and the
+ * no-constraint default), but is still selectable by an explicit exact pin.
+ */
+export interface AvailableInterpreter {
+  /** The nixpkgs attribute name (`python312`) — what the Importer stages. */
+  readonly attr: string;
+  /** The interpreter's minor (the `12` in 3.12). Major is always 3 in nixpkgs' set. */
+  readonly minor: number;
+  /** True for a pre-release interpreter (excluded from the default candidate set). */
+  readonly prerelease?: boolean;
+}
+
+/**
+ * The interpreter set discovered from the pinned nixpkgs (the `python3X` attrs it
+ * ships). DATA the descriptor wires into the resolver — NOT magic inside it. The
+ * Toolchain defaults to `python312` (src/ecosystems/toolchain-nix.ts); this mirrors
+ * nixpkgs' stable set at that pin, with `python314` marked pre-release so it is
+ * excluded by default.
+ *
+ * This is the one maintenance row per the pinned nixpkgs bump (ADR 0006 §
+ * Consequences: "the version-file list needs per-Ecosystem maintenance").
+ */
+export const DEFAULT_PYTHON_INTERPRETERS: readonly AvailableInterpreter[] = [
+  { attr: "python39", minor: 9 },
+  { attr: "python310", minor: 10 },
+  { attr: "python311", minor: 11 },
+  { attr: "python312", minor: 12 },
+  { attr: "python313", minor: 13 },
+  { attr: "python314", minor: 14, prerelease: true },
+];
+
+/** The nixpkgs default unversioned interpreter, used when nothing constrains the version. */
+const DEFAULT_INTERPRETER_ATTR = "python3";
+
+/**
+ * Read `.python-version` to a `major.minor`, dropping any patch / pre-release
+ * suffix (`3.12.4` and `3.13.0rc1` both pin the minor). Returns undefined for an
+ * absent / blank file or a non-CPython pin (`system`, `pypy3.10`) — those don't
+ * name a `python3XX` minor the resolver can honour.
+ */
+export function parsePythonVersionFile(raw: string | undefined): PythonMinor | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  // major.minor, optionally followed by a patch / pre-release suffix we drop.
+  const match = trimmed.match(/^(\d+)\.(\d+)(?:[.\-+a-zA-Z0-9]*)?$/);
+  if (match === null) return undefined;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (!Number.isInteger(major) || !Number.isInteger(minor)) return undefined;
+  return { major, minor };
+}
+
+/**
+ * Read pyproject's requested Python range as a normalised PEP 440 specifier
+ * string. Prefers PEP 621 `[project] requires-python` (already PEP 440); falls
+ * back to poetry's `[tool.poetry.dependencies] python`, normalising the poetry
+ * caret/tilde shorthands (`^3.10` -> `>=3.10,<4`, `~3.11` -> `>=3.11,<3.12`).
+ * Undefined when neither is declared.
+ *
+ * A deliberately small TOML reader: pyproject's `requires-python` / poetry `python`
+ * are single quoted scalars under a known table, so a targeted line scan beats
+ * pulling a full TOML parser dependency (ADR 0001: own the small engine).
+ */
+export function readRequiresPython(pyprojectText: string | undefined): string | undefined {
+  if (pyprojectText === undefined) return undefined;
+
+  const pep621 = readTableScalar(pyprojectText, "project", "requires-python");
+  if (pep621 !== undefined) return pep621;
+
+  const poetry = readTableScalar(pyprojectText, "tool.poetry.dependencies", "python");
+  if (poetry !== undefined) return normalisePoetrySpecifier(poetry);
+
+  return undefined;
+}
+
+/** A single resolved version constraint (no constraint when both files are silent). */
+export interface ResolveInput {
+  /** The `.python-version` pin (major.minor), if a version file pinned one. */
+  readonly pythonVersion: PythonMinor | undefined;
+  /** The normalised PEP 440 `requires-python` range, if pyproject declared one. */
+  readonly requiresPython: string | undefined;
+  /** The interpreters the pinned nixpkgs ships (DATA — typically DEFAULT_PYTHON_INTERPRETERS). */
+  readonly available: readonly AvailableInterpreter[];
+}
+
+/**
+ * Resolve the nixpkgs interpreter attr for a repo's declared Python version
+ * (laimk-hse.3). The rules, in order:
+ *
+ *   1. An exact `.python-version` minor WINS when it is available and satisfies
+ *      `requires-python` — even a pre-release minor (an explicit opt-in). A pin
+ *      that conflicts with `requires-python`, or names a minor absent from the
+ *      pin, is an ACTIONABLE error (never a silent fallback).
+ *   2. Else a `requires-python` RANGE resolves to the HIGHEST STABLE minor that
+ *      satisfies it (pre-release interpreters are excluded from this candidate
+ *      set). No satisfying stable minor is an ACTIONABLE error.
+ *   3. Else (no constraint) the default unversioned `python3`.
+ */
+export function resolvePythonInterpreter(input: ResolveInput): string {
+  const { pythonVersion, requiresPython, available } = input;
+  const spec = requiresPython !== undefined ? parsePep440Range(requiresPython) : undefined;
+
+  // (1) An exact `.python-version` pin wins when it is available and satisfies.
+  if (pythonVersion !== undefined) {
+    if (pythonVersion.major !== 3) {
+      throw new Error(
+        `python: .python-version pins ${pythonVersion.major}.${pythonVersion.minor}, but dustcastle ` +
+          `provisions CPython 3 only. Available: ${describeAvailable(available)}.`,
+      );
+    }
+    if (spec !== undefined && !spec.satisfies(pythonVersion.minor)) {
+      throw new Error(
+        `python: .python-version pins 3.${pythonVersion.minor}, which conflicts with ` +
+          `requires-python "${requiresPython}". Reconcile the two, or drop one.`,
+      );
+    }
+    const match = available.find((i) => i.minor === pythonVersion.minor);
+    if (match === undefined) {
+      throw new Error(
+        `python: .python-version pins 3.${pythonVersion.minor}, which is EOL or not in the pinned ` +
+          `nixpkgs. Pin an available minor instead — available: ${describeAvailable(available)}.`,
+      );
+    }
+    return match.attr;
+  }
+
+  // (2) A requires-python range -> the HIGHEST stable satisfying minor.
+  if (spec !== undefined) {
+    const candidate = highestStableSatisfying(available, spec);
+    if (candidate === undefined) {
+      throw new Error(
+        `python: requires-python "${requiresPython}" is satisfied by no interpreter in the pinned ` +
+          `nixpkgs. Widen the constraint — available: ${describeAvailable(available)}.`,
+      );
+    }
+    return candidate.attr;
+  }
+
+  // (3) No constraint -> the default unversioned python3.
+  return DEFAULT_INTERPRETER_ATTR;
+}
+
+/** The highest STABLE interpreter (pre-releases excluded) whose minor satisfies the spec. */
+function highestStableSatisfying(
+  available: readonly AvailableInterpreter[],
+  spec: Pep440Range,
+): AvailableInterpreter | undefined {
+  let highest: AvailableInterpreter | undefined;
+
+  for (const interpreter of available) {
+    if (interpreter.prerelease === true) continue;
+    if (!spec.satisfies(interpreter.minor)) continue;
+    if (highest === undefined || interpreter.minor > highest.minor) highest = interpreter;
+  }
+
+  return highest;
+}
+
+/** Human-readable list of available stable minors, for the actionable errors. */
+function describeAvailable(available: readonly AvailableInterpreter[]): string {
+  const minors = available
+    .filter((i) => i.prerelease !== true)
+    .map((i) => `3.${i.minor}`)
+    .sort();
+  return minors.length > 0 ? minors.join(", ") : "(none)";
+}
+
+/**
+ * A parsed PEP 440 range over the Python minor (we only ever resolve a minor, so
+ * each clause is evaluated at `3.<minor>`, treating the patch as 0).
+ */
+interface Pep440Range {
+  satisfies: (minor: number) => boolean;
+}
+
+/**
+ * Parse a comma-separated PEP 440 specifier into a minor predicate. Supports the
+ * operators `requires-python` realistically uses: `>=`, `>`, `<=`, `<`, `==`
+ * (incl. the `==3.11.*` wildcard), `!=`, and `~=`. Each clause is checked against
+ * the candidate `3.<minor>.0`.
+ */
+function parsePep440Range(specifier: string): Pep440Range {
+  const clauses = specifier
+    .split(",")
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0)
+    .map(parseClause);
+  return {
+    satisfies: (minor) => clauses.every((clause) => clause(minor)),
+  };
+}
+
+type Pep440Operator = ">=" | ">" | "<=" | "<" | "==" | "!=" | "~=";
+
+interface Pep440Clause {
+  readonly operator: Pep440Operator;
+  readonly rawVersion: string;
+}
+
+const PEP440_CLAUSE_PATTERN = /^(>=|<=|==|!=|~=|>|<)\s*(.+)$/;
+
+/** One PEP 440 clause -> a predicate over the candidate minor (major assumed 3). */
+function parseClause(clause: string): (minor: number) => boolean {
+  const parsed = parsePep440Clause(clause);
+  if (parsed === undefined) {
+    // An unrecognised clause is ignored rather than silently mis-resolving: it
+    // can only widen, never wrongly narrow (a bad clause never fabricates a pin).
+    return () => true;
+  }
+  const { operator, rawVersion } = parsed;
+
+  // The `==3.11.*` wildcard pins the minor exactly (patch wildcarded).
+  if (operator === "==" && rawVersion.endsWith(".*")) {
+    const target = parseVersionMinor(rawVersion.slice(0, -2));
+    if (target === undefined) return () => true;
+    return (minor) => minor === target.minor && target.major === 3;
+  }
+
+  const target = parseVersionMinor(rawVersion);
+  if (target === undefined) return () => true;
+  // Compare at the minor grain against a same-major target (nixpkgs is all major 3).
+  const targetMinor = comparisonMinorFor(target);
+
+  switch (operator) {
+    case ">=":
+      return (minor) => minor >= targetMinor;
+    case ">":
+      // `>3.10` excludes 3.10 itself (we resolve whole minors, patch treated as 0).
+      return (minor) => minor > targetMinor;
+    case "<=":
+      return (minor) => minor <= targetMinor;
+    case "<":
+      return (minor) => minor < targetMinor;
+    case "==":
+      return (minor) => minor === targetMinor;
+    case "!=":
+      return (minor) => minor !== targetMinor;
+    case "~=":
+      // `~=3.10` (compatible release) == `>=3.10,<4`; `~=3.10.0` == `>=3.10,<3.11`.
+      if (rawVersion.split(".").length >= 3) return (minor) => minor === targetMinor;
+      return (minor) => minor >= targetMinor;
+  }
+}
+
+function parsePep440Clause(clause: string): Pep440Clause | undefined {
+  const match = clause.match(PEP440_CLAUSE_PATTERN);
+  const operator = match?.[1];
+  const rawVersion = match?.[2]?.trim();
+  if (!isPep440Operator(operator) || rawVersion === undefined) return undefined;
+  return { operator, rawVersion };
+}
+
+function isPep440Operator(value: string | undefined): value is Pep440Operator {
+  switch (value) {
+    case ">=":
+    case ">":
+    case "<=":
+    case "<":
+    case "==":
+    case "!=":
+    case "~=":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function comparisonMinorFor(target: PythonMinor): number {
+  if (target.major === 3) return target.minor;
+  if (target.major > 3) return Infinity;
+  return -Infinity;
+}
+
+/** Parse a `3` / `3.11` / `3.11.2` version head to a `major.minor` (minor defaults 0). */
+function parseVersionMinor(raw: string): PythonMinor | undefined {
+  const match = raw.trim().match(/^(\d+)(?:\.(\d+))?/);
+  if (match === null) return undefined;
+  const major = Number(match[1]);
+  const minor = match[2] !== undefined ? Number(match[2]) : 0;
+  if (!Number.isInteger(major) || !Number.isInteger(minor)) return undefined;
+  return { major, minor };
+}
+
+/**
+ * Normalise a poetry version constraint (`^3.10`, `~3.11`, or a bare PEP 440
+ * clause) to a PEP 440 range string. Poetry's caret/tilde shorthands are NOT
+ * PEP 440 (PEP 440 has no `^`/`~` for Python), so we expand them:
+ *   - `^3.10` -> `>=3.10,<4`   (compatible up to the next MAJOR)
+ *   - `~3.11` -> `>=3.11,<3.12` (compatible up to the next MINOR)
+ * Anything else is passed through (already a PEP 440 clause like `>=3.9`).
+ */
+function normalisePoetrySpecifier(constraint: string): string {
+  const trimmed = constraint.trim();
+
+  if (trimmed.startsWith("^")) {
+    const v = parseVersionMinor(trimmed.slice(1));
+    if (v === undefined) return trimmed;
+    return `>=${v.major}.${v.minor},<${v.major + 1}`;
+  }
+
+  if (trimmed.startsWith("~")) {
+    const v = parseVersionMinor(trimmed.slice(1));
+    if (v === undefined) return trimmed;
+    return `>=${v.major}.${v.minor},<${v.major}.${v.minor + 1}`;
+  }
+
+  return trimmed;
+}
+
+/**
+ * Read a single quoted scalar (`key = "value"`) under a known TOML table header.
+ * A targeted, dependency-free scan: find `[table]`, then the first `key =` line
+ * before the next table header. Returns the unquoted value, or undefined.
+ */
+function readTableScalar(text: string, table: string, key: string): string | undefined {
+  const lines = text.split(/\r?\n/);
+  const tableHeader = `[${table}]`;
+  let inTable = false;
+  for (const line of lines) {
+    const stripped = stripTomlComment(line).trim();
+    if (stripped.length === 0) continue;
+    if (stripped.startsWith("[")) {
+      inTable = stripped === tableHeader;
+      continue;
+    }
+    if (!inTable) continue;
+    const eq = stripped.indexOf("=");
+    if (eq === -1) continue;
+    if (stripped.slice(0, eq).trim() !== key) continue;
+    return unquote(stripped.slice(eq + 1).trim());
+  }
+  return undefined;
+}
+
+/** Drop a trailing `# comment` not inside a quoted string (TOML scalars are simple here). */
+function stripTomlComment(line: string): string {
+  let inString: '"' | "'" | undefined;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inString !== undefined) {
+      if (ch === inString) inString = undefined;
+    } else if (ch === '"' || ch === "'") {
+      inString = ch;
+    } else if (ch === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+/** Strip matching single or double quotes from a TOML scalar; pass through otherwise. */
+function unquote(value: string): string | undefined {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return value.slice(1, -1);
+    }
+  }
+  return value.length > 0 ? value : undefined;
 }
