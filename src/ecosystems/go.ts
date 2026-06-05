@@ -1,6 +1,10 @@
 import { generateGoToolchain } from "./toolchain-nix.js";
 import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } from "./types.js";
 
+// -----------------------------------------------------------------------------
+// Managers
+// -----------------------------------------------------------------------------
+
 /**
  * The Go Ecosystem descriptors (ADR 0006). A single Package Manager (`go`) — still
  * a Package Manager, not a special case (CONTEXT.md). Its Toolchain is nixpkgs' `go`;
@@ -31,6 +35,10 @@ const go: PackageManagerDescriptor = {
 // keeps the precise key literals while constraining them to the closed union.
 export const GO_MANAGERS = { go } satisfies Partial<Record<PackageManager, PackageManagerDescriptor>>;
 
+// -----------------------------------------------------------------------------
+// Ecosystem descriptor
+// -----------------------------------------------------------------------------
+
 export const GO_ECOSYSTEM: EcosystemDescriptor = {
   ecosystem: "go",
   manifests: ["go.mod", "go.sum"],
@@ -55,6 +63,14 @@ export const GO_ECOSYSTEM: EcosystemDescriptor = {
     }),
   },
 };
+
+// -----------------------------------------------------------------------------
+// Loose detection
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Version resolution
+// -----------------------------------------------------------------------------
 
 /** Parse the `go 1.x[.y]` directive from a go.mod, if present. */
 function readGoVersion(manifest: string | undefined): string | undefined {
