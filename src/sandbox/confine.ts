@@ -16,7 +16,7 @@ export const EGRESS_PROXY_PORT = 8118;
 /** The resolvers the production proxy container resolves allowlisted hosts through. */
 const EGRESS_PROXY_DNS: readonly string[] = ["1.1.1.1", "8.8.8.8"];
 /** The default in-container path the production proxy image is expected to bundle. */
-const DEFAULT_PROXY_ENTRYPOINT = "/opt/dustcastle/proxy-main.js";
+export const DEFAULT_PROXY_ENTRYPOINT = "/opt/dustcastle/proxy-main.js";
 
 export type EgressDecision =
   | { readonly kind: "none" }
@@ -28,9 +28,11 @@ export type EgressDecision =
       readonly agentHosts: readonly string[];
     };
 
+export type EgressNetworkMode = "none" | typeof EGRESS_NETWORK;
+
 export interface EgressPosture {
   /** The podman network mode the Sandbox plan applies. */
-  readonly network: string;
+  readonly network: EgressNetworkMode;
   /** The proxy environment the Sandbox plan applies. Empty for closed egress. */
   readonly env: Record<string, string>;
 }
@@ -87,13 +89,9 @@ export function confine(input: ConfineInput): Confinement {
     ...(input.agentModelHosts !== undefined ? { agentModelHosts: input.agentModelHosts } : {}),
   });
   const proxyAddress = input.proxyAddress ?? productionProxyUrl();
-  const posture: EgressPosture =
-    decision.kind === "allowlist"
-      ? { network: EGRESS_NETWORK, env: proxyEnv(proxyAddress) }
-      : { network: "none", env: {} };
   return {
     decision,
-    posture,
+    posture: postureFor(decision, proxyAddress),
     enforce: (opts = {}) => ensureEgress({ egress: decision, ...opts }),
   };
 }
@@ -111,6 +109,11 @@ function deriveEgress(input: EgressInput): EgressDecision {
 
   if (buildHosts.length === 0 && agentHosts.length === 0) return { kind: "none" };
   return { kind: "allowlist", buildHosts, agentHosts };
+}
+
+function postureFor(decision: EgressDecision, proxyAddress: string): EgressPosture {
+  if (decision.kind === "none") return { network: "none", env: {} };
+  return { network: EGRESS_NETWORK, env: proxyEnv(proxyAddress) };
 }
 
 function buildEgressHosts(input: EgressInput): string[] {
@@ -139,8 +142,8 @@ function gitDepHosts(projectDir: string, pm: PackageManager): string[] {
       if (host !== undefined && host.length > 0) hosts.add(host);
     }
     for (const match of text.matchAll(/\b(github|gitlab|bitbucket):[\w.-]+\/[\w.-]+/gi)) {
-      const forge = match[1]!.toLowerCase();
-      hosts.add(forge === "github" ? "github.com" : forge === "gitlab" ? "gitlab.com" : "bitbucket.org");
+      const forge = match[1];
+      if (forge !== undefined) hosts.add(forgeHost(forge));
     }
   }
   return [...hosts];
@@ -176,6 +179,19 @@ function gitRemoteHost(cwd: string): string | undefined {
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return undefined;
   return parseGitRemoteHost(result.stdout.trim());
+}
+
+function forgeHost(forge: string): string {
+  switch (forge.toLowerCase()) {
+    case "github":
+      return "github.com";
+    case "gitlab":
+      return "gitlab.com";
+    case "bitbucket":
+      return "bitbucket.org";
+    default:
+      throw new Error(`unsupported git forge shorthand: ${forge}`);
+  }
 }
 
 function uniqueHosts(hosts: readonly string[]): string[] {
@@ -352,10 +368,14 @@ export function isProxyListeningLogLine(line: string): boolean {
 function parseProxyLogLine(line: string): ProxyLogRecord | undefined {
   try {
     const parsed: unknown = JSON.parse(line);
-    return typeof parsed === "object" && parsed !== null ? (parsed as ProxyLogRecord) : undefined;
+    return isProxyLogRecord(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
+}
+
+function isProxyLogRecord(value: unknown): value is ProxyLogRecord {
+  return typeof value === "object" && value !== null;
 }
 
 function proxyLogsReportListening(output: string): boolean {

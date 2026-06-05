@@ -6,7 +6,13 @@ import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 import type { Provisioned } from "../store/index.js";
-import { confine, type Confinement, type EgressDecision } from "./confine.js";
+import {
+  EGRESS_NETWORK,
+  confine,
+  type Confinement,
+  type EgressDecision,
+  type EgressPosture,
+} from "./confine.js";
 import { planSandbox as rawPlanSandbox, type SandboxPlanSpec } from "./plan.js";
 
 // The integration surface is just sandcastle's `mounts` array (ADR 0002): no
@@ -39,25 +45,27 @@ type LegacyPlanSpec = Omit<SandboxPlanSpec, "confinement"> & {
 };
 
 function planSandbox(spec: LegacyPlanSpec) {
-  const confinement =
-    spec.confinement ??
-    (spec.egress !== undefined
-      ? { decision: spec.egress, posture: postureFor(spec.egress, spec.proxyUrl) }
-      : confine({
-          projectDir: noRemoteProjectDir,
-          packageManagers: spec.ecosystems.map((e) => e.detection.packageManager),
-          ...(spec.proxyUrl !== undefined ? { proxyAddress: spec.proxyUrl } : {}),
-        }));
+  const confinement = confinementForPlanSpec(spec);
   const { egress: _egress, proxyUrl: _proxyUrl, ...rest } = spec;
   void _egress;
   void _proxyUrl;
   return rawPlanSandbox({ ...rest, confinement });
 }
 
-function postureFor(decision: EgressDecision, proxyUrl = "http://dustcastle-egress-proxy:8118") {
+function confinementForPlanSpec(spec: LegacyPlanSpec): Pick<Confinement, "decision" | "posture"> {
+  if (spec.confinement !== undefined) return spec.confinement;
+  if (spec.egress !== undefined) return { decision: spec.egress, posture: postureFor(spec.egress, spec.proxyUrl) };
+  return confine({
+    projectDir: noRemoteProjectDir,
+    packageManagers: spec.ecosystems.map((e) => e.detection.packageManager),
+    ...(spec.proxyUrl !== undefined ? { proxyAddress: spec.proxyUrl } : {}),
+  });
+}
+
+function postureFor(decision: EgressDecision, proxyUrl = "http://dustcastle-egress-proxy:8118"): EgressPosture {
   if (decision.kind === "none") return { network: "none", env: {} };
   return {
-    network: "dustcastle-egress",
+    network: EGRESS_NETWORK,
     env: {
       HTTP_PROXY: proxyUrl,
       HTTPS_PROXY: proxyUrl,

@@ -2,7 +2,13 @@ import * as sandcastle from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
-import { confine, provisionProxyResolvConf, type Confinement, type EgressHandle } from "../sandbox/confine.js";
+import {
+  DEFAULT_PROXY_ENTRYPOINT,
+  confine,
+  provisionProxyResolvConf,
+  type Confinement,
+  type EgressHandle,
+} from "../sandbox/confine.js";
 import { planSandbox, type EcosystemPlan, type EcosystemPlans, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore } from "../store/index.js";
@@ -190,9 +196,6 @@ export async function prepareWorkspace(opts: PrepareOptions): Promise<PreparedWo
 
 /** Everything sandcastle.run() needs except the sandbox — that's dustcastle's job. */
 export type SandcastleHandoff = Omit<Parameters<typeof sandcastle.run>[0], "sandbox">;
-
-/** The default in-container path the production proxy image is expected to bundle. */
-const DEFAULT_PROXY_ENTRYPOINT = "/opt/dustcastle/proxy-main.js";
 
 /**
  * Everything `withProvisionedSandbox` needs to provision the Store, stand up the
