@@ -4,7 +4,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PackageManager } from "../ecosystems/index.js";
-import { deriveEgress, egressHosts, gitRemoteHost, parseGitRemoteHost } from "./egress.js";
+import { confine, egressHosts, parseGitRemoteHost, type EgressDecision } from "./confine.js";
+
+interface DeriveInput {
+  readonly packageManagers: readonly PackageManager[];
+  readonly gitRemoteHost?: string;
+  readonly projectDir?: string;
+  readonly agentModelHosts?: readonly string[];
+}
+
+function decisionFor(input: DeriveInput): EgressDecision {
+  const projectDir = input.projectDir ?? mkdtempSync(join(tmpdir(), "dustcastle-egress-pure-"));
+  if (input.projectDir === undefined) tmps.push(projectDir);
+  if (input.gitRemoteHost !== undefined) {
+    execFileSync("git", ["-C", projectDir, "init", "-q"]);
+    execFileSync("git", ["-C", projectDir, "remote", "add", "origin", `git@${input.gitRemoteHost}:org/repo.git`]);
+  }
+  return confine({
+    projectDir,
+    packageManagers: input.packageManagers,
+    ...(input.agentModelHosts !== undefined ? { agentModelHosts: input.agentModelHosts } : {}),
+  }).decision;
+}
+
+const tmps: string[] = [];
+afterEach(() => {
+  while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+});
 
 // Standing egress (ADR 0005 / 0010 / 0012). Egress is a STANDING allowlist that no
 // longer branches on build purity: every Sandbox installs deps with the network on,
@@ -13,9 +39,9 @@ import { deriveEgress, egressHosts, gitRemoteHost, parseGitRemoteHost } from "./
 // repo's git host, and the agent's model host(s). A polyglot repo opens every detected
 // registry. The derivation is pure — pinned here.
 
-describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivation)", () => {
+describe("confine — standing allowlist (ADR 0012, no per-purity derivation)", () => {
   it("unions a single manager's registry with the git and model hosts", () => {
-    const decision = deriveEgress({
+    const decision = decisionFor({
       packageManagers: ["npm"],
       gitRemoteHost: "github.com",
       agentModelHosts: ["api.deepseek.com"],
@@ -28,7 +54,7 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
   it("opens only the npm registry for an npm/pnpm/bun repo", () => {
     const managers: PackageManager[] = ["npm", "pnpm", "bun"];
     for (const pm of managers) {
-      const decision = deriveEgress({ packageManagers: [pm] });
+      const decision = decisionFor({ packageManagers: [pm] });
       if (decision.kind !== "allowlist") throw new Error("unreachable");
       expect(decision.buildHosts).toContain("registry.npmjs.org");
       expect(decision.agentHosts).toEqual([]);
@@ -36,7 +62,7 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
   });
 
   it("opens the yarn registry for a yarn repo", () => {
-    const decision = deriveEgress({ packageManagers: ["yarn"] });
+    const decision = decisionFor({ packageManagers: ["yarn"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("registry.yarnpkg.com");
   });
@@ -44,7 +70,7 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
   it("opens pypi.org AND the wheel CDN for a pip/uv/poetry repo", () => {
     const managers: PackageManager[] = ["pip", "uv", "poetry"];
     for (const pm of managers) {
-      const decision = deriveEgress({ packageManagers: [pm] });
+      const decision = decisionFor({ packageManagers: [pm] });
       if (decision.kind !== "allowlist") throw new Error("unreachable");
       // Both hosts: the index AND files.pythonhosted.org, or `pip install` 403s the
       // wheel download even though the index resolves (dustcastle-61j).
@@ -54,20 +80,20 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
   });
 
   it("opens the Go module proxy for a go repo (go.sum verifies locally)", () => {
-    const decision = deriveEgress({ packageManagers: ["go"] });
+    const decision = decisionFor({ packageManagers: ["go"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toEqual(["proxy.golang.org"]); // checksum DB never contacted
   });
 
   it("opens the crates index AND the crate download host for a cargo repo", () => {
-    const decision = deriveEgress({ packageManagers: ["cargo"] });
+    const decision = decisionFor({ packageManagers: ["cargo"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("index.crates.io");
     expect(decision.buildHosts).toContain("static.crates.io"); // `cargo fetch` downloads tarballs
   });
 
   it("yields BOTH registries for a polyglot Node + Python repo (the union)", () => {
-    const decision = deriveEgress({ packageManagers: ["npm", "uv"] });
+    const decision = decisionFor({ packageManagers: ["npm", "uv"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("registry.npmjs.org");
     expect(decision.buildHosts).toContain("pypi.org");
@@ -75,20 +101,20 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
 
   it("dedupes a shared registry across detected managers (Node + Node)", () => {
     // npm and pnpm both name registry.npmjs.org — the union lists it once.
-    const decision = deriveEgress({ packageManagers: ["npm", "pnpm"] });
+    const decision = decisionFor({ packageManagers: ["npm", "pnpm"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toEqual(["registry.npmjs.org"]);
   });
 
   it("adds the repo's git host to Build Egress when known (git-sourced deps resolve)", () => {
-    const decision = deriveEgress({ packageManagers: ["npm"], gitRemoteHost: "github.com" });
+    const decision = decisionFor({ packageManagers: ["npm"], gitRemoteHost: "github.com" });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("registry.npmjs.org");
     expect(decision.buildHosts).toContain("github.com");
   });
 
   it("is an allowlist, never unrestricted — no wildcard / catch-all host", () => {
-    const decision = deriveEgress({ packageManagers: ["npm"], gitRemoteHost: "github.com" });
+    const decision = decisionFor({ packageManagers: ["npm"], gitRemoteHost: "github.com" });
     const hosts = egressHosts(decision);
     expect(hosts.length).toBeGreaterThan(0);
     for (const host of hosts) {
@@ -97,18 +123,18 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
   });
 
   it("closes egress (`none`) only when no manager is detected and no agent runs", () => {
-    expect(deriveEgress({ packageManagers: [] })).toEqual({ kind: "none" });
-    expect(deriveEgress({ packageManagers: [], agentModelHosts: [] })).toEqual({ kind: "none" });
-    expect(deriveEgress({ packageManagers: [], agentModelHosts: [""] })).toEqual({ kind: "none" });
+    expect(decisionFor({ packageManagers: [] })).toEqual({ kind: "none" });
+    expect(decisionFor({ packageManagers: [], agentModelHosts: [] })).toEqual({ kind: "none" });
+    expect(decisionFor({ packageManagers: [], agentModelHosts: [""] })).toEqual({ kind: "none" });
   });
 
   it("opens an agent-only allowlist when no manager is detected but an agent runs", () => {
-    const decision = deriveEgress({ packageManagers: [], agentModelHosts: ["api.deepseek.com"] });
+    const decision = decisionFor({ packageManagers: [], agentModelHosts: ["api.deepseek.com"] });
     expect(decision).toEqual({ kind: "allowlist", buildHosts: [], agentHosts: ["api.deepseek.com"] });
   });
 
   it("carries every host a multi-host provider may contact", () => {
-    const decision = deriveEgress({
+    const decision = decisionFor({
       packageManagers: ["go"],
       agentModelHosts: ["chatgpt.com", "auth.openai.com"],
     });
@@ -117,7 +143,7 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
   });
 
   it("ignores empty agent hosts (no agent ⇒ no agent egress)", () => {
-    const decision = deriveEgress({ packageManagers: ["npm"], agentModelHosts: ["", "api.deepseek.com"] });
+    const decision = decisionFor({ packageManagers: ["npm"], agentModelHosts: ["", "api.deepseek.com"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.agentHosts).toEqual(["api.deepseek.com"]);
   });
@@ -125,7 +151,7 @@ describe("deriveEgress — standing allowlist (ADR 0012, no per-purity derivatio
 
 describe("egressHosts (the deduped union the proxy enforces)", () => {
   it("returns Build hosts first, then Agent hosts", () => {
-    const decision = deriveEgress({
+    const decision = decisionFor({
       packageManagers: ["npm"],
       gitRemoteHost: "github.com",
       agentModelHosts: ["api.deepseek.com"],
@@ -179,15 +205,19 @@ describe("gitRemoteHost (egress allowlist input)", () => {
   it("reads origin's host from a real repo", () => {
     const dir = repo();
     execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:org/repo.git"]);
-    expect(gitRemoteHost(dir)).toBe("github.com");
+    expect(confine({ projectDir: dir, packageManagers: [] }).decision).toEqual({
+      kind: "allowlist",
+      buildHosts: ["github.com"],
+      agentHosts: [],
+    });
   });
 
   it("returns undefined when there is no remote", () => {
-    expect(gitRemoteHost(repo())).toBeUndefined();
+    expect(confine({ projectDir: repo(), packageManagers: [] }).decision).toEqual({ kind: "none" });
   });
 });
 
-describe("deriveEgress — git-sourced dependency hosts (ADR 0012, dustcastle-61j)", () => {
+describe("confine — git-sourced dependency hosts (ADR 0012, dustcastle-61j)", () => {
   const tmps: string[] = [];
   afterEach(() => {
     while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
@@ -204,7 +234,7 @@ describe("deriveEgress — git-sourced dependency hosts (ADR 0012, dustcastle-61
       "Cargo.lock",
       '[[package]]\nname = "itoa"\nsource = "git+https://github.com/dtolnay/itoa?tag=1.0.15#e2766b8"\n',
     );
-    const decision = deriveEgress({ packageManagers: ["cargo"], projectDir: dir });
+    const decision = decisionFor({ packageManagers: ["cargo"], projectDir: dir });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("github.com"); // the git dep's host
     expect(decision.buildHosts).toContain("index.crates.io"); // registry still present
@@ -217,27 +247,27 @@ describe("deriveEgress — git-sourced dependency hosts (ADR 0012, dustcastle-61
       "Cargo.lock",
       '[[package]]\nname = "itoa"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
     );
-    const decision = deriveEgress({ packageManagers: ["cargo"], projectDir: dir });
+    const decision = decisionFor({ packageManagers: ["cargo"], projectDir: dir });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).not.toContain("github.com");
   });
 
   it("reads git deps from a LOOSE project's MANIFEST (no lockfile) — pip requirements", () => {
     const dir = projectWith("requirements.txt", "lib @ git+https://gitlab.com/org/lib@main\n");
-    const decision = deriveEgress({ packageManagers: ["pip"], projectDir: dir });
+    const decision = decisionFor({ packageManagers: ["pip"], projectDir: dir });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("gitlab.com");
   });
 
   it("resolves an npm forge shorthand (github:org/repo) to its host", () => {
     const dir = projectWith("package.json", JSON.stringify({ dependencies: { x: "github:foo/bar" } }));
-    const decision = deriveEgress({ packageManagers: ["npm"], projectDir: dir });
+    const decision = decisionFor({ packageManagers: ["npm"], projectDir: dir });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toContain("github.com");
   });
 
   it("stays pure (no file I/O, registry hosts only) when projectDir is omitted", () => {
-    const decision = deriveEgress({ packageManagers: ["cargo"] });
+    const decision = decisionFor({ packageManagers: ["cargo"] });
     if (decision.kind !== "allowlist") throw new Error("unreachable");
     expect(decision.buildHosts).toEqual(["index.crates.io", "static.crates.io"]);
   });

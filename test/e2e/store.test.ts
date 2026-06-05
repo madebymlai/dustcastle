@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { detect } from "../../src/detect/index.js";
 import { physPath, provisionStore, type Provisioned } from "../../src/store/index.js";
 import { completeMarker, depsCacheDecision } from "../../src/store/depscache/index.js";
+import { confine } from "../../src/sandbox/confine.js";
 import { planSandbox } from "../../src/sandbox/plan.js";
 import { stageSampleProject } from "./fixture.js";
 
@@ -74,7 +75,8 @@ describe("deps cache (ADR 0016) — keyed by deps fingerprint", () => {
     // On a MISS the plan installs in-Sandbox (`npm install`) and schedules a populate;
     // nothing is restored on the host. (A committed lockfile is still honoured by the
     // resolving install — and a lock-grade repo still caches by its deps key.)
-    const missPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: miss }], cacheDir });
+    const confinement = confine({ projectDir, packageManagers: [detection.packageManager] });
+    const missPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: miss }], cacheDir, confinement });
     expect(missPlan.setupCommands.join("\n")).toContain("npm install");
     expect(missPlan.hostWorktreeReady).toEqual([]);
     expect(missPlan.populate).toHaveLength(1);
@@ -88,7 +90,7 @@ describe("deps cache (ADR 0016) — keyed by deps fingerprint", () => {
 
     // On a HIT the plan restores from the cache on the host (host.onWorktreeReady),
     // runs no install (`npm install` absent — just the git-exclude), and no populate.
-    const hitPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: hit }], cacheDir });
+    const hitPlan = planSandbox({ ecosystems: [{ provisioned: toolchainOnly(), detection, cache: hit }], cacheDir, confinement });
     expect(hitPlan.hostWorktreeReady.join("\n")).toContain(join(cacheDir, hit.depsKey));
     expect(hitPlan.setupCommands.join("\n")).not.toContain("npm install");
     expect(hitPlan.populate).toEqual([]);

@@ -26,7 +26,7 @@ export interface EgressProxyHandle {
 }
 
 export interface EgressProxyOptions {
-  /** The derived allowlist (deriveEgress) — the only hosts that may be reached. */
+  /** The derived allowlist (confine().decision flattened) — the only hosts that may be reached. */
   readonly allowlist: readonly string[];
   /** Listen port (default 0 → ephemeral). */
   readonly port?: number;

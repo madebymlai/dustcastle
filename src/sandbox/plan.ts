@@ -9,8 +9,7 @@ import {
   type DepsCachePopulate,
 } from "../store/depscache/index.js";
 import type { Provisioned } from "../store/index.js";
-import { EGRESS_NETWORK, productionProxyUrl, proxyEnv } from "./confine.js";
-import { deriveEgress, type EgressDecision } from "./egress.js";
+import type { Confinement, EgressDecision } from "./confine.js";
 
 /** sandcastle's podman() options — typed from the factory so it stays in sync. */
 export type PodmanOptions = NonNullable<Parameters<typeof podman>[0]>;
@@ -40,19 +39,10 @@ export interface SandboxPlanSpec {
    */
   readonly cacheDir?: string;
   /**
-   * The egress decision (ADR 0005/0012). A standing allowlist that no longer branches
-   * on purity — every detected manager's registry is open and deps install in-Sandbox.
-   * Defaults to the union derived from every detected manager's registry. `{ kind:
-   * "none" }` only when no Ecosystem is detected and no agent runs.
+   * The Egress facade output (ADR 0005/0010/0012). `prepareRun` owns deriving this;
+   * the plan only drops its posture into podman options and surfaces the decision.
    */
-  readonly egress?: EgressDecision;
-  /**
-   * The URL of the running egress proxy to route the container's tooling through
-   * (ADR 0005). Only used on the allowlist path. Defaults to the production proxy
-   * container's name on the internal egress net; the live e2e overrides it with
-   * its host-side proxy address.
-   */
-  readonly proxyUrl?: string;
+  readonly confinement: Pick<Confinement, "decision" | "posture">;
   /**
    * Base image; a stock image suffices for libc (the Nix closure carries its own),
    * but it MUST ship git — the agent branches/commits/merges. Defaults to a
@@ -114,13 +104,8 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   const ecosystems = spec.ecosystems;
   const primaryEcosystem = ecosystems[0];
   const cacheDir = spec.cacheDir;
-  const egress =
-    spec.egress ?? deriveEgress({ packageManagers: ecosystems.map((e) => e.detection.packageManager) });
-
-  // On the allowlist path, route the container's tooling through the egress
-  // proxy (which enforces the allowlist); confinement makes that proxy its only
-  // way out. A closed (`none`) build gets no proxy and no network at all.
-  const proxyUrlForBuild = egress.kind === "allowlist" ? spec.proxyUrl ?? productionProxyUrl() : undefined;
+  const egress = spec.confinement.decision;
+  const posture = spec.confinement.posture;
 
   const podmanOptions: PodmanOptions = {
     imageName: spec.imageName ?? DEFAULT_IMAGE,
@@ -133,9 +118,9 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
       // Merge each Ecosystem's run env (PATH + cache vars). A polyglot repo puts
       // every Toolchain on PATH; the proxy env applies once on top of all of them.
       ...mergeEnv(ecosystems),
-      ...(proxyUrlForBuild !== undefined ? proxyEnv(proxyUrlForBuild) : {}),
+      ...posture.env,
     },
-    network: egress.kind === "none" ? "none" : EGRESS_NETWORK,
+    network: posture.network,
   };
 
   // Per ecosystem (ADR 0016): a cache HIT restores the assembled deps on the host

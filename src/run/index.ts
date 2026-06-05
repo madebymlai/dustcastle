@@ -2,8 +2,7 @@ import * as sandcastle from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
-import { ensureEgress, provisionProxyResolvConf } from "../sandbox/egress-runtime.js";
-import { deriveEgress, gitRemoteHost, type EgressDecision } from "../sandbox/egress.js";
+import { confine, provisionProxyResolvConf, type Confinement, type EgressHandle } from "../sandbox/confine.js";
 import { planSandbox, type EcosystemPlan, type EcosystemPlans, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, PROXY_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore } from "../store/index.js";
@@ -35,11 +34,11 @@ export interface PrepareOptions {
   /** Structured logs for provisioning subsystems. */
   readonly logger?: Logger;
   /**
-   * Override the egress proxy URL the in-Sandbox install is routed through (ADR
-   * 0005). The orchestration layer supplies this after the proxy is up; defaults
-   * to the production proxy container on the internal egress net.
+   * Override the address the in-Sandbox tooling uses to reach the egress proxy
+   * (ADR 0005). Defaults to the production proxy container on the internal egress
+   * net; the gated route-strip e2e injects a host-side proxy address.
    */
-  readonly proxyUrl?: string;
+  readonly proxyAddress?: string;
   /**
    * The agent's model-provider API host(s) to allowlist for Agent Egress (ADR
    * 0010), so the in-sandbox agent reaches its LLM even on a pure, offline build.
@@ -61,7 +60,7 @@ export interface PrepareOptions {
    * enforce scoped egress aborts here, not after minutes of build work. dustcastle
    * has no unconfined fallback by design, so if this throws, the run throws.
    */
-  readonly beforeProvision?: (egress: EgressDecision) => void | Promise<void>;
+  readonly beforeProvision?: (confinement: Confinement) => void | Promise<void>;
 }
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
@@ -103,26 +102,21 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   const detections = detect(opts.cwd);
   assertNonEmpty(detections, `no supported ecosystem detected in ${opts.cwd}`);
 
-  // Derive the standing egress decision (ADR 0005/0010/0012) BEFORE provisioning —
-  // it needs only detection, not the realized Store — so the enforcing proxy can be
-  // stood up (and fail fast) ahead of the expensive build via `beforeProvision`. The
-  // allowlist is the UNION of every detected manager's registry + the git host (a
-  // polyglot repo opens both), with the agent's model host alongside.
-  const remoteHost = gitRemoteHost(opts.cwd);
-  const egress: EgressDecision = deriveEgress({
-    packageManagers: detections.map((d) => d.packageManager),
-    // Open the hosts of any git-sourced deps (ADR 0012, dustcastle-61j): scanned from the
-    // detected managers' declared source files under cwd (manifests ∪ lockfiles).
+  // Derive the standing confinement (ADR 0005/0010/0012) BEFORE provisioning — it
+  // needs only detection, not the realized Store — so the enforcing proxy can be
+  // stood up (and fail fast) ahead of the expensive build via `beforeProvision`.
+  const confinement = confine({
     projectDir: opts.cwd,
-    ...(remoteHost !== undefined ? { gitRemoteHost: remoteHost } : {}),
+    packageManagers: detections.map((d) => d.packageManager),
     // Agent Egress (ADR 0010): the model host(s) carve a route for the agent's own
     // LLM calls alongside the build's standing registry/git egress.
     ...(opts.agentModelHosts !== undefined ? { agentModelHosts: opts.agentModelHosts } : {}),
+    ...(opts.proxyAddress !== undefined ? { proxyAddress: opts.proxyAddress } : {}),
   });
 
   // Fail fast: stand up the egress proxy now. If this host can't enforce scoped
   // egress, abort BEFORE provisioning (no unconfined fallback — ADR 0005/0010).
-  await opts.beforeProvision?.(egress);
+  await opts.beforeProvision?.(confinement);
 
   // The deps-cache root (ADR 0016): the host-owned cache, one entry per ecosystem
   // keyed by its deps fingerprint.
@@ -154,8 +148,7 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
     plan: planSandbox({
       ecosystems,
       cacheDir,
-      egress,
-      ...(opts.proxyUrl !== undefined ? { proxyUrl: opts.proxyUrl } : {}),
+      confinement,
     }),
   };
 }
@@ -302,7 +295,7 @@ export async function withProvisionedSandbox<T>(
   // The egress backend and the Store pool, captured as the run sets them up so
   // the single finally tears down whatever was established — even if provisioning or
   // the body throws after egress came up.
-  let egress: ReturnType<typeof ensureEgress> = { teardown: () => {} };
+  let egress: EgressHandle = { teardown: () => {} };
   let pool: ReturnType<typeof storePool> | undefined;
   const storePinnedKeys: string[] = [];
   // The deps-cache pool + the keys this run pins in it (ADR 0012). A live run pins
@@ -327,19 +320,17 @@ export async function withProvisionedSandbox<T>(
       // BEFORE the Store provision (ADR 0005/0010). A host that can't enforce scoped
       // egress fails fast here, before any build work; dustcastle has no unconfined
       // fallback. Torn down in the finally whatever the outcome.
-      beforeProvision: async (decision) => {
-        // Only the allowlist (impure) path runs a proxy, so build its image lazily
-        // there — the dustcastle-owned image that actually carries the proxy code
-        // (stock node:20-alpine has none, which left the proxy dead-on-arrival).
+      beforeProvision: async (confinement) => {
+        // Only the allowlist path runs a proxy, so build its image lazily there —
+        // the dustcastle-owned image that actually carries the proxy code.
         let image = opts.proxyImage;
-        if (image === undefined && decision.kind === "allowlist") {
+        if (image === undefined && confinement.decision.kind === "allowlist") {
           image = await ensureImage(PROXY_SPEC, { logger: egressLogger });
         }
         // The proxy resolves allowlisted hosts through external resolvers, not the
         // --internal net's aardvark (which would NXDOMAIN-poison resolution).
-        const resolvConfPath = decision.kind === "allowlist" ? provisionProxyResolvConf() : undefined;
-        egress = ensureEgress({
-          egress: decision,
+        const resolvConfPath = confinement.decision.kind === "allowlist" ? provisionProxyResolvConf() : undefined;
+        egress = confinement.enforce({
           proxyEntrypoint: opts.proxyEntrypoint ?? DEFAULT_PROXY_ENTRYPOINT,
           ...(image !== undefined ? { image } : {}),
           ...(resolvConfPath !== undefined ? { resolvConfPath } : {}),

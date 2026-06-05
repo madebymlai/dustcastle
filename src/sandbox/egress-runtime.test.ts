@@ -1,11 +1,19 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
-import { EGRESS_NETWORK, EGRESS_PROXY_CONTAINER, productionProxyUrl } from "./confine.js";
-import type { EgressDecision } from "./egress.js";
-import { ensureEgress, isProxyListeningLogLine, provisionProxyResolvConf, type PodmanResult } from "./egress-runtime.js";
+import {
+  confine,
+  EGRESS_NETWORK,
+  EGRESS_PROXY_CONTAINER,
+  isProxyListeningLogLine,
+  provisionProxyResolvConf,
+  type EgressDecision,
+  type EnforceConfinementOptions,
+  type PodmanResult,
+} from "./confine.js";
 
 /** A structured allowlist decision (ADR 0010): Build hosts + optional Agent hosts. */
 const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision => ({
@@ -13,6 +21,30 @@ const allow = (buildHosts: string[], agentHosts: string[] = []): EgressDecision 
   buildHosts,
   agentHosts,
 });
+
+const tmps: string[] = [];
+afterEach(() => {
+  while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+});
+
+function ensureEgress(opts: { readonly egress: EgressDecision } & EnforceConfinementOptions) {
+  const { egress, ...enforceOpts } = opts;
+  return confinementFor(egress).enforce(enforceOpts);
+}
+
+function confinementFor(decision: EgressDecision) {
+  const dir = mkdtempSync(join(tmpdir(), "dustcastle-enforce-"));
+  tmps.push(dir);
+  if (decision.kind === "none") return confine({ projectDir: dir, packageManagers: [] });
+
+  const packageManagers = decision.buildHosts.includes("registry.npmjs.org") ? (["npm"] as const) : [];
+  const gitHost = decision.buildHosts.find((host) => host !== "registry.npmjs.org");
+  if (gitHost !== undefined) {
+    execFileSync("git", ["-C", dir, "init", "-q"]);
+    execFileSync("git", ["-C", dir, "remote", "add", "origin", `git@${gitHost}:org/repo.git`]);
+  }
+  return confine({ projectDir: dir, packageManagers, agentModelHosts: decision.agentHosts });
+}
 
 // The imperative glue that brings up the production egress backend (ADR 0005,
 // handoff item 1-tail): an --internal network with no route off-host + a
@@ -50,7 +82,6 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     const { run, calls } = recorder();
     const handle = ensureEgress({ egress: { kind: "none" }, proxyEntrypoint: "/p.js", run });
     expect(calls).toEqual([]);
-    expect(handle.proxyUrl).toBeUndefined();
     handle.teardown(); // must not throw
     expect(calls).toEqual([]);
   });
@@ -73,8 +104,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     expect(runCall!).toContain("/opt/dustcastle/proxy-main.js");
     // Network create precedes the proxy run.
     expect(calls.indexOf(runCall!)).toBeGreaterThan(0);
-    // The sandbox addresses the proxy by its production URL (matches the plan).
-    expect(handle.proxyUrl).toBe(productionProxyUrl());
+    expect(handle.teardown).toEqual(expect.any(Function));
   });
 
   it("logs egress progress through the caller-named child logger", () => {
@@ -108,7 +138,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
     expect(runCall!.join(" ")).toContain("github.com,api.deepseek.com");
     // github.com appears once, not twice — the union is deduped.
     expect(runCall!.join(" ")).not.toContain("github.com,github.com");
-    expect(handle.proxyUrl).toBe(productionProxyUrl());
+    expect(handle.teardown).toEqual(expect.any(Function));
   });
 
   it("tolerates an already-existing network (idempotent re-run)", () => {
@@ -122,7 +152,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
       proxyEntrypoint: "/p.js",
       run,
     });
-    expect(handle.proxyUrl).toBe(productionProxyUrl());
+    expect(handle.teardown).toEqual(expect.any(Function));
   });
 
   it("throws on a hard network-create failure (not an already-exists)", () => {
@@ -181,7 +211,7 @@ describe("ensureEgress (the production egress backend orchestration — ADR 0005
       proxyEntrypoint: "/p.js",
       run,
     });
-    expect(handle.proxyUrl).toBe(productionProxyUrl());
+    expect(handle.teardown).toEqual(expect.any(Function));
   });
 
   it("treats readiness as a pure JSON event predicate, not a stderr-prefix grep", () => {

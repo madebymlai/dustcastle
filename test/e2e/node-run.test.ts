@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { EGRESS_NETWORK } from "../../src/sandbox/confine.js";
-import { egressHosts } from "../../src/sandbox/egress.js";
+import { egressHosts } from "../../src/sandbox/confine.js";
 import { prepareRun } from "../../src/run/index.js";
 import { runInSandbox, stageNodeProject } from "./fixture.js";
 

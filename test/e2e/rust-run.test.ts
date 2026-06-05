@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME } from "../../src/ecosystems/rust.js";
 import { EGRESS_NETWORK } from "../../src/sandbox/confine.js";
-import { egressHosts } from "../../src/sandbox/egress.js";
+import { egressHosts } from "../../src/sandbox/confine.js";
 import { prepareRun } from "../../src/run/index.js";
 import { runInSandbox, stageRustCrateProject, stageRustGitProject, stageRustProject } from "./fixture.js";
 

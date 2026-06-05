@@ -3,8 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { confineRouteScript } from "../../src/sandbox/confine.js";
-import { egressHosts } from "../../src/sandbox/egress.js";
+import { confineRouteScript, egressHosts } from "../../src/sandbox/confine.js";
 import { startEgressProxy, type EgressProxyHandle } from "../../src/sandbox/proxy.js";
 import { prepareRun } from "../../src/run/index.js";
 import { stageNodeImpureProject } from "./fixture.js";
@@ -79,7 +78,7 @@ describe("dustcastle run (slice 3: impure-allow egress enforcement, ADR 0004/000
       // and this fixture's postinstall is the untrusted lifecycle code being confined.
       const prepared = await prepareRun({
         cwd: projectDir,
-        proxyUrl: PROXY_URL,
+        proxyAddress: PROXY_URL,
         onLine: log,
       });
       expect(prepared.ecosystems[0].detection.ecosystem).toBe("node");

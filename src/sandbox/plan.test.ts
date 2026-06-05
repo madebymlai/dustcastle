@@ -1,9 +1,13 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 import type { Provisioned } from "../store/index.js";
-import { planSandbox } from "./plan.js";
+import { confine, type Confinement, type EgressDecision } from "./confine.js";
+import { planSandbox as rawPlanSandbox, type SandboxPlanSpec } from "./plan.js";
 
 // The integration surface is just sandcastle's `mounts` array (ADR 0002): no
 // fork, no patch. planSandbox turns a provisioned Store into the podman()
@@ -25,6 +29,45 @@ const detection: Detection = {
   packageManager: "go",
   toolchainVersion: "1.26.3",
 };
+
+const noRemoteProjectDir = mkdtempSync(join(tmpdir(), "dustcastle-plan-"));
+
+type LegacyPlanSpec = Omit<SandboxPlanSpec, "confinement"> & {
+  readonly confinement?: Pick<Confinement, "decision" | "posture">;
+  readonly egress?: EgressDecision;
+  readonly proxyUrl?: string;
+};
+
+function planSandbox(spec: LegacyPlanSpec) {
+  const confinement =
+    spec.confinement ??
+    (spec.egress !== undefined
+      ? { decision: spec.egress, posture: postureFor(spec.egress, spec.proxyUrl) }
+      : confine({
+          projectDir: noRemoteProjectDir,
+          packageManagers: spec.ecosystems.map((e) => e.detection.packageManager),
+          ...(spec.proxyUrl !== undefined ? { proxyAddress: spec.proxyUrl } : {}),
+        }));
+  const { egress: _egress, proxyUrl: _proxyUrl, ...rest } = spec;
+  void _egress;
+  void _proxyUrl;
+  return rawPlanSandbox({ ...rest, confinement });
+}
+
+function postureFor(decision: EgressDecision, proxyUrl = "http://dustcastle-egress-proxy:8118") {
+  if (decision.kind === "none") return { network: "none", env: {} };
+  return {
+    network: "dustcastle-egress",
+    env: {
+      HTTP_PROXY: proxyUrl,
+      HTTPS_PROXY: proxyUrl,
+      http_proxy: proxyUrl,
+      https_proxy: proxyUrl,
+      npm_config_proxy: proxyUrl,
+      npm_config_https_proxy: proxyUrl,
+    },
+  };
+}
 
 describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
   it("bind-mounts the physical Store read-only at the canonical /nix/store", () => {

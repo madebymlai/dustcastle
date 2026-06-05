@@ -90,7 +90,7 @@ export const PROXY_SPEC: ImageSpec = {
 /**
  * The content-busting image reference: the spec's stable tag prefix with the
  * dustcastle version appended (e.g. `…egress-proxy:node20-0.3.0`). Because the build
- * (`ensureImage`) and the run sites (plan's DEFAULT_IMAGE, egress-runtime's
+ * (`ensureImage`) and the run sites (plan's DEFAULT_IMAGE, confine's
  * DEFAULT_PROXY_IMAGE) all derive the ref through THIS one function, a release that
  * changes what an image bakes ships a new tag that `podman image exists` misses,
  * forcing a rebuild — and build/run can never disagree on the tag (dustcastle-q9u).

@@ -2,8 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect } from "vitest";
-import { proxyEnv } from "../../src/sandbox/confine.js";
-import { egressHosts } from "../../src/sandbox/egress.js";
+import { confine, egressHosts } from "../../src/sandbox/confine.js";
 import { startEgressProxy, type EgressProxyHandle } from "../../src/sandbox/proxy.js";
 import type { PreparedRun } from "../../src/run/index.js";
 
@@ -122,7 +121,11 @@ export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
   // proxy env to the LIVE ephemeral proxy (the plan baked the production proxy URL).
   const env = {
     ...spec.prepared.plan.podmanOptions.env,
-    ...proxyEnv(proxyUrl),
+    ...confine({
+      projectDir: spec.projectDir,
+      packageManagers: spec.prepared.ecosystems.map((e) => e.detection.packageManager),
+      proxyAddress: proxyUrl,
+    }).posture.env,
     HOME: "/root",
   };
   const envFlags = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
