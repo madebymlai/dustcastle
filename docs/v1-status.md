@@ -212,9 +212,9 @@ via `dustcastle model` (re-pick).
 | `src/config/global.ts` | The global config (`~/.dustcastle/config.json`): `loadModelSelection` / `writeModel` (preserves other keys), `buildPiAgent`, `agentAuthMounts` (the `~/.pi/agent` mount), and `loadHandoff` — model + optional task (`prompt`/`promptFile`, also global) → `SandcastleHandoff`, or `undefined` when there's nothing to launch. Pure + total. | 0002, 0009 |
 | `src/cli/pi-models.ts` | `parsePiModels` (pure: skip header, `provider/model` values) + `listPiModels` (runs `pi --list-models`, captures **stderr**). | 0002 |
 | `src/cli/select.ts` | `singleSelect` arrow-key TUI, ported from agentstack's `tui.mjs`. | 0002 |
-| `src/cli/model.ts` | `chooseModel` (provider→model), `runModelCommand` (`dustcastle model`, TTY-guarded), `ensureModel` (first-run pick; headless no-ops). | 0002 |
+| `src/cli/model.ts` | `chooseModel` (provider→model), `runModelCommand` (`dustcastle model`, TTY-guarded), `ensureModel` (first-run pick; headless no-model fails fast). | 0002, 0017 |
 | `src/run/index.ts` | `run()` merges `agentAuthMounts()` into the Sandbox plan's `mounts` before `sandcastle.run()`. | 0002 |
-| `src/cli/main.ts` | New `dustcastle model` command; `run` calls `ensureModel()` (first-run picker) then launches from the global `loadHandoff()`, surfacing `pi @ <model>`. | 0002 |
+| `src/cli/main.ts` | New `dustcastle model` command; `run` calls `ensureModel()` (first-run picker/headless fail-fast) then launches from the global `loadHandoff()`, surfacing `pi @ <model>`. | 0002, 0017 |
 
 Config + parser + auth mount are exhaustively unit-tested (18 tests, pure — no pi,
 no podman); `listPiModels` verified live against real pi. The **live agent run**

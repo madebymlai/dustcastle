@@ -52,9 +52,10 @@ async function main(argv: string[]): Promise<number> {
   // The agent model is a single global choice every project shares (no
   // project-local config). The first run with no model configured picks one
   // interactively — same as agentstack's install flow; `dustcastle model`
-  // re-picks. Headless with no model just provisions and says so below.
+  // re-picks. Headless with no model fails fast before provisioning.
   const modelOutcome = await ensureModel(processTerminal());
   if (modelOutcome === "cancelled") return 130;
+  if (modelOutcome === "no-model") return 1;
 
   const rootLogger = createCliLogger();
 

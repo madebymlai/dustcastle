@@ -4,13 +4,15 @@ import { singleSelect } from "./select.js";
 import { processTerminal, type SelectIo, type Terminal } from "./terminal.js";
 
 export type ModelLister = () => Map<string, PiModelOption[]>;
-export type EnsureModelOutcome = "proceed" | "cancelled";
+export type EnsureModelOutcome = "proceed" | "cancelled" | "no-model";
 
 const EXIT_SUCCESS = 0;
 const EXIT_FAILURE = 1;
 const EXIT_INTERRUPT = 130;
 const NO_MODELS_MESSAGE =
   "dustcastle: no pi models found. Run `pi` then `/login` to authenticate, then re-run `dustcastle model`.\n";
+const NO_CONFIGURED_MODEL_MESSAGE =
+  "dustcastle: no model configured — run `dustcastle model`\n";
 
 /**
  * Interactively choose a pi model (provider → model), mirroring agentstack's
@@ -73,8 +75,9 @@ export async function runModelCommand(
 /**
  * Ensure a global model is configured, picking one interactively on first use
  * (the "first run / install picks a model" path). Returns whether the caller may
- * continue. Cancellation aborts cleanly; other no-selection paths preserve the
- * existing ADR 0009 provisioning flow.
+ * continue. Cancellation aborts cleanly; headless first-run misconfiguration
+ * fails fast; interactive no-models preserves the existing ADR 0009 provisioning
+ * flow.
  */
 export async function ensureModel(
   term: Terminal = processTerminal(),
@@ -83,7 +86,10 @@ export async function ensureModel(
 ): Promise<EnsureModelOutcome> {
   const existing = loadModelSelection(dir);
   if (existing !== undefined) return "proceed";
-  if (!term.isTTY) return "proceed"; // headless no-model semantics are handled by dustcastle-8kv.2
+  if (!term.isTTY) {
+    term.error(NO_CONFIGURED_MODEL_MESSAGE);
+    return "no-model";
+  }
 
   const code = await runModelCommand(term, listModels, dir);
   return code === EXIT_INTERRUPT ? "cancelled" : "proceed";

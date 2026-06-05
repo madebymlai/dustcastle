@@ -25,11 +25,11 @@ Cancellation is a command outcome, not a widget side effect.
 - `dustcastle run` treats cancellation as an abort and exits 130 before provisioning further work.
 - A cancellation is quiet: it is never reported as "no pi models found".
 - The interactive "pi has no models" path remains distinct from cancellation and keeps the ADR 0009 hint: run `pi`, then `/login`, then re-run `dustcastle model`.
-- Headless first-run with no configured model must not silently provision nothing; it fails fast with an actionable non-zero outcome. That command-layer tightening is the follow-on slice after the Terminal-port seam.
+- Headless first-run with no configured model must not silently provision nothing; it prints an actionable `dustcastle model` hint, exits non-zero, and provisions nothing.
 
 ## Consequences
 
 - Shells and wrapper scripts can now tell an operator interrupt from success.
 - The leaf picker is testable because it reports values instead of killing the process.
 - The command layer owns user-facing messages and exit codes.
-- The pi-login hint remains available for the real "no models" condition and is not shown when the operator simply cancelled.
+- The pi-login hint remains available for the real interactive "no models" condition and is not shown when the operator simply cancelled or when headless configuration is missing.

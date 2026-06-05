@@ -135,6 +135,26 @@ describe("ensureModel", () => {
     expect(fetched).toBe(false);
   });
 
+  it("returns no-model without fetching or showing a picker when headless and unconfigured", async () => {
+    const term = new InMemoryTerminal({ rows: 12, isTTY: false });
+    let fetched = false;
+
+    await expect(
+      ensureModel(
+        term,
+        () => {
+          fetched = true;
+          return ONE_PROVIDER;
+        },
+        tempHome(),
+      ),
+    ).resolves.toBe("no-model");
+
+    expect(fetched).toBe(false);
+    expect(term.output).toBe("");
+    expect(term.errorOutput).toContain("no model configured — run `dustcastle model`");
+  });
+
   it("returns cancelled when the first-run picker is cancelled", async () => {
     const dir = tempHome();
     const term = new InMemoryTerminal({ rows: 12 });
