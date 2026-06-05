@@ -195,6 +195,9 @@ export type SandcastleHandoff = Omit<Parameters<typeof sandcastle.run>[0], "sand
  * Everything `withProvisionedSandbox` needs to provision the Store, stand up the
  * egress backend, and pin the GC roots — i.e. a run minus the agent handoff.
  */
+export type ProvisionStorePoolOptions = Pick<StorePoolOptions, "closures" | "logger">;
+export type StorePoolFactory = (opts: ProvisionStorePoolOptions) => Pool;
+
 export interface ProvisionOptions extends PrepareOptions {
   /**
    * Called once after the Store is provisioned and the egress backend is up — the
@@ -206,12 +209,11 @@ export interface ProvisionOptions extends PrepareOptions {
   readonly onPrepared?: (prepared: PreparedRun) => void;
   /**
    * Inject the Store pool at the sole Store-mechanism seam (ADR 0012/0015). Production
-   * defaults to `storePool({ run: nixPortableRunner(), dir: DUSTCASTLE_HOME, ... })`;
-   * tests that need alternate runners, root directories, spawn behavior, or a no-op GC
-   * replace the whole pool here. The GC mechanism itself is tested at the pool layer
-   * (`storePool.test.ts`).
+   * defaults to the real Store pool; tests that need alternate runners, root
+   * directories, spawn behavior, or a no-op GC replace the whole pool here. The GC
+   * mechanism itself is tested at the pool layer (`storePool.test.ts`).
    */
-  readonly makeStorePool?: (opts: Pick<StorePoolOptions, "closures" | "logger">) => Pool;
+  readonly makeStorePool?: StorePoolFactory;
 }
 
 export interface RunOptions extends ProvisionOptions {
@@ -249,6 +251,15 @@ function subsystemLogger(logger: Logger | undefined, mod: string): Logger {
   return (logger ?? noopLogger).child({ mod });
 }
 
+function defaultStorePool(opts: ProvisionStorePoolOptions): Pool {
+  return storePool({
+    run: nixPortableRunner(),
+    dir: DUSTCASTLE_HOME,
+    ...(opts.closures !== undefined ? { closures: opts.closures } : {}),
+    ...(opts.logger !== undefined ? { logger: opts.logger } : {}),
+  });
+}
+
 /**
  * Provision from the shared Store, stand up the egress backend the plan routes
  * through, and pin the closure with scoped GC roots — then run `body` with the
@@ -271,7 +282,7 @@ export async function withProvisionedSandbox<T>(
   // the single finally tears down whatever was established — even if provisioning or
   // the body throws after egress came up.
   let egress: EgressHandle = { teardown: () => {} };
-  let pool: ReturnType<typeof storePool> | undefined;
+  let pool: Pool | undefined;
   const storePinnedKeys: string[] = [];
   // The deps-cache pool + the keys this run pins in it (ADR 0012). A live run pins
   // ALL its deps-cache entries so a concurrent GC sweep never evicts assembled deps
@@ -311,13 +322,8 @@ export async function withProvisionedSandbox<T>(
     // /upsertRecency calls remain. A polyglot run contributes one closure per
     // active Toolchain key, deduped by the Store pool key.
     const closures = storeClosures(prepared.ecosystems);
-    pool = opts.makeStorePool?.({ closures, logger: gcLogger }) ??
-      storePool({
-        run: nixPortableRunner(),
-        dir: DUSTCASTLE_HOME,
-        closures,
-        logger: gcLogger,
-      });
+    const makeStorePool = opts.makeStorePool ?? defaultStorePool;
+    pool = makeStorePool({ closures, logger: gcLogger });
 
     // Pin every active Toolchain closure with scoped GC roots (ADR 0007/0012), so a
     // concurrent collect-garbage never deletes paths the live run still needs. Roots

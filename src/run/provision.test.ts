@@ -1,4 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { NixRunner } from "../store/nix.js";
+import type { Pool } from "../store/pool.js";
+import type { ProvisionOptions, ProvisionStorePoolOptions } from "./index.js";
+
+interface RemovedStoreMechanismOptions {
+  readonly gcRoots?: { readonly gcrootsDir?: string; readonly run?: NixRunner };
+  readonly autoGc?: {
+    readonly run?: NixRunner;
+    readonly recencyDir?: string;
+    readonly recencyRootsDir?: string;
+    readonly spawn?: () => void;
+  };
+}
+
+type LegacyProvisionOptions = ProvisionOptions & RemovedStoreMechanismOptions;
 
 const mocks = vi.hoisted(() => {
   const nixRunner = vi.fn(() => ({ status: 0, stdout: "", stderr: "" }));
@@ -73,7 +88,7 @@ describe("withProvisionedSandbox Store pool seam", () => {
   it("ignores the deleted Store-runner panel and routes Store mechanics only through makeStorePool", async () => {
     const legacyRunner = vi.fn(() => ({ status: 0, stdout: "", stderr: "" }));
     const legacyAutoGcSpawn = vi.fn();
-    const pool = {
+    const pool: Pool = {
       measure: vi.fn(() => 0),
       entries: vi.fn(() => []),
       pin: vi.fn(),
@@ -81,29 +96,27 @@ describe("withProvisionedSandbox Store pool seam", () => {
       release: vi.fn(),
       evict: vi.fn(() => ({ entriesEvicted: 0, bytesFreed: 0 })),
     };
-    const poolOpts: unknown[] = [];
+    const poolOpts: ProvisionStorePoolOptions[] = [];
+    const opts: LegacyProvisionOptions = {
+      cwd: "/repo",
+      makeStorePool: (storePoolOpts) => {
+        poolOpts.push(storePoolOpts);
+        return pool;
+      },
+      // Legacy runtime options must be dead: callers that need alternate Store
+      // mechanics replace the whole pool via makeStorePool instead.
+      gcRoots: { run: legacyRunner, gcrootsDir: "/legacy/gcroots" },
+      autoGc: {
+        run: legacyRunner,
+        recencyDir: "/legacy/recency",
+        recencyRootsDir: "/legacy/recency-roots",
+        spawn: legacyAutoGcSpawn,
+      },
+    };
 
-    await expect(
-      withProvisionedSandbox(
-        {
-          cwd: "/repo",
-          makeStorePool: (opts) => {
-            poolOpts.push(opts);
-            return pool;
-          },
-          // Legacy runtime options must be dead: callers that need alternate Store
-          // mechanics replace the whole pool via makeStorePool instead.
-          gcRoots: { run: legacyRunner, gcrootsDir: "/legacy/gcroots" },
-          autoGc: {
-            run: legacyRunner,
-            recencyDir: "/legacy/recency",
-            recencyRootsDir: "/legacy/recency-roots",
-            spawn: legacyAutoGcSpawn,
-          },
-        } as Parameters<typeof withProvisionedSandbox>[0] & Record<string, unknown>,
-        async () => "ok",
-      ),
-    ).resolves.toBe("ok");
+    const run = withProvisionedSandbox(opts, async () => "ok");
+
+    await expect(run).resolves.toBe("ok");
 
     expect(poolOpts).toHaveLength(1);
     expect(poolOpts[0]).toEqual({
