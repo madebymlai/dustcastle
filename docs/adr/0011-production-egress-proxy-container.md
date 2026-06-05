@@ -24,3 +24,22 @@ ADR 0005 specified the production confinement as a `--internal` podman network p
 - The podman-native production backend is now **proven live** (image carries the proxy code; `0.0.0.0` bind reachable cross-container; external DNS resolves; allowlisted hosts `CONNECT 200`, off-allowlist `403`, and an internal-net client has no route off-host). The two-backends-one-proxy design holds; this was purely about shipping the proxy code and giving its container a working bind + resolver.
 - The proxy now depends on a reachable public DNS resolver (`1.1.1.1`/`8.8.8.8`). On a host where those are blocked but a corporate resolver works, `EGRESS_PROXY_DNS` needs to become configurable; for now it is a constant with a sane default.
 - `ensureProxyImage` adds a second one-time image build (alongside `ensureAgentImage`); idempotent thereafter via `podman image exists`.
+
+## Amendment: one `confine()` facade owns derivation + enforcement + posture
+
+The egress guarantee was spread across four shallow modules, and the same decisions were re-stated in several of them: `egress.ts` (derive the allowlist), `confine.ts` (pure spec generators — network name, proxy URL, `proxyEnv`, container args), `egress-runtime.ts` (`ensureEgress`: bring the proxy up + verify alive), and the caller (`run/index.ts`, whose `beforeProvision` block built the proxy image, wrote the resolv.conf, and chose the entrypoint). Symptoms: the `egress.kind` allowlist/none branch was interpreted in `plan.ts`, `egress-runtime.ts`, **and** `run/index.ts`; the proxy address was derived twice (`plan.ts` and the `ensureEgress` handle) and never reconciled, agreeing only because both called `productionProxyUrl()`; and `deriveEgress` had two call sites whose copies disagreed (`plan.ts`'s fallback omitted the git host, git-dep hosts, and the agent host). "Is the Sandbox confined to the allowlist?" had no single owner and no single test surface.
+
+**Decision: a single `confine()` facade owns the whole guarantee.** `egress.ts` + `confine.ts` + `egress-runtime.ts` merge into one `sandbox/egress` module whose only public surface is `confine(input) → Confinement { decision, posture, enforce() }`:
+
+- `confine()` does all derivation internally (git remote host, git-dep scan, `deriveEgress` — now the **only** call site), computes the Sandbox's network **posture** (`{ network, env }`), and resolves the proxy address **once** (`input.proxyAddress ?? productionProxyUrl()`).
+- `posture` is what the Sandbox plan drops into its podman options; the plan no longer imports any egress internal or branches on `egress.kind`.
+- `enforce()` brings up the **production backend only** (image → resolv.conf → `--internal` network → proxy → verify-alive) and returns `{ teardown }`. Liveness is the facade's **tested invariant**: `enforce()` throws if the proxy is not serving.
+- Only the facade may branch on `egress.kind` or name the proxy mechanics (network, URL, env, image, entrypoint, resolv.conf); the spec generators stop being public.
+
+**The two backends are unchanged, but the seam is not a runtime switch.** `enforce()` is the production (`--internal` net + dual-homed proxy container) backend. The privilege-stripped-host backend (pasta route-strip) is **composed** from the facade's public pure helpers (`confineRouteScript` + `startEgressProxy`) by whatever needs it — today only the slice-3 e2e — consistent with [ADR 0005](0005-sandbox-secrets-and-egress.md)'s "no unconfined production fallback": production has exactly one confinement backend, and if it cannot stand up the run aborts. The route-strip is a way to *prove* the guarantee on a host that cannot create a bridge, not a production runtime path — so it is not pulled into `enforce()` as a "second adapter."
+
+**Consequences:**
+
+- The caller's `beforeProvision` block collapses to a single `confinement.enforce()`. `prepareRun` owns `confine()` (so `prepareWorkspace`'s reuse still derives a posture without standing up a proxy), and the `withProvisionedSandbox` bracket owns enforce + teardown — its ordering invariant (egress up → … → teardown) is untouched.
+- `EgressHandle` stops carrying `proxyUrl` (vestigial — never read on the production path). `ProvisionOptions.proxyImage` / `proxyEntrypoint` are removed (set by no caller); `PrepareOptions.proxyUrl` relocates to `confine`'s `proxyAddress` input — one resolved address, not a second source of truth.
+- Egress derivation has one call site, so the plan can no longer build a narrower allowlist than the run enforces.
