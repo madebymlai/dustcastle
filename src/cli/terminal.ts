@@ -5,8 +5,8 @@ export type KeyHandler = (key: string) => void;
 export interface Terminal {
   readonly isTTY: boolean;
   readonly rows: number;
-  write(s: string): void;
-  error(s: string): void;
+  write(text: string): void;
+  error(text: string): void;
   onKey(handler: KeyHandler): () => void;
 }
 
@@ -30,12 +30,12 @@ export class ProcessTerminal implements Terminal {
     return this.stdout.rows;
   }
 
-  write(s: string): void {
-    this.stdout.write(s);
+  write(text: string): void {
+    this.stdout.write(text);
   }
 
-  error(s: string): void {
-    this.stderr.write(s);
+  error(text: string): void {
+    this.stderr.write(text);
   }
 
   onKey(handler: KeyHandler): () => void {
@@ -83,12 +83,12 @@ export class InMemoryTerminal implements Terminal {
     return this.errors;
   }
 
-  write(s: string): void {
-    this.writes += s;
+  write(text: string): void {
+    this.writes += text;
   }
 
-  error(s: string): void {
-    this.errors += s;
+  error(text: string): void {
+    this.errors += text;
   }
 
   onKey(handler: KeyHandler): () => void {

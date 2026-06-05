@@ -6,6 +6,12 @@ import { processTerminal, type SelectIo, type Terminal } from "./terminal.js";
 export type ModelLister = () => Map<string, PiModelOption[]>;
 export type EnsureModelOutcome = "proceed" | "cancelled";
 
+const EXIT_SUCCESS = 0;
+const EXIT_FAILURE = 1;
+const EXIT_INTERRUPT = 130;
+const NO_MODELS_MESSAGE =
+  "dustcastle: no pi models found. Run `pi` then `/login` to authenticate, then re-run `dustcastle model`.\n";
+
 /**
  * Interactively choose a pi model (provider → model), mirroring agentstack's
  * picker. Returns the `provider/model` value, or `undefined` when there are no
@@ -45,25 +51,23 @@ export async function runModelCommand(
 ): Promise<number> {
   if (!term.isTTY) {
     term.error("dustcastle: `dustcastle model` needs an interactive terminal to pick a model.\n");
-    return 1;
+    return EXIT_FAILURE;
   }
 
   const byProvider = listModels();
   if (byProvider.size === 0) {
-    term.error(
-      "dustcastle: no pi models found. Run `pi` then `/login` to authenticate, then re-run `dustcastle model`.\n",
-    );
-    return 1;
+    term.error(NO_MODELS_MESSAGE);
+    return EXIT_FAILURE;
   }
 
   const selected = await chooseModel(byProvider, term);
-  if (selected === undefined) return 130;
+  if (selected === undefined) return EXIT_INTERRUPT;
 
-  writeModel(selected, dir !== undefined ? { dir } : {});
+  writeModel(selected, dir === undefined ? undefined : { dir });
   term.error(
     `dustcastle: model set to ${selected} — saved to ~/.dustcastle/config.json (used by every project).\n`,
   );
-  return 0;
+  return EXIT_SUCCESS;
 }
 
 /**
@@ -82,5 +86,5 @@ export async function ensureModel(
   if (!term.isTTY) return "proceed"; // headless no-model semantics are handled by dustcastle-8kv.2
 
   const code = await runModelCommand(term, listModels, dir);
-  return code === 130 ? "cancelled" : "proceed";
+  return code === EXIT_INTERRUPT ? "cancelled" : "proceed";
 }

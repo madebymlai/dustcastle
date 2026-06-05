@@ -1,5 +1,11 @@
 import type { SelectIo } from "./terminal.js";
 
+const KEY_UP = "\x1b[A";
+const KEY_DOWN = "\x1b[B";
+const KEY_ENTER = "\r";
+const KEY_CTRL_C = "\x03";
+const CLEAR_LINE = "\x1b[2K";
+
 /**
  * A minimal single-select TUI (arrow keys + enter), ported from agentstack's
  * `tui.mjs` so dustcastle's model picker reads identically. Renders to stderr-free
@@ -30,7 +36,7 @@ export function singleSelect(
     };
 
     const draw = (firstPaint: boolean): void => {
-      const linePrefix = firstPaint ? "" : "\x1b[2K";
+      const linePrefix = firstPaint ? "" : CLEAR_LINE;
       if (firstPaint) {
         io.write(`\n${prompt}\n\n`);
       } else {
@@ -53,23 +59,30 @@ export function singleSelect(
     clampScroll();
     draw(true);
 
+    const moveCursor = (nextCursor: number): void => {
+      cursor = nextCursor;
+      clampScroll();
+      draw(false);
+    };
+
     let dispose = (): void => undefined;
     dispose = io.onKey((key) => {
-      if (key === "\x1b[A") {
-        cursor = (cursor - 1 + options.length) % options.length;
-        clampScroll();
-        draw(false);
-      } else if (key === "\x1b[B") {
-        cursor = (cursor + 1) % options.length;
-        clampScroll();
-        draw(false);
-      } else if (key === "\r") {
-        dispose();
-        io.write("\n");
-        done(options[cursor]!.value);
-      } else if (key === "\x03") {
-        dispose();
-        done(undefined);
+      switch (key) {
+        case KEY_UP:
+          moveCursor((cursor - 1 + options.length) % options.length);
+          return;
+        case KEY_DOWN:
+          moveCursor((cursor + 1) % options.length);
+          return;
+        case KEY_ENTER:
+          dispose();
+          io.write("\n");
+          done(options[cursor]!.value);
+          return;
+        case KEY_CTRL_C:
+          dispose();
+          done(undefined);
+          return;
       }
     });
   });
