@@ -2,8 +2,6 @@ import { execFileSync, spawn } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect } from "vitest";
-import { confine, egressHosts } from "../../src/sandbox/confine.js";
-import { startEgressProxy, type EgressProxyHandle } from "../../src/sandbox/proxy.js";
 import type { PreparedRun } from "../../src/run/index.js";
 
 /**
@@ -22,29 +20,15 @@ export function commitFixtureTree(dir: string): void {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// The shared ADR 0012 run harness (dustcastle-61j)
+// The shared ADR 0012/0020 run harness.
 //
 // Under ADR 0012 a project's deps are no longer FOD-built into the Store and mounted
 // read-only for an OFFLINE run — the Store holds only the Toolchain, and the deps
-// install IN-SANDBOX via the `sandbox.onSandboxReady` hook (`npm ci` / `uv sync` /
-// `cargo fetch` / `go mod download`), through the standing egress proxy under the
-// `{registry, git, model}` allowlist (ADR 0005/0010/0012). So every run-test now
-// shares one flow: stand up the live proxy, run a podman container with the Store
-// mounted RO + the project writable, install deps in-Sandbox routed at the proxy,
-// then run the project's tests.
-//
-// This is the FUNCTION half of the egress-proxy proof: deps install through the proxy
-// and the tests pass. The ENFORCEMENT half (a malicious dep is BLOCKED off-allowlist
-// via the NET_ADMIN route-strip) stays in egress.test.ts, which keeps its full inline
-// confinement. Here the container reaches the host-side proxy via pasta's host-loopback
-// mapping; we do NOT strip its default route, so this exercises install-through-proxy
-// without re-proving enforcement.
+// install IN-SANDBOX via the `sandbox.onSandboxReady` hook (`npm install` /
+// `cargo fetch` / `go mod download`). Under ADR 0020 dustcastle no longer stands up
+// a filtering proxy; the container uses normal networking while retaining the Store
+// and host-credential Boundary.
 // ────────────────────────────────────────────────────────────────────────────
-
-// The container reaches the host-side proxy at this link-local address (pasta maps
-// the host loopback to it); the port is the proxy's ephemeral host port, so parallel
-// e2e files never collide on a fixed port.
-const PROXY_MAP_ADDR = "169.254.7.7";
 
 // A glibc base image that ships git: the in-Sandbox install's git-exclude step shells
 // `git`, and the Nix Toolchain closure (mounted RO at /nix/store) is glibc, so a musl
@@ -58,9 +42,7 @@ interface ExecResult {
   readonly err: string;
 }
 
-// Async podman spawn so the in-process egress proxy keeps serving while podman runs —
-// a synchronous spawn would freeze this process's event loop and the container could
-// never reach the proxy.
+// Async podman spawn so long-running containers do not block the test process.
 function podmanSpawn(args: string[]): Promise<ExecResult> {
   return new Promise((resolve) => {
     const child = spawn("podman", args);
@@ -93,39 +75,20 @@ export interface SandboxRunSpec {
 }
 
 /**
- * Run a prepared project through the ADR 0012 in-Sandbox install + test flow against
- * the live egress proxy (dustcastle-61j). Starts the real `startEgressProxy` enforcing
- * the prepared plan's standing allowlist, runs the container with the Store mounted RO,
- * executes `plan.setupCommands` (the in-Sandbox install, routed at the proxy), then runs
- * the project's test command — asserting each step green. Tears the container + proxy
- * down whatever the outcome.
+ * Run a prepared project through the ADR 0012 in-Sandbox install + test flow. Runs
+ * the container with the Store mounted RO, executes `plan.setupCommands` (the
+ * in-Sandbox install), then runs the project's test command — asserting each step
+ * green. Tears the container down whatever the outcome.
  */
 export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
   const log = spec.onLine ?? ((line: string) => process.stderr.write(`   | ${line}\n`));
   const cwd = spec.cwd ?? "/work";
   const image = spec.image ?? DEFAULT_BASE_IMAGE;
 
-  // dustcastle's REAL filtering proxy, enforcing exactly the standing allowlist the
-  // plan derived ({registry, git, model}). Ephemeral host port → no cross-file clash.
-  const allowlist = egressHosts(spec.prepared.plan.egress);
-  const proxy: EgressProxyHandle = await startEgressProxy({
-    allowlist,
-    host: "127.0.0.1",
-    port: 0,
-    onDecision: (h, allowed) => log(`proxy ${allowed ? "ALLOW" : "DENY "} ${h}`),
-  });
-  const proxyAddress = `http://${PROXY_MAP_ADDR}:${proxy.port}`;
-
   const storeRoot = spec.prepared.ecosystems[0].provisioned.physStoreRoot;
-  // The plan env carries the Toolchain on PATH + writable cache vars; override the
-  // proxy env to the LIVE ephemeral proxy (the plan baked the production proxy address).
+  // The plan env carries the Toolchain on PATH + writable cache vars.
   const env = {
     ...spec.prepared.plan.podmanOptions.env,
-    ...confine({
-      projectDir: spec.projectDir,
-      packageManagers: spec.prepared.ecosystems.map((e) => e.detection.packageManager),
-      proxyAddress,
-    }).posture.env,
     HOME: "/root",
   };
   const envFlags = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
@@ -139,10 +102,6 @@ export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
       "-d",
       "--name",
       spec.container,
-      // pasta maps the host loopback to PROXY_MAP_ADDR so the container reaches the
-      // host-side proxy the build's tooling is pointed at via HTTPS_PROXY.
-      "--network",
-      `pasta:--map-host-loopback,${PROXY_MAP_ADDR}`,
       "-v",
       `${storeRoot}:/nix/store:ro`,
       "-v",
@@ -154,7 +113,7 @@ export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
     expect(up.code, `podman run failed: ${up.err}`).toBe(0);
 
     // dustcastle's in-Sandbox install (ADR 0012): the git-exclude + the real Package
-    // Manager's frozen/immutable install, routed through the egress proxy.
+    // Manager's resolving install.
     for (const command of spec.prepared.plan.setupCommands) {
       const setup = await exec(command);
       expect(setup.code, `setup '${command}' failed: ${setup.err}`).toBe(0);
@@ -168,7 +127,6 @@ export async function runInSandbox(spec: SandboxRunSpec): Promise<void> {
     expect(test.out).toMatch(spec.test.expect);
   } finally {
     await podmanSpawn(["rm", "-f", spec.container]);
-    await proxy.close();
   }
 }
 
@@ -381,17 +339,3 @@ export function stagePythonLooseProject(root: string): string {
   return projectDir;
 }
 
-// The impure-allow Node fixture (ADR 0004/0005): a real registry dep (is-number)
-// + a local dep with a postinstall, so the lockfile reports hasInstallScript and
-// the build resolves impure. Drives the live egress-enforcement e2e: a real
-// `npm ci` (with scripts) runs in the container, confined to the egress proxy.
-export const NODE_IMPURE_SAMPLE = resolve(process.cwd(), "test/fixtures/node-impure-sample");
-
-/** Stage the impure Node sample under a "sample"-named dir (pname matches the warm Store). */
-export function stageNodeImpureProject(root: string): string {
-  const projectDir = join(root, "sample");
-  mkdirSync(projectDir);
-  cpSync(NODE_IMPURE_SAMPLE, projectDir, { recursive: true });
-  commitFixtureTree(projectDir);
-  return projectDir;
-}

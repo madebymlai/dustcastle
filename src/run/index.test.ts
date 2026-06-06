@@ -7,7 +7,6 @@ import {
   gcProjectKey,
   installHookTimeoutMs,
   populateDepsCache,
-  prepareRun,
   withSetupHooks,
   type GcProjectKeyInput,
 } from "./index.js";
@@ -30,28 +29,6 @@ function gcKeyInput(packageManager: "npm" | "pnpm", toolchainStorePath: string):
     provisioned: { toolchainStorePath },
   };
 }
-
-describe("prepareRun egress confinement", () => {
-  it("derives a confinement posture before provisioning and hands it to the fail-fast hook", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "dustcastle-prepare-confine-"));
-    tmps.push(dir);
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "p", version: "1.0.0" }));
-
-    let httpsProxy: string | undefined;
-    await expect(
-      prepareRun({
-        cwd: dir,
-        proxyAddress: "http://169.254.7.7:18118",
-        beforeProvision: (confinement) => {
-          httpsProxy = confinement.posture.env.HTTPS_PROXY;
-          throw new Error("stop before store");
-        },
-      }),
-    ).rejects.toThrow("stop before store");
-
-    expect(httpsProxy).toBe("http://169.254.7.7:18118");
-  });
-});
 
 describe("gcProjectKey", () => {
   it("keys Store recency by package manager and Toolchain store hash", () => {

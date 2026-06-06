@@ -1,19 +1,9 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME } from "../ecosystems/rust.js";
 import type { Detection } from "../detect/index.js";
 import type { PackageManager } from "../ecosystems/index.js";
 import type { Provisioned } from "../store/index.js";
-import {
-  EGRESS_NETWORK,
-  confine,
-  type Confinement,
-  type EgressDecision,
-  type EgressPosture,
-} from "./confine.js";
-import { planSandbox as rawPlanSandbox, type SandboxPlanSpec } from "./plan.js";
+import { planSandbox } from "./plan.js";
 
 // The integration surface is just sandcastle's `mounts` array (ADR 0002): no
 // fork, no patch. planSandbox turns a provisioned Store into the podman()
@@ -35,47 +25,6 @@ const detection: Detection = {
   packageManager: "go",
   toolchainVersion: "1.26.3",
 };
-
-const noRemoteProjectDir = mkdtempSync(join(tmpdir(), "dustcastle-plan-"));
-
-type LegacyPlanSpec = Omit<SandboxPlanSpec, "confinement"> & {
-  readonly confinement?: Pick<Confinement, "decision" | "posture">;
-  readonly egress?: EgressDecision;
-  readonly proxyAddress?: string;
-};
-
-function planSandbox(spec: LegacyPlanSpec) {
-  const confinement = confinementForPlanSpec(spec);
-  const { egress: _egress, proxyAddress: _proxyAddress, ...rest } = spec;
-  void _egress;
-  void _proxyAddress;
-  return rawPlanSandbox({ ...rest, confinement });
-}
-
-function confinementForPlanSpec(spec: LegacyPlanSpec): Pick<Confinement, "decision" | "posture"> {
-  if (spec.confinement !== undefined) return spec.confinement;
-  if (spec.egress !== undefined) return { decision: spec.egress, posture: postureFor(spec.egress, spec.proxyAddress) };
-  return confine({
-    projectDir: noRemoteProjectDir,
-    packageManagers: spec.ecosystems.map((e) => e.detection.packageManager),
-    ...(spec.proxyAddress !== undefined ? { proxyAddress: spec.proxyAddress } : {}),
-  });
-}
-
-function postureFor(decision: EgressDecision, proxyAddress = "http://dustcastle-egress-proxy:8118"): EgressPosture {
-  if (decision.kind === "none") return { network: "none", env: {} };
-  return {
-    network: EGRESS_NETWORK,
-    env: {
-      HTTP_PROXY: proxyAddress,
-      HTTPS_PROXY: proxyAddress,
-      http_proxy: proxyAddress,
-      https_proxy: proxyAddress,
-      npm_config_proxy: proxyAddress,
-      npm_config_https_proxy: proxyAddress,
-    },
-  };
-}
 
 describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
   it("bind-mounts the physical Store read-only at the canonical /nix/store", () => {
@@ -101,30 +50,24 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
     expect(env.GOFLAGS).not.toBe("-mod=vendor");
   });
 
-  it("opens the standing egress network for a detected Ecosystem (ADR 0012)", () => {
-    // Egress is a standing allowlist that no longer branches on purity — every
-    // detected manager opens its registry (the install runs in-Sandbox). A go repo
-    // gets the module proxy, so the plan attaches the egress network, not `none`.
-    expect(planSandbox({ ecosystems: [{ provisioned, detection }] }).podmanOptions.network).not.toBe("none");
+  it("leaves sandbox networking open/default for a detected Ecosystem (ADR 0020)", () => {
+    // dustcastle manages Toolchains and Project Deps; it no longer installs a
+    // custom network or proxy posture. Omitting `network` lets sandcastle's
+    // podman provider use normal container networking.
+    expect(planSandbox({ ecosystems: [{ provisioned, detection }] }).podmanOptions.network).toBeUndefined();
   });
 
   it("installs Project Deps in-Sandbox (no staging from a deps Store path)", () => {
     // `go test` reads its modules; always-impure fetches them in-Sandbox via the
-    // standing egress, never `cp -RL` from the Store.
+    // in-Sandbox install, never `cp -RL` from the Store.
     const setup = planSandbox({ ecosystems: [{ provisioned, detection }] }).setupCommands.join("\n");
 
     expect(setup).not.toContain("cp -RL");
     expect(setup).toContain("go mod download");
   });
 
-  it("surfaces the egress decision on the plan — never silent (ADR 0005)", () => {
-    // The standing allowlist for a go repo: the Go module proxy (ADR 0012). go.sum is
-    // committed, so the checksum DB is verified locally and never on the allowlist.
-    expect(planSandbox({ ecosystems: [{ provisioned, detection }] }).egress).toEqual({
-      kind: "allowlist",
-      buildHosts: ["proxy.golang.org"],
-      agentHosts: [],
-    });
+  it("does not surface an egress decision on the plan (ADR 0020)", () => {
+    expect(planSandbox({ ecosystems: [{ provisioned, detection }] })).not.toHaveProperty("egress");
   });
 });
 
@@ -150,15 +93,13 @@ const rustProvisioned: Provisioned = {
 const rustDetection: Detection = { ecosystem: "rust", packageManager: "cargo" };
 
 describe("planSandbox — Rust path (dustcastle-gy5.2)", () => {
-  it("fetches cargo deps in-Sandbox while the standing allowlist opens the crates index", () => {
+  it("fetches cargo deps in-Sandbox over normal container networking", () => {
     const plan = planSandbox({ ecosystems: [{ provisioned: rustProvisioned, detection: rustDetection }] });
     const setup = plan.setupCommands.join("\n");
     const env = plan.podmanOptions.env ?? {};
 
-    // Always-impure (ADR 0012): a cargo repo's standing allowlist opens the crates
-    // index, and deps fetch in-Sandbox (cargo's offline mode is off).
-    expect(plan.podmanOptions.network).not.toBe("none");
-    expect(plan.egress).toEqual({ kind: "allowlist", buildHosts: ["index.crates.io", "static.crates.io"], agentHosts: [] });
+    expect(plan.podmanOptions.network).toBeUndefined();
+    expect(plan).not.toHaveProperty("egress");
     expect(setup).not.toContain("cp -RL");
     expect(setup).toContain("cargo fetch");
     expect(env.PATH).toContain(`${rustProvisioned.toolchainStorePath}/bin`);
@@ -186,14 +127,12 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
     expect(path.indexOf(`${nodeProvisioned.toolchainStorePath}/bin`)).toBeLessThan(path.indexOf("/usr/local/bin"));
   });
 
-  it("installs node_modules in-Sandbox via the detected manager (npm install), under the standing allowlist", () => {
+  it("installs node_modules in-Sandbox via the detected manager (npm install), with normal networking", () => {
     const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] });
     const setup = plan.setupCommands.join("\n");
 
-    // Egress no longer branches on purity (ADR 0012): a node repo's standing
-    // allowlist opens the npm registry, and the container runs `npm install` in-Sandbox.
-    expect(plan.podmanOptions.network).not.toBe("none");
-    expect(plan.egress).toEqual({ kind: "allowlist", buildHosts: ["registry.npmjs.org"], agentHosts: [] });
+    expect(plan.podmanOptions.network).toBeUndefined();
+    expect(plan).not.toHaveProperty("egress");
     // The install runs in-Sandbox; nothing is staged from the Store.
     expect(setup).toContain("npm install");
     expect(setup).not.toContain("cp -RL");
@@ -211,31 +150,13 @@ describe("planSandbox — Node always-impure path (ADR 0012)", () => {
     expect(cmd("yarn")).not.toContain("--frozen-lockfile");
   });
 
-  it("points the container's tooling at the egress proxy (production proxy by default)", () => {
+  it("does not point the container's tooling at a dustcastle egress proxy", () => {
     const env = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }] }).podmanOptions.env ?? {};
 
-    // npm (and any HTTP tooling) is routed through the proxy, which enforces the
-    // allowlist; the default targets the production proxy container by name.
-    expect(env.HTTPS_PROXY).toBe("http://dustcastle-egress-proxy:8118");
-    expect(env.npm_config_proxy).toBe("http://dustcastle-egress-proxy:8118");
-  });
-
-  it("lets the orchestration layer override the proxy address through confine() (the e2e's host proxy)", () => {
-    const env = planSandbox({
-      ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }],
-      proxyAddress: "http://169.254.7.7:8118",
-    }).podmanOptions.env ?? {};
-
-    expect(env.HTTPS_PROXY).toBe("http://169.254.7.7:8118");
-  });
-
-  it("never sets proxy env on a closed-egress build (no proxy without an allowlist)", () => {
-    // Standing egress means a detected Ecosystem always opens an allowlist, so the
-    // closed case is forced explicitly here — the runtime invariant still holds: a
-    // `none` decision gets no proxy env and no network at all.
-    const env = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }], egress: { kind: "none" } })
-      .podmanOptions.env ?? {};
+    expect(env.HTTP_PROXY).toBeUndefined();
     expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.npm_config_proxy).toBeUndefined();
+    expect(env.npm_config_https_proxy).toBeUndefined();
   });
 });
 
@@ -341,11 +262,11 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
     ]);
   });
 
-  it("opens scoped egress and points PYTHONPATH at the installed site", () => {
+  it("uses normal networking and points PYTHONPATH at the installed site", () => {
     const plan = planSandbox({
       ecosystems: [{ provisioned: pythonProvisioned, detection: { ecosystem: "python", packageManager: "uv" } }],
     });
-    expect(plan.podmanOptions.network).not.toBe("none");
+    expect(plan.podmanOptions.network).toBeUndefined();
     expect((plan.podmanOptions.env ?? {}).PYTHONPATH).toBe("site");
   });
 });
@@ -538,24 +459,3 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0016)", () => {
   });
 });
 
-describe("planSandbox — pure build with Agent Egress (ADR 0010 carve-out)", () => {
-  // A build whose agent needs its LLM but no Ecosystem registry: the allowlist
-  // carries ONLY the model host (agentHosts), buildHosts empty.
-  const agentEgress = {
-    kind: "allowlist",
-    buildHosts: [],
-    agentHosts: ["api.deepseek.com"],
-  } as const;
-
-  it("attaches the egress network and routes the agent through the proxy", () => {
-    const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }], egress: agentEgress });
-    expect(plan.podmanOptions.network).not.toBe("none");
-    expect(plan.podmanOptions.network).toBeDefined();
-    expect((plan.podmanOptions.env ?? {}).HTTPS_PROXY).toBe("http://dustcastle-egress-proxy:8118");
-  });
-
-  it("surfaces the agent-only allowlist on the plan", () => {
-    const plan = planSandbox({ ecosystems: [{ provisioned: nodeProvisioned, detection: nodeDetection }], egress: agentEgress });
-    expect(plan.egress).toEqual(agentEgress);
-  });
-});

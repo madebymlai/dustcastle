@@ -8,8 +8,8 @@ import type { EcosystemDescriptor, PackageManager, PackageManagerDescriptor } fr
 /**
  * The Node Ecosystem descriptors (ADR 0006/0012). One Ecosystem, four Package
  * Managers (npm/pnpm/yarn/bun). Each manager's descriptor encodes — in one place —
- * its Toolchain expression, lockfile(s), in-Sandbox install command, and registry
- * host. Every manager installs impurely in-Sandbox; bun has no gate any more.
+ * its Toolchain expression, lockfile(s), and in-Sandbox install command. Every
+ * manager installs impurely in-Sandbox; bun has no gate any more.
  */
 
 const npm: PackageManagerDescriptor = {
@@ -22,11 +22,8 @@ const npm: PackageManagerDescriptor = {
   // is committed — it installs from a satisfying package-lock.json when present, and
   // resolves when absent (a loose repo). We do NOT use `npm ci`: it hard-fails without
   // a lockfile, which is exactly the common loose case. Reproducibility is out of scope
-  // (ADR 0012), so the resolving install is the single path. postinstall runs under the
-  // standing egress either way.
+  // (ADR 0012), so the resolving install is the single path.
   installCommand: ["npm install"],
-  // Build Egress (ADR 0012): the registry `npm install` fetches from.
-  registryHosts: ["registry.npmjs.org"],
 };
 
 const pnpm: PackageManagerDescriptor = {
@@ -39,8 +36,6 @@ const pnpm: PackageManagerDescriptor = {
   // committed pnpm-lock.yaml — no `--frozen-lockfile`, which errors when the lock is
   // absent/outdated (the loose case must still install).
   installCommand: ["pnpm install"],
-  // Build Egress (ADR 0012): pnpm fetches from the npm registry too.
-  registryHosts: ["registry.npmjs.org"],
 };
 
 const yarn: PackageManagerDescriptor = {
@@ -53,8 +48,6 @@ const yarn: PackageManagerDescriptor = {
   // committed yarn.lock — no `--frozen-lockfile`, which errors when the lock is
   // absent/outdated (the loose case must still install).
   installCommand: ["yarn install"],
-  // Build Egress (ADR 0012): yarn classic's own registry.
-  registryHosts: ["registry.yarnpkg.com"],
 };
 
 const bun: PackageManagerDescriptor = {
@@ -69,8 +62,6 @@ const bun: PackageManagerDescriptor = {
   // every other manager — no gate, because there is no FOD importer to be missing any
   // more (the real install runs in-Sandbox).
   installCommand: ["bun install"],
-  // Build Egress (ADR 0012): bun uses the npm registry.
-  registryHosts: ["registry.npmjs.org"],
 };
 
 // Keyed by Package Manager name for the Registry's compile-time exhaustiveness

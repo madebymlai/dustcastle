@@ -16,13 +16,6 @@ const go: PackageManagerDescriptor = {
   ecosystem: "go",
   lockfiles: ["go.sum", "go.mod"],
   generateToolchain: generateGoToolchain,
-  // The Go module proxy — the standing Build Egress for a go repo (ADR 0012). ONE host:
-  // `go mod download` fetches modules from proxy.golang.org and verifies them against the
-  // COMMITTED go.sum locally, so the checksum DB (sum.golang.org) is never contacted on
-  // the frozen-lockfile path — proven by the e2e proxy log (only proxy.golang.org is hit).
-  // registryHosts is required + non-empty on every descriptor now that egress no longer
-  // branches on purity.
-  registryHosts: ["proxy.golang.org"],
   // The in-Sandbox install (ADR 0012 always-impure): `go mod download` fetches the
   // committed modules from the module proxy into GOMODCACHE, so `go test` runs
   // against real deps. Every detected Ecosystem installs in-Sandbox now, so go

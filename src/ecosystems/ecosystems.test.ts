@@ -8,10 +8,10 @@ import {
 } from "./index.js";
 
 // The Ecosystem Registry (ADR 0001: internal curation, NOT a plugin system) is
-// the single, closed set of descriptors the detect/store/sandbox/egress sites
-// derive from. These tests are a parametrized round-trip over EVERY descriptor:
-// they pin the exact strings, Toolchain expression, install commands, and registry
-// hosts that the dispatch sites encode (ADR 0012: the Store realizes only the
+// the single, closed set of descriptors the detect/store/sandbox sites derive
+// from. These tests are a parametrized round-trip over EVERY descriptor: they pin
+// the exact strings, Toolchain expression, and install commands that the dispatch
+// sites encode (ADR 0012: the Store realizes only the
 // Toolchain; Project Deps install in-Sandbox via the install command). The impurity
 // machinery (impuritySignal, the bun provisionGate, the impuritySignal↔installCommand
 // biconditional) is gone — every manager installs impurely (ADR 0012), so there is
@@ -139,38 +139,6 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
     it("go fetches its modules in-Sandbox, cargo fetches its crates", () => {
       expect(packageManagerDescriptor("go").installCommand).toEqual(["go mod download"]);
       expect(packageManagerDescriptor("cargo").installCommand).toEqual(["cargo fetch"]);
-    });
-
-    // Standing egress (ADR 0012): egress no longer branches on purity, so EVERY
-    // detected manager contributes its registry. `registryHosts` is therefore REQUIRED
-    // and NON-EMPTY on every descriptor (go/cargo included) — proven at `tsc`, not by a
-    // runtime biconditional — so a polyglot repo opens every registry and egress.ts never
-    // silently reaches no host (architecture review candidate 1).
-    it.each([...PACKAGE_MANAGERS])("%s carries a non-empty registryHosts list", (pm) => {
-      expect(packageManagerDescriptor(pm).registryHosts.length).toBeGreaterThan(0);
-    });
-
-    // The list names EVERY host the manager's install reaches — index AND
-    // artifact/checksum — because the egress proxy is strict exact-match: a missing
-    // artifact host 403s real downloads even though the index resolves (dustcastle-61j).
-    it("the node managers name their registry (tarballs served from it)", () => {
-      expect(packageManagerDescriptor("npm").registryHosts).toEqual(["registry.npmjs.org"]);
-      expect(packageManagerDescriptor("pnpm").registryHosts).toEqual(["registry.npmjs.org"]);
-      expect(packageManagerDescriptor("bun").registryHosts).toEqual(["registry.npmjs.org"]);
-      expect(packageManagerDescriptor("yarn").registryHosts).toEqual(["registry.yarnpkg.com"]);
-    });
-
-    it("the python managers name pypi AND the wheel CDN files.pythonhosted.org", () => {
-      for (const pm of ["pip", "uv", "poetry"] as const) {
-        expect(packageManagerDescriptor(pm).registryHosts).toEqual(["pypi.org", "files.pythonhosted.org"]);
-      }
-    });
-
-    it("go names the module proxy (go.sum verifies locally); cargo the index + crate downloads", () => {
-      // go.sum is committed, so `go mod download` verifies hashes locally and never
-      // contacts the checksum DB — proven by the e2e proxy log (only proxy.golang.org).
-      expect(packageManagerDescriptor("go").registryHosts).toEqual(["proxy.golang.org"]);
-      expect(packageManagerDescriptor("cargo").registryHosts).toEqual(["index.crates.io", "static.crates.io"]);
     });
 
     describe("node managers install with ONE resolving command (lockfile-or-not, no frozen flag)", () => {

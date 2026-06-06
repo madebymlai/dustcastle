@@ -2,7 +2,6 @@ import * as sandcastle from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { detect, type Detection } from "../detect/index.js";
 import { detectWorkspace } from "../detect/workspace.js";
-import { confine, type Confinement, type EgressHandle } from "../sandbox/confine.js";
 import { planSandbox, type EcosystemPlan, type EcosystemPlans, type SandboxPlan } from "../sandbox/plan.js";
 import { AGENT_SPEC, ensureImage } from "../sandbox/image.js";
 import { provisionStore } from "../store/index.js";
@@ -19,7 +18,7 @@ import {
 } from "../store/depscache/index.js";
 import { spawnAutoGc } from "../cli/autogc.js";
 import { noopLogger, type Logger } from "../log/index.js";
-import { agentAuthMounts, configuredAgentModelHosts, DUSTCASTLE_HOME } from "../config/global.js";
+import { agentAuthMounts, DUSTCASTLE_HOME } from "../config/global.js";
 import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
 
 export { gcProjectKey, storeClosures, type GcProjectKeyInput } from "./storeClosures.js";
@@ -34,33 +33,11 @@ export interface PrepareOptions {
   /** Structured logs for provisioning subsystems. */
   readonly logger?: Logger;
   /**
-   * Override the address the in-Sandbox tooling uses to reach the egress proxy
-   * (ADR 0005). Defaults to the production proxy container on the internal egress
-   * net; the gated route-strip e2e injects a host-side proxy address.
-   */
-  readonly proxyAddress?: string;
-  /**
-   * The agent's model-provider API host(s) to allowlist for Agent Egress (ADR
-   * 0010), so the in-sandbox agent reaches its LLM even on a pure, offline build.
-   * Resolved from the configured model by the entry points (CLI /
-   * withProvisionedSandbox); left undefined here so prepareRun stays pure and
-   * test-injectable. Undefined ⇒ no agent egress ⇒ a pure build stays closed.
-   */
-  readonly agentModelHosts?: readonly string[];
-  /**
    * Override the deps-cache root (ADR 0016). Tests/e2e inject a scratch dir;
    * production defaults to `~/.dustcastle/deps-cache`. The assembled Project Deps
    * are cached here, one entry per ecosystem keyed by its deps fingerprint.
    */
   readonly depsCacheDir?: string;
-  /**
-   * Stand up the egress backend the moment the egress decision is known — BEFORE
-   * the expensive Store provision (ADR 0005/0010). The bracket caller
-   * ({@link withProvisionedSandbox}) injects this to fail fast: a host that can't
-   * enforce scoped egress aborts here, not after minutes of build work. dustcastle
-   * has no unconfined fallback by design, so if this throws, the run throws.
-   */
-  readonly beforeProvision?: (confinement: Confinement) => void | Promise<void>;
 }
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
@@ -94,29 +71,13 @@ async function mapNonEmptySequential<T, U>(
  * The dustcastle contribution to `dustcastle run`: detect EVERY Ecosystem in the
  * directory (ADR 0006/0012 — a polyglot repo surfaces more than one), realize each
  * one's Toolchain into the shared Store (ADR 0008), and plan the Sandbox that mounts
- * the Store read-only with the standing egress (ADR 0002/0005/0012). Deps install
+ * the Store read-only with normal sandbox networking (ADR 0002/0020). Deps install
  * in-Sandbox via the sandcastle hook — there is no pure-vs-impure decision. Everything
  * here is dustcastle's own work — before sandcastle's flow begins.
  */
 export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
   const detections = detect(opts.cwd);
   assertNonEmpty(detections, `no supported ecosystem detected in ${opts.cwd}`);
-
-  // Derive the standing confinement (ADR 0005/0010/0012) BEFORE provisioning — it
-  // needs only detection, not the realized Store — so the enforcing proxy can be
-  // stood up (and fail fast) ahead of the expensive build via `beforeProvision`.
-  const confinement = confine({
-    projectDir: opts.cwd,
-    packageManagers: detections.map((d) => d.packageManager),
-    // Agent Egress (ADR 0010): the model host(s) carve a route for the agent's own
-    // LLM calls alongside the build's standing registry/git egress.
-    ...(opts.agentModelHosts !== undefined ? { agentModelHosts: opts.agentModelHosts } : {}),
-    ...(opts.proxyAddress !== undefined ? { proxyAddress: opts.proxyAddress } : {}),
-  });
-
-  // Fail fast: stand up the egress proxy now. If this host can't enforce scoped
-  // egress, abort BEFORE provisioning (no unconfined fallback — ADR 0005/0010).
-  await opts.beforeProvision?.(confinement);
 
   // The deps-cache root (ADR 0016): the host-owned cache, one entry per ecosystem
   // keyed by its deps fingerprint.
@@ -148,7 +109,6 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
     plan: planSandbox({
       ecosystems,
       cacheDir,
-      confinement,
     }),
   };
 }
@@ -192,19 +152,17 @@ export async function prepareWorkspace(opts: PrepareOptions): Promise<PreparedWo
 export type SandcastleHandoff = Omit<Parameters<typeof sandcastle.run>[0], "sandbox">;
 
 /**
- * Everything `withProvisionedSandbox` needs to provision the Store, stand up the
- * egress backend, and pin the GC roots — i.e. a run minus the agent handoff.
+ * Everything `withProvisionedSandbox` needs to provision the Store and pin the GC
+ * roots — i.e. a run minus the agent handoff.
  */
 export type ProvisionStorePoolOptions = Pick<StorePoolOptions, "closures" | "logger">;
 export type StorePoolFactory = (opts: ProvisionStorePoolOptions) => Pool;
 
 export interface ProvisionOptions extends PrepareOptions {
   /**
-   * Called once after the Store is provisioned and the egress backend is up — the
-   * single point where the CLI prints its "provisioned …" posture banner. Routing
-   * the banner through here (rather than a standalone pre-run `prepareRun`) keeps
-   * the run to ONE provision and preserves fail-fast: if egress can't be enforced,
-   * the run aborts before provisioning and this never fires.
+   * Called once after the Store is provisioned — the single point where the CLI
+   * prints its "provisioned …" posture banner. Routing the banner through here
+   * (rather than a standalone pre-run `prepareRun`) keeps the run to ONE provision.
    */
   readonly onPrepared?: (prepared: PreparedRun) => void;
   /**
@@ -236,10 +194,10 @@ export async function run(
   });
 }
 
-/** A provisioned, confined sandbox seam shared by single-run and orchestration. */
+/** A provisioned sandbox seam shared by single-run and orchestration. */
 export interface ProvisionedSandbox {
   readonly prepared: PreparedRun;
-  /** The podman provider: Store mounted read-only, pi login mounted, egress applied. */
+  /** The podman provider: Store mounted read-only and pi login mounted. */
   readonly provider: ReturnType<typeof podman>;
   /** Prepend dustcastle's deps-staging hooks ahead of the caller's onSandboxReady. */
   withSetupHooks(
@@ -261,27 +219,18 @@ function defaultStorePool(opts: ProvisionStorePoolOptions): Pool {
 }
 
 /**
- * Provision from the shared Store, stand up the egress backend the plan routes
- * through, and pin the closure with scoped GC roots — then run `body` with the
- * Store-mounted podman provider, releasing the roots and tearing the egress down
- * whatever the outcome (ADR 0002/0005/0007). The single confinement bracket both
- * `run` (one agent) and `orchestrate` (the multi-phase loop) share, so the
- * egress/GC-root invariants live in exactly one place.
+ * Provision from the shared Store and pin the closure with scoped GC roots — then
+ * run `body` with the Store-mounted podman provider, releasing the roots whatever
+ * the outcome (ADR 0002/0007). The single provisioning bracket both `run` (one
+ * agent) and `orchestrate` (the multi-phase loop) share, so the GC-root invariant
+ * lives in exactly one place.
  */
 export async function withProvisionedSandbox<T>(
   opts: ProvisionOptions,
   body: (sandbox: ProvisionedSandbox) => Promise<T>,
 ): Promise<T> {
-  // Resolve Agent Egress (ADR 0010): the configured model's API host, so the plan
-  // opens a route for the in-sandbox agent's LLM even on a pure build. An explicit
-  // opt wins (tests); otherwise read it from the global config (throws actionably
-  // on an unknown provider, before any sandbox is stood up).
-  const agentModelHosts = opts.agentModelHosts ?? configuredAgentModelHosts();
-
-  // The egress backend and the Store pool, captured as the run sets them up so
-  // the single finally tears down whatever was established — even if provisioning or
-  // the body throws after egress came up.
-  let egress: EgressHandle = { teardown: () => {} };
+  // The Store pool, captured as the run sets it up so the single finally tears down
+  // whatever was established — even if provisioning or the body throws.
   let pool: Pool | undefined;
   const storePinnedKeys: string[] = [];
   // The deps-cache pool + the keys this run pins in it (ADR 0012). A live run pins
@@ -291,7 +240,6 @@ export async function withProvisionedSandbox<T>(
   const gcLogger = subsystemLogger(opts.logger, "gc");
   const storeLogger = subsystemLogger(opts.logger, "store");
   const depsLogger = subsystemLogger(opts.logger, "deps-cache");
-  const egressLogger = subsystemLogger(opts.logger, "egress");
   const sandboxLogger = subsystemLogger(opts.logger, "sandbox");
   const cachePool = depsCachePool({ cacheDir, logger: depsLogger });
   const cachePinnedKeys: string[] = [];
@@ -301,19 +249,11 @@ export async function withProvisionedSandbox<T>(
       ...opts,
       logger: storeLogger,
       depsCacheDir: cacheDir,
-      ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
-      // Stand up the production egress backend the moment the decision is known —
-      // BEFORE the Store provision (ADR 0005/0010). A host that can't enforce scoped
-      // egress fails fast here, before any build work; dustcastle has no unconfined
-      // fallback. Torn down in the finally whatever the outcome.
-      beforeProvision: async (confinement) => {
-        egress = await confinement.enforce({ logger: egressLogger });
-      },
     });
 
-    // Surface the provisioned posture now — after egress is up and the Store is
-    // realized, the single banner point (the CLI prints here instead of a separate
-    // pre-run prepareRun, so the run provisions exactly once and stays fail-fast).
+    // Surface the provisioned posture now — after the Store is realized, the single
+    // banner point (the CLI prints here instead of a separate pre-run prepareRun, so
+    // the run provisions exactly once).
     opts.onPrepared?.(prepared);
 
     // Route the Store's pin/warm/release through the one Pool seam (ADR 0012/0015),
@@ -390,7 +330,6 @@ export async function withProvisionedSandbox<T>(
   } finally {
     for (const key of storePinnedKeys) pool?.release(key); // drop scoped Store roots — closures become collectable
     for (const key of cachePinnedKeys) cachePool.release(key); // unpin deps-cache entries
-    egress.teardown();
     // Fire the detached auto-GC one-shot (ADR 0007), off the hot path. It runs
     // AFTER the scoped roots are released, so the just-finished closure is
     // collectable only if it falls outside the warm byte budget. Best-effort —

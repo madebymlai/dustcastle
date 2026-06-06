@@ -5,11 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   agentAuthMounts,
   buildPiAgent,
-  configuredAgentModelHosts,
   globalConfigPath,
   loadHandoff,
   loadModelSelection,
-  modelProviderHosts,
   writeModel,
 } from "./global.js";
 
@@ -121,50 +119,3 @@ describe("loadHandoff (model + task → SandcastleHandoff)", () => {
   });
 });
 
-// Agent Egress host resolution (ADR 0010): map pi's `provider/model` to the model
-// provider's API host(s), so the in-sandbox agent's LLM endpoint can be allowlisted.
-// The map (provider-hosts.ts) is hand-maintained; an unknown provider throws
-// actionably (never silent). A provider may resolve to several hosts.
-describe("modelProviderHosts (provider → API host[])", () => {
-  it("resolves a known single-host provider", () => {
-    expect(modelProviderHosts("deepseek/deepseek-v4-flash")).toEqual(["api.deepseek.com"]);
-    expect(modelProviderHosts("anthropic/claude")).toEqual(["api.anthropic.com"]);
-    expect(modelProviderHosts("openai/gpt")).toEqual(["api.openai.com"]);
-  });
-
-  it("resolves a multi-host provider to all its hosts", () => {
-    // openai-codex serves inference + refreshes its OAuth token on a second host.
-    expect(modelProviderHosts("openai-codex/gpt-5.4")).toEqual(["chatgpt.com", "auth.openai.com"]);
-  });
-
-  it("reads the provider from the first segment even when the model id contains slashes", () => {
-    // huggingface model ids look like `huggingface/org/model`.
-    expect(modelProviderHosts("huggingface/deepseek-ai/DeepSeek-R1-0528")).toEqual(["router.huggingface.co"]);
-  });
-
-  it("throws an actionable error naming an unmapped provider", () => {
-    expect(() => modelProviderHosts("acme/super-model")).toThrow(/no known API host for provider 'acme'/);
-  });
-
-  it("throws on a malformed selector with no provider", () => {
-    expect(() => modelProviderHosts("/just-a-model")).toThrow(/malformed model selector/);
-  });
-});
-
-describe("configuredAgentModelHosts (the configured model's host[])", () => {
-  it("returns undefined when no model is set (no agent ⇒ pure stays closed)", () => {
-    expect(configuredAgentModelHosts(home())).toBeUndefined();
-  });
-
-  it("resolves the host(s) for a configured known model", () => {
-    const dir = home();
-    writeModel("deepseek/deepseek-v4-flash", { dir });
-    expect(configuredAgentModelHosts(dir)).toEqual(["api.deepseek.com"]);
-  });
-
-  it("throws for a configured model whose provider is unmapped", () => {
-    const dir = home();
-    cfg(dir, { model: "acme/super-model" });
-    expect(() => configuredAgentModelHosts(dir)).toThrow(/no known API host for provider 'acme'/);
-  });
-});

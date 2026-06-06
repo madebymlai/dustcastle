@@ -1,5 +1,7 @@
 # Sandbox access: default-deny on secrets, scoped egress
 
+>Status: partially superseded. Decision 2 (scoped network egress) is superseded by [ADR 0020](0020-remove-scoped-egress.md): dustcastle is a toolchain/deps manager, not a containment sandbox. The container Boundary and default-deny host credentials remain.
+
 An autonomous agent — and any third-party code it runs (a build, a test, an impure `postinstall`) — executes inside the Sandbox. The container Boundary ([ADR 0003](0003-container-boundary-for-v1.md)) stops the agent damaging the *host*, but "safe to point at my work repos" is decided by **what the Sandbox can reach**. We make that **default-deny**.
 
 This ADR is what makes the `allow`-by-default impurity policy ([ADR 0004](0004-project-deps-pure-default-explicit-impurity.md)) safe: lax-on-purity is acceptable *because* we are strict-on-access.
@@ -8,7 +10,7 @@ This ADR is what makes the `allow`-by-default impurity policy ([ADR 0004](0004-p
 
 1. **No host credentials by default.** The Sandbox does **not** inherit host secrets — `~/.ssh`, cloud credentials, `.npmrc`/registry tokens, or the host's ambient environment variables. Secrets are injected only when **explicitly declared**, scoped to what a build/test needs, and ideally short-lived. Default-deny, opt-in per secret. **The explicit channel is the environment / an external secret-store reference — never a dustcastle config file** (dustcastle is config-less; you'd never commit a token to a repo file anyway). Secret *injection* is the one irreducibly-explicit input, but "explicit" means env/secret-store, consistent with the no-configs interface.
 
-2. **Scoped network egress.** Egress is **not** unrestricted internet by default. At minimum it is *known*; the target is an **allowlist** (package registries + the git host the project needs). This matters most precisely because impure `allow` mode runs untrusted `postinstall` code *with* network — an allowlist turns "a compromised dep can exfiltrate anywhere" into "it can reach the registries it was going to anyway." **The allowlist is *derived from ecosystem detection*, not declared** ([ADR 0006](0006-ecosystem-detection-owned-lockfile-router.md)): detecting npm/pip/cargo already names the registry (registry.npmjs.org / pypi.org / crates.io), and the git remote is read from the repo — so the common case needs no configuration at all.
+2. **Scoped network egress.** Superseded by [ADR 0020](0020-remove-scoped-egress.md): the Sandbox now uses normal network access; dustcastle does not derive or enforce an allowlist.
 
 3. **The worktree is the writable blast radius.** The agent writes only the mounted worktree; the Store is read-only; the rest of the host is untouched. Branch strategy governs whether changes reach a real branch.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { configuredAgentModelHosts, DUSTCASTLE_HOME, loadModelSelection } from "../config/global.js";
+import { DUSTCASTLE_HOME, loadModelSelection } from "../config/global.js";
 import { createLogger } from "../log/pino.js";
 import { logPosture, logSweep } from "./posture.js";
 import { EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
@@ -74,20 +74,14 @@ async function main(argv: string[]): Promise<number> {
 
   // dustcastle's half: detect → realize the Store → plan the Sandbox. Surface
   // the active runtime mode (ADR 0008 — never silent) and what was provisioned.
-  // Resolve Agent Egress (ADR 0010) up front: the configured model's API host(s),
-  // so an unknown provider throws here — before anything is provisioned. Undefined
-  // ⇒ no model ⇒ no agent egress.
-  const agentModelHosts = configuredAgentModelHosts();
   const selection = loadModelSelection();
 
-  // No agent model: nothing runs in the Sandbox, so there's no egress to confine.
-  // Provision the Store, print the posture, and stop — the user picks a model and
-  // re-runs. (ADR 0010: agent egress only matters when an agent will actually run.)
+  // No agent model: nothing runs in the Sandbox. Provision the Store, print the
+  // posture, and stop — the user picks a model and re-runs.
   if (selection === undefined) {
     const prepared = await prepareRun({
       cwd,
       logger: rootLogger.child({ mod: "store" }),
-      ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
     });
     logPosture(rootLogger, prepared, {
       note: "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
@@ -97,13 +91,11 @@ async function main(argv: string[]): Promise<number> {
 
   // A model is set: drive the parallel-planner-with-review loop (plan → execute+
   // review → merge) over the repo's beads issues. orchestrate provisions exactly
-  // ONCE and stands the egress backend up BEFORE provisioning — so a host that
-  // can't enforce scoped egress fails fast, before any build work. The posture
-  // banner prints from inside that flow (onPrepared), never a pre-run provision.
+  // ONCE. The posture banner prints from inside that flow (onPrepared), never a
+  // pre-run provision.
   await orchestrate({
     cwd,
     logger: rootLogger.child({ mod: "orchestrate" }),
-    ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
     onPrepared: (prepared) => {
       logPosture(rootLogger, prepared, {
         agent: { runner: "pi", model: selection.model, mount: "~/.pi/agent" },

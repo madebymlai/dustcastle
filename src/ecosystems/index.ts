@@ -19,8 +19,8 @@ export type {
 
 /**
  * The Ecosystem Registry (ADR 0001 — internal curation, NOT a plugin system; the
- * single, closed, vetted set of descriptors the detect/store/sandbox/egress
- * sites derive from). Adding an Ecosystem is dustcastle's deep, local change — the
+ * single, closed, vetted set of descriptors the detect/store/sandbox sites derive
+ * from). Adding an Ecosystem is dustcastle's deep, local change — the
  * user never configures one. There are no gated managers: every Package Manager
  * installs impurely in-Sandbox (ADR 0012), so the old bun gate is gone.
  *
@@ -42,8 +42,8 @@ export const ECOSYSTEMS: readonly EcosystemDescriptor[] = [
  * the compile-time proof: every member of the closed {@link PackageManager} union
  * must have a descriptor here, or this assignment fails at `tsc`. A half-added
  * Ecosystem — a manager in the union with no descriptor — can no longer compile and
- * fail at provision time; the dispatch sites (store/sandbox/egress) derive from this
- * and are exhaustive without a runtime `default:` guard.
+ * fail at provision time; the dispatch sites (store/sandbox) derive from this and are
+ * exhaustive without a runtime `default:` guard.
  */
 const BY_PACKAGE_MANAGER: Record<PackageManager, PackageManagerDescriptor> = {
   ...GO_MANAGERS,

@@ -48,9 +48,6 @@ const pip: PackageManagerDescriptor = {
   // The in-Sandbox install (ADR 0012). pip consumes requirements.txt directly (no
   // export step), so it is JUST the shared pip-into-site install.
   installCommand: [PIP_INSTALL_INTO_SITE],
-  // Build Egress (ADR 0012): the shared pip-into-site install reads the index from
-  // pypi.org and downloads wheels from files.pythonhosted.org — both must be open.
-  registryHosts: ["pypi.org", "files.pythonhosted.org"],
 };
 
 /**
@@ -69,9 +66,6 @@ const uv: PackageManagerDescriptor = {
   // The in-Sandbox install (ADR 0012): run uv's OWN export to produce the hash-pinned
   // requirements, then install them into ./site.
   installCommand: [UV_EXPORT, PIP_INSTALL_INTO_SITE],
-  // Build Egress (ADR 0012): uv's install runs `pip install` into ./site, which reads
-  // the index from pypi.org and downloads wheels from files.pythonhosted.org.
-  registryHosts: ["pypi.org", "files.pythonhosted.org"],
 };
 
 /**
@@ -92,9 +86,6 @@ const poetry: PackageManagerDescriptor = {
   // The in-Sandbox install (ADR 0012): run poetry's OWN export to produce the
   // hash-pinned requirements (hashes ON by default), then install them into ./site.
   installCommand: [POETRY_EXPORT, PIP_INSTALL_INTO_SITE],
-  // Build Egress (ADR 0012): poetry's install runs `pip install` into ./site, which
-  // reads the index from pypi.org and downloads wheels from files.pythonhosted.org.
-  registryHosts: ["pypi.org", "files.pythonhosted.org"],
 };
 
 // Keyed by Package Manager name for the Registry's compile-time exhaustiveness

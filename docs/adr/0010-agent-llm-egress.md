@@ -1,5 +1,7 @@
 # Agent LLM egress: the model endpoint is reachable even on a pure build
 
+>Status: retired by [ADR 0020](0020-remove-scoped-egress.md). The Sandbox now uses normal network access, so model-provider host derivation and Agent Egress allowlisting no longer exist.
+
 ## Status
 
 accepted — amends [ADR 0005](0005-sandbox-secrets-and-egress.md) ("pure-mode builds run with no network at all").

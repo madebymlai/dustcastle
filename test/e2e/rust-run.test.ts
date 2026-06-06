@@ -3,15 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { CARGO_HOME_BASENAME } from "../../src/ecosystems/rust.js";
-import { EGRESS_NETWORK } from "../../src/sandbox/confine.js";
-import { egressHosts } from "../../src/sandbox/confine.js";
 import { prepareRun } from "../../src/run/index.js";
 import { runInSandbox, stageRustCrateProject, stageRustGitProject, stageRustProject } from "./fixture.js";
 
 // Rust path under ADR 0012 (dustcastle-gy5.2/kzw): a Cargo crate → dustcastle
 // provisions the Rust Toolchain (only) → `cargo fetch` populates the per-project
-// CARGO_HOME IN-SANDBOX, routed through the standing egress proxy (the crates index
-// is on the allowlist), then `cargo test --offline` runs green against the fetched
+// CARGO_HOME IN-SANDBOX, then `cargo test --offline` runs green against the fetched
 // cache — NOT a Store-vendored offline build.
 //
 // (Pre-ADR-0012 deps were Nix-vendored into CARGO_HOME and `network: none`; that
@@ -34,10 +31,8 @@ async function expectRustFixture(
 
   const prepared = await prepareRun({ cwd: projectDir });
   expect(prepared.ecosystems[0].detection).toMatchObject({ ecosystem: "rust", packageManager: "cargo" });
-  expect(prepared.plan.egress.kind).toBe("allowlist");
-  expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
-  expect(egressHosts(prepared.plan.egress)).toContain("index.crates.io");
-  expect(egressHosts(prepared.plan.egress)).toContain("static.crates.io"); // crate downloads
+  expect(prepared.plan).not.toHaveProperty("egress");
+  expect(prepared.plan.podmanOptions.network).toBeUndefined();
 
   // `cargo fetch` installs in-Sandbox into the per-project CARGO_HOME (the stage dir).
   expect(prepared.plan.setupCommands.join("\n")).toContain("cargo fetch");
@@ -61,11 +56,11 @@ describe("dustcastle run — Rust in-Sandbox install (dustcastle-gy5.2/kzw, ADR 
     await expectRustFixture(stageRustProject, "dustcastle-rust-run-", "dustcastle-rust-run-e2e");
   });
 
-  e2e("fetches a Cargo git dependency in-Sandbox via the proxy and runs cargo test green", async () => {
+  e2e("fetches a Cargo git dependency in-Sandbox and runs cargo test green", async () => {
     await expectRustFixture(stageRustGitProject, "dustcastle-rust-git-run-", "dustcastle-rust-git-run-e2e");
   });
 
-  e2e("fetches a real crates.io dependency in-Sandbox via the proxy and runs cargo test green", async () => {
+  e2e("fetches a real crates.io dependency in-Sandbox and runs cargo test green", async () => {
     await expectRustFixture(stageRustCrateProject, "dustcastle-rust-crate-run-", "dustcastle-rust-crate-run-e2e");
   });
 });

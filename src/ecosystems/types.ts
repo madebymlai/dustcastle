@@ -89,9 +89,9 @@ export interface ToolchainBuild {
 }
 
 /**
- * The DISPATCH grain (CONTEXT.md: Package Manager). Everything the store, the
- * in-Sandbox install, and the standing egress key on for one Package Manager —
- * owned in one place rather than smeared across per-manager switches at each site.
+ * The DISPATCH grain (CONTEXT.md: Package Manager). Everything the store and the
+ * in-Sandbox install key on for one Package Manager — owned in one place rather
+ * than smeared across per-manager switches at each site.
  */
 export interface PackageManagerDescriptor {
   /** The closed Package Manager name this descriptor keys on. */
@@ -133,25 +133,6 @@ export interface PackageManagerDescriptor {
    * `tsc`, not by a runtime biconditional against a deleted impurity signal.
    */
   readonly installCommand: readonly string[];
-  /**
-   * EVERY host this manager's install fetches from — the Build Egress the standing
-   * allowlist proxy opens (ADR 0005/0012; CONTEXT.md: "the package registry the Package
-   * Manager names"). A LIST, not one host: real installs split the *index* from the
-   * *artifact/checksum* host, and the strict CONNECT proxy is exact-match, so BOTH must
-   * be listed or the artifact fetch 403s. npm/pnpm/bun → [registry.npmjs.org] (tarballs
-   * served from the registry itself), yarn → [registry.yarnpkg.com], pip/uv/poetry →
-   * [pypi.org, files.pythonhosted.org] (index + wheel CDN), go → [proxy.golang.org,
-   * sum.golang.org] (module proxy + checksum DB), cargo → [index.crates.io,
-   * static.crates.io] (sparse index + crate downloads).
-   *
-   * REQUIRED and NON-EMPTY on every descriptor (go/cargo included): egress is a standing
-   * allowlist that no longer branches on purity (ADR 0012), so every detected manager
-   * contributes its registry. Making it required keeps `egress.ts` exhaustive at `tsc` —
-   * a half-added manager fails to compile rather than silently reaching no registry — and
-   * `egress.ts` derives the allowlist off this descriptor field rather than a free-`string`
-   * table.
-   */
-  readonly registryHosts: readonly string[];
 }
 
 /**

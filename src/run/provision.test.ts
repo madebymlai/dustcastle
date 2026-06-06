@@ -21,20 +21,13 @@ const mocks = vi.hoisted(() => {
   return {
     nixRunner,
     cachePool,
-    teardown: vi.fn(),
     podman: vi.fn((opts: unknown) => ({ opts })),
     detect: vi.fn(() => [{ packageManager: "npm" }]),
-    confine: vi.fn(() => ({
-      decision: { kind: "none" },
-      posture: { network: "none", env: {} },
-      enforce: vi.fn(async () => ({ teardown: mocks.teardown })),
-    })),
     planSandbox: vi.fn(() => ({
       podmanOptions: {},
       setupCommands: [],
       hostWorktreeReady: [],
       populate: [],
-      egress: { kind: "none" },
     })),
     ensureImage: vi.fn(async () => {}),
     provisionStore: vi.fn(async () => ({
@@ -50,7 +43,6 @@ const mocks = vi.hoisted(() => {
     populateCommand: vi.fn(() => "true"),
     spawnAutoGc: vi.fn(),
     agentAuthMounts: vi.fn(() => []),
-    configuredAgentModelHosts: vi.fn(() => []),
     runStreamingAsync: vi.fn(async () => {}),
   };
 });
@@ -59,7 +51,6 @@ vi.mock("@ai-hero/sandcastle", () => ({ run: vi.fn(), createSandbox: vi.fn() }))
 vi.mock("@ai-hero/sandcastle/sandboxes/podman", () => ({ podman: mocks.podman }));
 vi.mock("../detect/index.js", () => ({ detect: mocks.detect }));
 vi.mock("../detect/workspace.js", () => ({ detectWorkspace: vi.fn() }));
-vi.mock("../sandbox/confine.js", () => ({ confine: mocks.confine }));
 vi.mock("../sandbox/plan.js", () => ({ planSandbox: mocks.planSandbox }));
 vi.mock("../sandbox/image.js", () => ({ AGENT_SPEC: { image: "agent" }, ensureImage: mocks.ensureImage }));
 vi.mock("../store/index.js", () => ({ provisionStore: mocks.provisionStore, storeHashOf: mocks.storeHashOf }));
@@ -74,7 +65,6 @@ vi.mock("../cli/autogc.js", () => ({ spawnAutoGc: mocks.spawnAutoGc }));
 vi.mock("../config/global.js", () => ({
   DUSTCASTLE_HOME: "/home/dustcastle",
   agentAuthMounts: mocks.agentAuthMounts,
-  configuredAgentModelHosts: mocks.configuredAgentModelHosts,
 }));
 vi.mock("../process/streaming.js", () => ({ runStreamingAsync: mocks.runStreamingAsync }));
 
@@ -85,6 +75,29 @@ afterEach(() => {
 });
 
 describe("withProvisionedSandbox Store pool seam", () => {
+  it("provisions without standing up scoped egress or threading confinement into the plan", async () => {
+    const pool: Pool = {
+      measure: vi.fn(() => 0),
+      entries: vi.fn(() => []),
+      pin: vi.fn(),
+      warm: vi.fn(),
+      release: vi.fn(),
+      evict: vi.fn(() => ({ entriesEvicted: 0, bytesFreed: 0 })),
+    };
+
+    await expect(
+      withProvisionedSandbox({ cwd: "/repo", makeStorePool: () => pool }, async () => "ok"),
+    ).resolves.toBe("ok");
+
+    expect(mocks.planSandbox).toHaveBeenCalledWith({
+      ecosystems: expect.any(Array),
+      cacheDir: "/tmp/dustcastle-deps-cache",
+    });
+    expect((mocks.planSandbox.mock.calls as unknown[][])[0]?.[0]).not.toHaveProperty("confinement");
+    expect((mocks.podman.mock.calls as unknown[][])[0]?.[0]).not.toHaveProperty("network");
+    expect(mocks.ensureImage).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores the deleted Store-runner panel and routes Store mechanics only through makeStorePool", async () => {
     const legacyRunner = vi.fn(() => ({ status: 0, stdout: "", stderr: "" }));
     const legacyAutoGcSpawn = vi.fn();

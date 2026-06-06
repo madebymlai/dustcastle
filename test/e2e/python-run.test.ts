@@ -2,8 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { EGRESS_NETWORK } from "../../src/sandbox/confine.js";
-import { egressHosts } from "../../src/sandbox/confine.js";
 import { prepareRun } from "../../src/run/index.js";
 import {
   runInSandbox,
@@ -16,9 +14,8 @@ import {
 //   a Python project → dustcastle provisions the python Toolchain (interpreter + pip
 //   + pytest, only) into the Store → `python -m pytest` runs GREEN inside a podman
 //   container, with site-packages installed IN-SANDBOX by a real `pip install
-//   --require-hashes ... --target site` (uv/poetry prepend their `export` step)
-//   routed through the standing egress proxy (pypi.org is on the allowlist), NOT
-//   mounted offline from a pip-FOD.
+//   --target site` (uv/poetry prepend their `export` step), NOT mounted offline from
+//   a pip-FOD.
 //
 // uv and poetry route the SAME pip install behind an in-Sandbox `export` front-end
 // (`uv export` / `poetry export` materialises the hash-pinned requirements.txt). All
@@ -39,10 +36,10 @@ const CASES = [
   { manager: "poetry", stage: stagePythonPoetryProject, install: "poetry export", prefix: "dustcastle-python-poetry-run-" },
 ] as const;
 
-describe("dustcastle run (laimk-hse.2: Python in-Sandbox install, ADR 0002/0005/0008/0012)", () => {
+describe("dustcastle run (laimk-hse.2: Python in-Sandbox install, ADR 0002/0008/0012/0020)", () => {
   for (const { manager, stage, install, prefix } of CASES) {
     e2e(
-      `detects python/${manager} and installs site-packages in-Sandbox via the egress proxy, then runs pytest green`,
+      `detects python/${manager} and installs site-packages in-Sandbox over normal networking, then runs pytest green`,
       async () => {
         const root = mkdtempSync(join(tmpdir(), prefix));
         tmps.push(root);
@@ -51,10 +48,8 @@ describe("dustcastle run (laimk-hse.2: Python in-Sandbox install, ADR 0002/0005/
         const prepared = await prepareRun({ cwd: projectDir });
         expect(prepared.ecosystems[0].detection.ecosystem).toBe("python");
         expect(prepared.ecosystems[0].detection.packageManager).toBe(manager);
-        expect(prepared.plan.egress.kind).toBe("allowlist");
-        expect(prepared.plan.podmanOptions.network).toBe(EGRESS_NETWORK);
-        expect(egressHosts(prepared.plan.egress)).toContain("pypi.org");
-        expect(egressHosts(prepared.plan.egress)).toContain("files.pythonhosted.org"); // wheel CDN
+        expect(prepared.plan).not.toHaveProperty("egress");
+        expect(prepared.plan.podmanOptions.network).toBeUndefined();
 
         // The deps install IN-SANDBOX: pip directly, uv/poetry behind their export front-end.
         expect(prepared.plan.setupCommands.join("\n")).toContain(install);

@@ -28,12 +28,6 @@ const cargo: PackageManagerDescriptor = {
   ecosystem: "rust",
   lockfiles: ["Cargo.lock"],
   generateToolchain: generateRustToolchain,
-  // The crates index + the crate download host — the standing Build Egress for a cargo
-  // repo (ADR 0012). Both are required: `cargo fetch` reads the sparse index from
-  // index.crates.io AND downloads crate tarballs from static.crates.io, so an allowlist
-  // with only the index 403s the downloads. registryHosts is required + non-empty on
-  // every descriptor now that egress no longer branches on purity.
-  registryHosts: ["index.crates.io", "static.crates.io"],
   // The in-Sandbox install (ADR 0012 always-impure): `cargo fetch` downloads the
   // committed Cargo.lock's crates into CARGO_HOME, so `cargo test` runs offline
   // against them. Every detected Ecosystem installs in-Sandbox now, so cargo

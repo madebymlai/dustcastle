@@ -26,8 +26,7 @@ interface PreparedPostureEcosystem {
  * Surface the provisioned posture as ordinary log lines (ADR 0014, revised): one
  * fact per line, each carrying only what isn't already on the console from the
  * operational logs. The old single `🏖️` banner event duplicated the play-by-play
- * — most visibly the egress allowlist, which `proxy enforcing allowlist` already
- * prints — so egress is omitted here. The store mode and per-toolchain store paths
+ * — so network posture is omitted here. The store mode and per-toolchain store paths
  * ARE unique (the deep `toolchain built` log is debug-level), as is the agent
  * harness; those become their own lines. The full structured detail still lands in
  * the JSON flight recorder via these same records.

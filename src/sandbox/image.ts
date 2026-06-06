@@ -10,13 +10,12 @@ import { dustcastleVersion } from "../version.js";
  * dustcastle-managed artifacts (never pushed to a registry) that a downstream
  * consumer then runs by name. Each image is fully described by an {@link ImageSpec}
  * — a tag, a shipped Containerfile, and how to label its build output — so building
- * one is a single idempotent `podman build` over that data. The agent image
- * (consumed by sandcastle's `podman()` provider) and the egress-proxy image
- * (consumed by `ensureEgress`) are two such specs; a third would be a third spec,
- * not a third copy of this logic. We do NOT reinvent sandcastle's container
- * lifecycle, mounts, or `--userns=keep-id` mapping — we only produce the images
- * those rely on (sandcastle's own build-image is coupled to a project `.sandcastle/`
- * dir, which a global tool running in arbitrary repos lacks).
+ * one is a single idempotent `podman build` over that data. The agent image is
+ * consumed by sandcastle's `podman()` provider; a second image would be a second
+ * spec, not a second copy of this logic. We do NOT reinvent sandcastle's container
+ * lifecycle, mounts, or `--userns=keep-id` mapping — we only produce the agent
+ * image it relies on (sandcastle's own build-image is coupled to a project
+ * `.sandcastle/` dir, which a global tool running in arbitrary repos lacks).
  */
 
 /** The minimal result of a podman invocation the build logic reasons about. */
@@ -37,13 +36,13 @@ export interface ImageSpec {
    * The STABLE tag prefix (local; never pushed to a registry). The image is built
    * and run under {@link imageRef}, which appends the dustcastle version so the tag
    * busts when a release changes what the image bakes — `podman image exists` is
-   * content-agnostic, so without this a proxy/agent change ships inside a release
+   * content-agnostic, so without this an agent image change ships inside a release
    * but the cached image with the old tag is never rebuilt (dustcastle-q9u).
    */
   readonly tag: string;
   /** Path to the shipped Containerfile (resolved beside this module). */
   readonly containerfile: string;
-  /** Human noun for the build/built/failed messages (e.g. "agent image" | "proxy image"). */
+  /** Human noun for the build/built/failed messages (e.g. "agent image" | "helper image"). */
   readonly label: string;
 }
 
@@ -66,8 +65,7 @@ export interface EnsureImageOptions {
  * Resolve a Containerfile shipped beside this module. It sits next to this module,
  * so import.meta.url resolves to src/sandbox under tsx/vitest and to dist/sandbox in
  * the built CLI (copy-assets.mjs copies the *.Containerfile there alongside the
- * loader; the proxy one's COPY then finds the compiled proxy.js + proxy-main.js
- * tsc emits into that same dir, completing a self-contained build context).
+ * loader).
  */
 export function containerfilePath(filename: string): string {
   return fileURLToPath(new URL(`./${filename}`, import.meta.url));
@@ -80,19 +78,11 @@ export const AGENT_SPEC: ImageSpec = {
   label: "agent image",
 };
 
-/** The dustcastle-owned egress-proxy image, run by `ensureEgress` on the allowlist path. */
-export const PROXY_SPEC: ImageSpec = {
-  tag: "localhost/dustcastle-egress-proxy:node20",
-  containerfile: containerfilePath("proxy.Containerfile"),
-  label: "proxy image",
-};
-
 /**
  * The content-busting image reference: the spec's stable tag prefix with the
- * dustcastle version appended (e.g. `…egress-proxy:node20-0.3.0`). Because the build
- * (`ensureImage`) and the run sites (plan's DEFAULT_IMAGE, confine's
- * DEFAULT_PROXY_IMAGE) all derive the ref through THIS one function, a release that
- * changes what an image bakes ships a new tag that `podman image exists` misses,
+ * dustcastle version appended (e.g. `…agent:bookworm-0.3.0`). Because the build
+ * (`ensureImage`) and run sites derive the ref through THIS one function, a release
+ * that changes what an image bakes ships a new tag that `podman image exists` misses,
  * forcing a rebuild — and build/run can never disagree on the tag (dustcastle-q9u).
  * Version, not a content hash: the agent image installs bd/pi via unpinned network
  * fetches a local-file hash can't observe, so a per-release bump is the honest signal.

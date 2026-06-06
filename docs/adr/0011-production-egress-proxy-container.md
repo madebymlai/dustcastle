@@ -1,5 +1,7 @@
 # Making the production egress proxy container actually run
 
+>Status: retired by [ADR 0020](0020-remove-scoped-egress.md). dustcastle no longer builds or runs a filtering-proxy container, and the Sandbox uses normal network access.
+
 ## Status
 
 accepted — refines [ADR 0005](0005-sandbox-secrets-and-egress.md) (the podman-native production egress backend) and [ADR 0010](0010-agent-llm-egress.md) (Agent Egress over the same proxy).

@@ -30,7 +30,6 @@ describe("posture logging", () => {
         args: [],
       },
       // The posture is no longer one banner event — each unique fact is its own line.
-      // Egress is intentionally absent: `proxy enforcing allowlist` already prints it.
       {
         level: "info",
         fields: { mode: "proot" },

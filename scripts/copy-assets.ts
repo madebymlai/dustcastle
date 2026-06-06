@@ -12,13 +12,6 @@ console.log("copied src/agent/prompts → dist/agent/prompts");
 cpSync("src/sandbox/agent.Containerfile", "dist/sandbox/agent.Containerfile");
 console.log("copied src/sandbox/agent.Containerfile → dist/sandbox/agent.Containerfile");
 
-// The egress-proxy image's Containerfile is read at runtime (ensureProxyImage via
-// import.meta.url) and `COPY`s the compiled proxy.js + proxy-main.js + proxy-logger.js
-// from its own directory (the build context). tsc already emits those into dist/sandbox,
-// so shipping the Containerfile beside them completes a self-contained build context.
-cpSync("src/sandbox/proxy.Containerfile", "dist/sandbox/proxy.Containerfile");
-console.log("copied src/sandbox/proxy.Containerfile → dist/sandbox/proxy.Containerfile");
-
 // tsc emits the CLI entry as 0644, but it's the package `bin` and runs via a shebang
 // (`#!/usr/bin/env node`), so it must be executable. npm sets +x when it links/installs
 // the bin, but a bare `npm run build` (or a clean rebuild over an already-linked global)

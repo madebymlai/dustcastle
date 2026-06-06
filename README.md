@@ -58,10 +58,9 @@ HOST
   next sandbox restores it instantly instead of reinstalling.
 - **Any ecosystem, no config.** The language, package manager, and dependencies are
   detected from your lockfile. There is no `dustcastle.toml` and nothing to wire up.
-- **Locked-down network.** Sandboxes inherit none of your host credentials, and egress
-  is default-deny. The only reachable hosts are the ones the project actually needs: your
-  package registry, your git host, and your agent's model endpoint. Nothing touches the
-  open internet, so the agent cannot leak your secrets.
+- **Host boundary, normal network.** Sandboxes inherit none of your host credentials,
+  while using normal container network access so package managers, git dependencies,
+  and the agent can reach what they need.
 - **Automatic and quiet.** Detection, dependency caching, store garbage collection, and
   session reuse all happen on their own. One command, nothing to pass.
 

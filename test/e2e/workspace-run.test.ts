@@ -9,10 +9,10 @@ import { runInSandbox, stageWorkspaceProject } from "./fixture.js";
 // 3a-ii GATE — per-workspace monorepo provisioning under ADR 0012 (ADR 0006d):
 //   a workspace root (package.json#workspaces) → dustcastle enumerates its members
 //   and provisions EACH member's Toolchain into the shared Store, then `node --test`
-//   runs GREEN per member, with node_modules installed IN-SANDBOX via the egress
-//   proxy (the shared ADR 0012 run harness), NOT mounted offline from a deps FOD.
+//   runs GREEN per member, with node_modules installed IN-SANDBOX over normal
+//   networking (the shared ADR 0012/0020 run harness), NOT mounted offline from a deps FOD.
 //
-// Both members reuse the node-sample, so they share the npm registry allowlist.
+// Both members reuse the node-sample.
 // Gated by DUSTCASTLE_E2E=1.
 const e2e = process.env.DUSTCASTLE_E2E ? it : it.skip;
 

@@ -9,7 +9,6 @@ import {
   type DepsCachePopulate,
 } from "../store/depscache/index.js";
 import type { Provisioned } from "../store/index.js";
-import type { Confinement, EgressDecision } from "./confine.js";
 
 /** sandcastle's podman() options — typed from the factory so it stays in sync. */
 export type PodmanOptions = NonNullable<Parameters<typeof podman>[0]>;
@@ -39,11 +38,6 @@ export interface SandboxPlanSpec {
    */
   readonly cacheDir?: string;
   /**
-   * The Egress facade output (ADR 0005/0010/0012). `prepareRun` owns deriving this;
-   * the plan only drops its posture into podman options and surfaces the decision.
-   */
-  readonly confinement: Pick<Confinement, "decision" | "posture">;
-  /**
    * Base image; a stock image suffices for libc (the Nix closure carries its own),
    * but it MUST ship git — the agent branches/commits/merges. Defaults to a
    * git-preinstalled image; an override must keep that guarantee.
@@ -54,8 +48,8 @@ export interface SandboxPlanSpec {
 /**
  * What dustcastle hands sandcastle: the podman() provider options (the ADR 0002
  * `mounts` seam + the Toolchain env), plus the host/sandbox hooks that restore or
- * install Project Deps. `egress` is surfaced so the CLI can print the network
- * posture — never silent (ADR 0005).
+ * install Project Deps. Network access is the sandbox provider's normal/default
+ * networking.
  */
 export interface SandboxPlan {
   readonly podmanOptions: PodmanOptions;
@@ -76,8 +70,6 @@ export interface SandboxPlan {
    * when every ecosystem hit (or no caching is requested).
    */
   readonly populate: DepsCachePopulate[];
-  /** The egress decision applied, surfaced for the CLI (ADR 0005). */
-  readonly egress: EgressDecision;
 }
 
 /**
@@ -94,9 +86,8 @@ const DEFAULT_IMAGE = imageRef(AGENT_SPEC);
 
 /**
  * Plan the Sandbox for a provisioned project (ADR 0002): bind-mount the Store
- * read-only at /nix/store, put the Toolchain on PATH, and apply the egress
- * decision (ADR 0005). The integration seam is just the `mounts` array — no fork,
- * no patch.
+ * read-only at /nix/store, and put the Toolchain on PATH. The integration seam is
+ * just the `mounts` array — no fork, no patch.
  */
 export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   // Every detected Ecosystem (ADR 0016): each provisions its Toolchain and either
@@ -104,9 +95,6 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
   const ecosystems = spec.ecosystems;
   const primaryEcosystem = ecosystems[0];
   const cacheDir = spec.cacheDir;
-  const egress = spec.confinement.decision;
-  const posture = spec.confinement.posture;
-
   const podmanOptions: PodmanOptions = {
     imageName: spec.imageName ?? DEFAULT_IMAGE,
     mounts: [
@@ -116,11 +104,9 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     ],
     env: {
       // Merge each Ecosystem's run env (PATH + cache vars). A polyglot repo puts
-      // every Toolchain on PATH; the proxy env applies once on top of all of them.
+      // every Toolchain on PATH.
       ...mergeEnv(ecosystems),
-      ...posture.env,
     },
-    network: posture.network,
   };
 
   // Per ecosystem (ADR 0016): a cache HIT restores the assembled deps on the host
@@ -155,7 +141,7 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
     populate.push({ depsKey: cache.depsKey, stageDir });
   }
 
-  return { podmanOptions, setupCommands, hostWorktreeReady, populate, egress };
+  return { podmanOptions, setupCommands, hostWorktreeReady, populate };
 }
 
 function requireCacheDir(cacheDir: string | undefined): string {
@@ -190,8 +176,8 @@ function mergeEnv(ecosystems: readonly EcosystemPlan[]): Record<string, string> 
  * deps land in the Ecosystem's `stageDir` — a build artifact, never project state.
  * Exclude it from the worktree's git FIRST so the agent's `git add` and sandcastle's
  * untracked-sync never capture it (dustcastle-8dk), then run the real Package
- * Manager's resolving install command(s) under the standing egress (it installs from
- * a committed lockfile when present, resolves when not — never branches on `loose`).
+ * Manager's resolving install command(s) (it installs from a committed lockfile when
+ * present, resolves when not — never branches on `loose`).
  * The install command lives on the dispatch grain (PackageManagerDescriptor.installCommand),
  * so this is ecosystem-AGNOSTIC — node installs node_modules, python installs into
  * ./site, go fetches its modules, cargo fetches its crates — no per-Ecosystem `if`.
