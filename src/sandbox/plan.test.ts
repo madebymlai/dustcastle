@@ -346,10 +346,10 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0016)", () => {
     });
 
     // Restore copies the assembled deps from the cache entry into the worktree's
-    // stage dir, before the Sandbox starts (cp -RL + chmod self-heal, like the old
+    // stage dir, before the Sandbox starts (cp -a + chmod self-heal, like the old
     // Store staging). It targets node_modules and reads the deps-key entry.
     const restore = plan.hostWorktreeReady.join("\n");
-    expect(restore).toContain("cp -RL");
+    expect(restore).toContain("cp -a");
     expect(restore).toContain("/home/u/.dustcastle/deps-cache/abc123/node_modules");
     expect(restore).toContain("node_modules");
 
@@ -368,7 +368,7 @@ describe("planSandbox — deps-cache hit/miss decision (ADR 0016)", () => {
       cacheDir: "/home/u/.dustcastle/deps-cache",
     });
 
-    // The GC pool reads each entry's recency from the ENTRY dir's mtime, but `cp -RL`
+    // The GC pool reads each entry's recency from the ENTRY dir's mtime, but `cp -a`
     // reads the source without touching it — so a hit must `touch` the entry dir, else
     // a hot-but-old entry looks stale and the byte-LRU could evict it despite active use.
     const restore = plan.hostWorktreeReady.join("\n");

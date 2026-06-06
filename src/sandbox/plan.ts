@@ -62,7 +62,7 @@ export interface SandboxPlan {
    * Commands to run on the HOST before the Sandbox starts (sandcastle
    * hooks.host.onWorktreeReady): the deps-cache RESTORE copies (ADR 0016). On a cache
    * hit, the assembled deps are copied from the deps-key entry into the worktree's
-   * stage dir (cp -RL + chmod self-heal, the same shape the old Store staging used).
+   * stage dir (cp -a + chmod self-heal, the same shape the old Store staging used).
    * Empty when every ecosystem misses (or no caching) — then the install runs in-Sandbox.
    */
   readonly hostWorktreeReady: string[];
