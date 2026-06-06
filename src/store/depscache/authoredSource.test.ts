@@ -5,9 +5,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readGitHeadAuthoredSource } from "./authoredSource.js";
 
-// The git-HEAD authored-source adapter: reads committed content at HEAD,
-// returning undefined when the path is not in HEAD or the project has no HEAD.
-
 const tmps: string[] = [];
 function tmp(): string {
   const d = mkdtempSync(join(tmpdir(), "dustcastle-authoredsrc-"));

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Detection } from "../../detect/index.js";
-import { depsCacheKey } from "./index.js";
+import { depsCacheKey, readWorktreeAuthoredSource } from "./index.js";
 
 // The deps-cache key (ADR 0016) is the stable cache entry name for one ecosystem:
 // resolved Toolchain version + Ecosystem + Package Manager + dependency-determining
@@ -299,13 +299,7 @@ describe("depsCacheKey (project deps fingerprint — ADR 0016)", () => {
       const worktreeKey = depsCacheKey(
         dir,
         { ...nodeNpm, toolchainVersion: "22.12.0" },
-        (projectDir, fileName) => {
-          const { existsSync, readFileSync } = require("node:fs");
-          const { join } = require("node:path");
-          const fp = join(projectDir, fileName);
-          if (!existsSync(fp)) return undefined;
-          return readFileSync(fp);
-        },
+        readWorktreeAuthoredSource,
       );
 
       // Key via a fake authored-source reader returning the same content
