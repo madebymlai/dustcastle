@@ -13,6 +13,7 @@ import { runGcCommand } from "./gc.js";
 import { ensureModel } from "./model.js";
 import { processTerminal, type Terminal } from "./terminal.js";
 import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
 
 export const USAGE = `dustcastle — a global toolchain manager for AI coding agent sandboxes.
 
@@ -114,7 +115,17 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
 }
 
 function isDirectCli(): boolean {
-  return process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  // npm installs the bin as a SYMLINK (…/bin/dustcastle -> …/dist/cli/main.js), so
+  // argv[1] is the symlink path while import.meta.url is the resolved real file —
+  // they never match and the CLI silently no-ops when invoked by name. Resolve the
+  // symlink before comparing.
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectCli()) {
