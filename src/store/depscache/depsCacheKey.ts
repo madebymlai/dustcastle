@@ -1,7 +1,7 @@
 import { createHash, type Hash } from "node:crypto";
 import type { Detection } from "../../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../../ecosystems/index.js";
-import { readWorktreeAuthoredSource, type AuthoredSourceReader } from "./authoredSource.js";
+import { readGitHeadAuthoredSource, type AuthoredSourceReader } from "./authoredSource.js";
 
 const DEPS_CACHE_KEY_VERSION = "4";
 
@@ -15,7 +15,7 @@ const DEPS_CACHE_KEY_VERSION = "4";
 export function depsCacheKey(
   projectDir: string,
   detection: Detection,
-  readAuthoredSource: AuthoredSourceReader = readWorktreeAuthoredSource,
+  readAuthoredSource: AuthoredSourceReader = readGitHeadAuthoredSource,
 ): string {
   const hash = createHash("sha256");
   hashDetectionInputs(hash, detection);

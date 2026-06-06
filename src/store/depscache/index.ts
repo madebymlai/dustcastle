@@ -8,6 +8,6 @@ export {
   type DepsCacheDecision,
   type DepsCachePopulate,
 } from "./depsCache.js";
-export { type AuthoredSourceReader, readWorktreeAuthoredSource } from "./authoredSource.js";
+export { type AuthoredSourceReader, readGitHeadAuthoredSource, readWorktreeAuthoredSource } from "./authoredSource.js";
 export { depsCacheKey } from "./depsCacheKey.js";
 export { defaultDepsCacheDir, depsCachePool, type DepsCachePoolOptions } from "./depsCachePool.js";
