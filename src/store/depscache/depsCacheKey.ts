@@ -1,8 +1,7 @@
 import { createHash, type Hash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Detection } from "../../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../../ecosystems/index.js";
+import { readWorktreeAuthoredSource, type AuthoredSourceReader } from "./authoredSource.js";
 
 const DEPS_CACHE_KEY_VERSION = "4";
 
@@ -13,12 +12,16 @@ const DEPS_CACHE_KEY_VERSION = "4";
  * in declared order). The `loose` detection flag is informational only: lockless repos
  * still get a stable fingerprint over their manifests and are cacheable.
  */
-export function depsCacheKey(projectDir: string, detection: Detection): string {
+export function depsCacheKey(
+  projectDir: string,
+  detection: Detection,
+  readAuthoredSource: AuthoredSourceReader = readWorktreeAuthoredSource,
+): string {
   const hash = createHash("sha256");
   hashDetectionInputs(hash, detection);
 
   for (const fileName of depsInputFiles(detection)) {
-    hashDepsInputFile(hash, projectDir, fileName);
+    hashDepsInputFile(hash, projectDir, fileName, readAuthoredSource);
   }
 
   return hash.digest("hex");
@@ -41,12 +44,17 @@ function uniqueInOrder(values: readonly string[]): string[] {
   return unique;
 }
 
-function hashDepsInputFile(hash: Hash, projectDir: string, fileName: string): void {
-  const filePath = join(projectDir, fileName);
-  if (!existsSync(filePath)) return;
+function hashDepsInputFile(
+  hash: Hash,
+  projectDir: string,
+  fileName: string,
+  readAuthoredSource: AuthoredSourceReader,
+): void {
+  const content = readAuthoredSource(projectDir, fileName);
+  if (content === undefined) return;
 
   hashField(hash, "deps-file-name", fileName);
-  hashField(hash, "deps-file-contents", readFileSync(filePath));
+  hashField(hash, "deps-file-contents", content);
 }
 
 function hashDetectionInputs(hash: Hash, detection: Detection): void {

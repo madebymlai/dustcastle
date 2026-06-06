@@ -28,6 +28,29 @@ const nodeNpm: Detection = { ecosystem: "node", packageManager: "npm" };
 const goModules: Detection = { ecosystem: "go", packageManager: "go" };
 
 describe("depsCacheKey (project deps fingerprint — ADR 0016)", () => {
+  it("can fingerprint dependency inputs from an injected authored-source reader", () => {
+    const requested: Array<{ projectDir: string; fileName: string }> = [];
+    const authoredFiles = new Map<string, Buffer>([
+      ["package.json", Buffer.from('{"dependencies":{"left-pad":"1.3.0"}}\n')],
+      ["package-lock.json", Buffer.from('{"lockfileVersion":3,"packages":{}}\n')],
+    ]);
+
+    const key = depsCacheKey(
+      "/unused/project",
+      { ...nodeNpm, toolchainVersion: "22.12.0" },
+      (projectDir, fileName) => {
+        requested.push({ projectDir, fileName });
+        return authoredFiles.get(fileName);
+      },
+    );
+
+    expect(key).toBe("69b9bc42fa5d8a8dc27e81ac8f4479be4d912ebb38ab536582cce2ad60fc2ff0");
+    expect(requested).toEqual([
+      { projectDir: "/unused/project", fileName: "package.json" },
+      { projectDir: "/unused/project", fileName: "package-lock.json" },
+    ]);
+  });
+
   it("is a stable hash of the manager's lockfile contents", () => {
     const dir = projectDir();
     writeFileSync(join(dir, "package-lock.json"), '{"lockfileVersion":3}');
