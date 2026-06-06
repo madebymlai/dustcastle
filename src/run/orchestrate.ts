@@ -220,7 +220,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   const deps: OrchestrateDeps = { ...liveOrchestrateDeps, ...opts.deps };
   const selection = deps.loadModelSelection();
   if (selection === undefined) {
-    throw new Error("orchestrate: no model configured. Run `dustcastle model` first.");
+    throw new Error("orchestrate: no model configured. Run `dustcastle config` first.");
   }
   const agent = deps.buildPiAgent(selection);
   const targetBranch = opts.targetBranch ?? deps.currentGitBranch(opts.cwd);

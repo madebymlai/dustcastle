@@ -2,7 +2,7 @@
 
 dustcastle has **no project-local config file**. The one thing a user configures —
 which pi model the agent runs — is a **single global setting** at
-`~/.dustcastle/config.json`, chosen by `dustcastle model` and used by every project
+`~/.dustcastle/config.json`, chosen through `dustcastle config` and used by every project
 on the machine. A repo never carries a dustcastle config, and `dustcastle run` reads
 the same model whether you run it in one project or fifty.
 
@@ -61,7 +61,7 @@ nothing project-shaped is left over to justify a repo-local file.
   forget, and gives no discoverable picker. It does not survive across the many
   unattended `dustcastle run` invocations an operator makes. (An env override may still
   be offered as a thin escape hatch without changing the global default.)
-- **One global config + a picker (chosen).** `dustcastle model` lists pi's models and
+- **One global config + a picker (chosen).** `dustcastle config` lists pi's models and
   writes `~/.dustcastle/config.json`; first `dustcastle run` picks one automatically.
   The model lives beside the global `pi` login and the global Store — all three are
   per-user, set once, used everywhere.

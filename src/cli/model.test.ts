@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadModelSelection, writeModel } from "../config/global.js";
-import { chooseModel, ensureModel, runModelCommand } from "./model.js";
+import { chooseModel, ensureModel, pickAndWriteModel } from "./model.js";
 import type { PiModelOption } from "./pi-models.js";
 import { InMemoryTerminal } from "./terminal.js";
 
@@ -64,52 +64,34 @@ describe("chooseModel", () => {
   });
 });
 
-describe("runModelCommand", () => {
-  it("returns 0, writes the selected model, and reports the saved model", async () => {
+describe("pickAndWriteModel", () => {
+  it("returns saved, writes the selected model, and reports the saved model", async () => {
     const dir = tempHome();
     const term = new InMemoryTerminal({ rows: 12 });
-    const code = runModelCommand(term, () => ONE_PROVIDER, dir);
+    const outcome = pickAndWriteModel(term, () => ONE_PROVIDER, dir);
 
     term.feed("\r");
 
-    await expect(code).resolves.toBe(0);
+    await expect(outcome).resolves.toBe("saved");
     expect(loadModelSelection(dir)?.model).toBe("beta/one");
     expect(term.errorOutput).toContain("model set to beta/one");
   });
 
-  it("returns 1 with the pi login hint when no models are available", async () => {
+  it("returns no-models with the pi login hint when no models are available", async () => {
     const term = new InMemoryTerminal({ rows: 12 });
 
-    await expect(runModelCommand(term, () => new Map())).resolves.toBe(1);
+    await expect(pickAndWriteModel(term, () => new Map())).resolves.toBe("no-models");
     expect(term.errorOutput).toContain("Run `pi` then `/login` to authenticate");
   });
 
-  it("returns 1 without fetching models when the terminal is not fully interactive", async () => {
-    const term = new InMemoryTerminal({ rows: 12, isTTY: false });
-    let fetched = false;
-
-    await expect(
-      runModelCommand(
-        term,
-        () => {
-          fetched = true;
-          return ONE_PROVIDER;
-        },
-      ),
-    ).resolves.toBe(1);
-
-    expect(fetched).toBe(false);
-    expect(term.errorOutput).toContain("needs an interactive terminal");
-  });
-
-  it("returns 130 on Ctrl-C without reporting no models", async () => {
+  it("returns cancelled on Ctrl-C without reporting no models", async () => {
     const dir = tempHome();
     const term = new InMemoryTerminal({ rows: 12 });
-    const code = runModelCommand(term, () => ONE_PROVIDER, dir);
+    const outcome = pickAndWriteModel(term, () => ONE_PROVIDER, dir);
 
     term.feed("\x03");
 
-    await expect(code).resolves.toBe(130);
+    await expect(outcome).resolves.toBe("cancelled");
     expect(loadModelSelection(dir)).toBeUndefined();
     expect(term.errorOutput).not.toContain("no pi models found");
   });
@@ -152,7 +134,7 @@ describe("ensureModel", () => {
 
     expect(fetched).toBe(false);
     expect(term.output).toBe("");
-    expect(term.errorOutput).toContain("no model configured — run `dustcastle model`");
+    expect(term.errorOutput).toContain("no model configured — run `dustcastle config`");
     expect(term.errorOutput).not.toContain("Run `pi` then `/login` to authenticate");
   });
 
