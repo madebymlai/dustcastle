@@ -17,6 +17,8 @@ export interface GitCredentialWiring {
 export interface CredentialDescriptor {
   readonly credential: Credential;
   readonly label: string;
+  /** Picker guidance: what the credential is and where to get it (never the internal env var). */
+  readonly help: string;
   readonly envName: string;
   readonly git: GitCredentialWiring;
 }
@@ -24,6 +26,7 @@ export interface CredentialDescriptor {
 const GITHUB: CredentialDescriptor = {
   credential: "github",
   label: "GitHub",
+  help: "Personal Access Token from github.com/settings/tokens",
   envName: "GITHUB_TOKEN",
   git: { host: "github.com", username: "x-access-token" },
 };
@@ -31,6 +34,7 @@ const GITHUB: CredentialDescriptor = {
 const GITLAB: CredentialDescriptor = {
   credential: "gitlab",
   label: "GitLab",
+  help: "Personal Access Token from gitlab.com/-/user_settings/personal_access_tokens",
   envName: "GITLAB_TOKEN",
   git: { host: "gitlab.com", username: "oauth2" },
 };

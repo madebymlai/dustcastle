@@ -45,7 +45,7 @@ describe("runConfigHub", () => {
     expect(fetched).toBe(true);
     expect(loadModelSelection(dir)?.model).toBe("beta/one");
     expect(term.output).toContain("Dustcastle config");
-    expect(term.output).toContain("Model — choose the pi agent model");
+    expect(term.output).toContain("Model: choose the pi agent model");
     expect(term.errorOutput).toContain("model set to beta/one");
   });
 
@@ -91,11 +91,14 @@ describe("runConfigHub", () => {
     term.feed("ghp_secret\r");
 
     await expect(code).resolves.toBe(EXIT_SUCCESS);
-    expect(term.output).toContain("Credentials — configure sandbox credentials");
-    expect(term.output).toContain("GitHub — GITHUB_TOKEN");
-    expect(term.output).toContain("GitLab — GITLAB_TOKEN");
-    expect(term.output).not.toContain("ghp_secret");
-    expect(term.errorOutput).toContain("credential GITHUB_TOKEN saved");
+    expect(term.output).toContain("Credentials: configure sandbox credentials");
+    expect(term.output).toContain("GitHub: Personal Access Token");
+    expect(term.output).toContain("GitLab: Personal Access Token");
+    // The picker shows what it is + where to get it, never the internal env var name.
+    expect(term.output).not.toContain("GITHUB_TOKEN");
+    expect(term.output).not.toContain("GITLAB_TOKEN");
+    expect(term.output).toContain("ghp_secret"); // echoed so the user can verify the paste
+    expect(term.errorOutput).toContain("GitHub token saved");
     expect(loadModelSelection(dir)?.model).toBe("old/model");
     expect(loadCredentialValues(dir)).toEqual({ GITHUB_TOKEN: "ghp_secret" });
     expect(JSON.parse(readFileSync(globalConfigPath(dir), "utf8"))).toMatchObject({
@@ -119,9 +122,10 @@ describe("runConfigHub", () => {
     term.feed("glpat_secret\r");
 
     await expect(code).resolves.toBe(EXIT_SUCCESS);
-    expect(term.output).toContain("GitLab — GITLAB_TOKEN");
-    expect(term.output).not.toContain("glpat_secret");
-    expect(term.errorOutput).toContain("credential GITLAB_TOKEN saved");
+    expect(term.output).toContain("GitLab: Personal Access Token");
+    expect(term.output).toContain("glpat_secret"); // echoed so the user can verify the paste
+    expect(term.output).not.toContain("GITLAB_TOKEN");
+    expect(term.errorOutput).toContain("GitLab token saved");
     expect(loadCredentialValues(dir)).toEqual({ GITLAB_TOKEN: "glpat_secret" });
   });
 

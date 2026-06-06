@@ -11,13 +11,13 @@ import {
 } from "./model.js";
 
 const CONFIG_ACTIONS = [
-  { label: "Model — choose the pi agent model", value: "model" },
-  { label: "Credentials — configure sandbox credentials", value: "credentials" },
+  { label: "Model: choose the pi agent model", value: "model" },
+  { label: "Credentials: configure sandbox credentials", value: "credentials" },
 ] as const;
 
 const CREDENTIAL_OPTIONS: ReadonlyArray<{ readonly label: string; readonly value: Credential }> = CREDENTIALS.map(
   (descriptor) => ({
-    label: `${descriptor.label} — ${descriptor.envName}`,
+    label: `${descriptor.label}: ${descriptor.help}`,
     value: descriptor.credential,
   }),
 );
@@ -89,11 +89,11 @@ async function pickAndWriteCredential(
   if (selected === undefined) return "cancelled";
 
   const descriptor = credentialDescriptor(selected);
-  const value = await promptHiddenLine(`Enter ${descriptor.envName}: `, term);
+  const value = await promptVisibleLine(`Enter your ${descriptor.label} token: `, term);
   if (value === undefined) return "cancelled";
   const writeOpts = dir === undefined ? {} : { dir };
   writeCredentialValue(descriptor.envName, value, writeOpts);
-  term.error(`credential ${descriptor.envName} saved\n`);
+  term.error(`${descriptor.label} token saved\n`);
   return "saved";
 }
 
@@ -106,7 +106,9 @@ function credentialsOutcomeExitCode(outcome: PickAndWriteCredentialOutcome): num
   return assertNever(outcome);
 }
 
-function promptHiddenLine(prompt: string, term: Terminal): Promise<string | undefined> {
+// A single-line prompt that ECHOES what is typed/pasted, so the user can see and
+// verify the value (e.g. a pasted token) before pressing Enter to save.
+function promptVisibleLine(prompt: string, term: Terminal): Promise<string | undefined> {
   term.write(`\n${prompt}`);
   return new Promise((resolve) => {
     let value = "";
@@ -127,10 +129,14 @@ function promptHiddenLine(prompt: string, term: Terminal): Promise<string | unde
           return;
         }
         if (key === KEY_DELETE || key === KEY_BACKSPACE) {
-          value = value.slice(0, -1);
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+            term.write("\b \b"); // visually erase the last echoed character
+          }
           continue;
         }
         value += key;
+        term.write(key); // echo, so the paste is visible and verifiable
       }
     });
   });
