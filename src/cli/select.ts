@@ -13,16 +13,16 @@ const CLEAR_LINE = "\x1b[2K";
  * height. Resolves to the chosen option's `value`; Ctrl-C resolves to `undefined`
  * so callers decide how to abort.
  */
-export interface SelectOption {
+export interface SelectOption<Value extends string = string> {
   readonly label: string;
-  readonly value: string;
+  readonly value: Value;
 }
 
-export function singleSelect(
+export function singleSelect<Value extends string>(
   prompt: string,
-  options: readonly SelectOption[],
+  options: readonly SelectOption<Value>[],
   io: SelectIo,
-): Promise<string | undefined> {
+): Promise<Value | undefined> {
   return new Promise((done) => {
     let cursor = 0;
     let scrollOffset = 0;

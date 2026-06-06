@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { globalConfigPath, loadModelSelection } from "../config/global.js";
 import { runConfigHub } from "./config.js";
+import { EXIT_FAILURE, EXIT_SUCCESS } from "./exit-codes.js";
 import type { PiModelOption } from "./pi-models.js";
 import { InMemoryTerminal } from "./terminal.js";
 
@@ -40,7 +41,7 @@ describe("runConfigHub", () => {
     await Promise.resolve();
     term.feed("\r");
 
-    await expect(code).resolves.toBe(0);
+    await expect(code).resolves.toBe(EXIT_SUCCESS);
     expect(fetched).toBe(true);
     expect(loadModelSelection(dir)?.model).toBe("beta/one");
     expect(term.output).toContain("Dustcastle config");
@@ -55,7 +56,7 @@ describe("runConfigHub", () => {
 
     term.feed("\x03");
 
-    await expect(code).resolves.toBe(0);
+    await expect(code).resolves.toBe(EXIT_SUCCESS);
     expect(loadModelSelection(dir)).toBeUndefined();
   });
 
@@ -71,7 +72,7 @@ describe("runConfigHub", () => {
     await Promise.resolve();
     term.feed("\x03");
 
-    await expect(code).resolves.toBe(0);
+    await expect(code).resolves.toBe(EXIT_SUCCESS);
     expect(readFileSync(globalConfigPath(dir), "utf8")).toBe(before);
     expect(loadModelSelection(dir)?.model).toBe("old/model");
   });
@@ -85,9 +86,19 @@ describe("runConfigHub", () => {
         fetched = true;
         return ONE_PROVIDER;
       }),
-    ).resolves.toBe(1);
+    ).resolves.toBe(EXIT_FAILURE);
 
     expect(fetched).toBe(false);
     expect(term.errorOutput).toContain("needs an interactive terminal");
+  });
+
+  it("returns failure with the pi login hint when the model action finds no models", async () => {
+    const term = new InMemoryTerminal({ rows: 12 });
+    const code = runConfigHub(term, () => new Map());
+
+    term.feed("\r");
+
+    await expect(code).resolves.toBe(EXIT_FAILURE);
+    expect(term.errorOutput).toContain("Run `pi` then `/login` to authenticate");
   });
 });
