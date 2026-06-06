@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { writeCredentialValue } from "../../src/config/global.js";
 import { prepareRun } from "../../src/run/index.js";
-import { runInSandbox, stageNodeProject } from "./fixture.js";
+import { runInSandbox, shellQuote, stageNodeProject } from "./fixture.js";
 
 // End-to-end GitHub credential gate (ADR 0018 / dustcastle-dfo.2). Requires:
 //   DUSTCASTLE_E2E=1
@@ -22,7 +22,9 @@ describe("GitHub credential injection e2e", () => {
     const token = process.env.DUSTCASTLE_GITHUB_TOKEN;
     const repoUrl = process.env.DUSTCASTLE_GITHUB_PRIVATE_REPO_URL;
     if (token === undefined || repoUrl === undefined) {
-      console.warn("skipping GitHub credential e2e: set DUSTCASTLE_GITHUB_TOKEN and DUSTCASTLE_GITHUB_PRIVATE_REPO_URL");
+      console.warn(
+        "skipping GitHub credential e2e: set DUSTCASTLE_GITHUB_TOKEN and DUSTCASTLE_GITHUB_PRIVATE_REPO_URL",
+      );
       return;
     }
     expect(repoUrl).toMatch(/^https:\/\/github\.com\//);
@@ -46,7 +48,7 @@ describe("GitHub credential injection e2e", () => {
       container: "dustcastle-github-credential-e2e",
       test: { command: "npm test", expect: /ok/ },
       afterSetup: async (exec) => {
-        const clone = await exec(`git ls-remote '${repoUrl}' HEAD`);
+        const clone = await exec(`git ls-remote ${shellQuote(repoUrl)} HEAD`);
         expect(clone.code, clone.err).toBe(0);
         expect(clone.out).toMatch(/[0-9a-f]{40}/);
         expect(clone.err).not.toContain(token);

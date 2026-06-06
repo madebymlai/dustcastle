@@ -55,6 +55,10 @@ function podmanSpawn(args: string[]): Promise<ExecResult> {
   });
 }
 
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 export interface SandboxRunSpec {
   /** dustcastle's prepared pipeline output (detect → provision Toolchain → plan). */
   readonly prepared: PreparedRun;

@@ -16,9 +16,9 @@ const CONFIG_ACTIONS = [
 ] as const;
 
 const CREDENTIAL_OPTIONS: ReadonlyArray<{ readonly label: string; readonly value: Credential }> = CREDENTIALS.map(
-  (credential) => ({
-    label: `${credential.label} — ${credential.envName}`,
-    value: credential.credential,
+  (descriptor) => ({
+    label: `${descriptor.label} — ${descriptor.envName}`,
+    value: descriptor.credential,
   }),
 );
 
