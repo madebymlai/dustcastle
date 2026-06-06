@@ -210,7 +210,7 @@ via `dustcastle config` (re-pick).
 | Module | Responsibility | ADR |
 |---|---|---|
 | `src/config/global.ts` | The global config (`~/.dustcastle/config.json`): `loadModelSelection` / `writeModel` (preserves other keys), `loadCredentialValues` / `writeCredentialValue` (plaintext Credential values under `credentials`), `buildPiAgent`, `agentAuthMounts` (the `~/.pi/agent` mount), and `loadHandoff` — model + optional task (`prompt`/`promptFile`, also global) → `SandcastleHandoff`, or `undefined` when there's nothing to launch. Pure + total. | 0002, 0009, 0018 |
-| `src/credentials/index.ts` | Closed Credential Registry. GitHub ships first (`GITHUB_TOKEN`, `x-access-token`, host-scoped `credential.https://github.com.helper`) plus the env/GIT_CONFIG assembler and agent-env collision guard. | 0018 |
+| `src/credentials/index.ts` | Closed Credential Registry. GitHub (`GITHUB_TOKEN`, `x-access-token`, host-scoped `credential.https://github.com.helper`) and GitLab (`GITLAB_TOKEN`, `oauth2`, host-scoped `credential.https://gitlab.com.helper`) descriptors plus the env/GIT_CONFIG assembler and agent-env collision guard. | 0018 |
 | `src/cli/pi-models.ts` | `parsePiModels` (pure: skip header, `provider/model` values) + `listPiModels` (runs `pi --list-models`, captures **stderr**). | 0002 |
 | `src/cli/select.ts` | `singleSelect` arrow-key TUI, ported from agentstack's `tui.mjs`. | 0002 |
 | `src/cli/model.ts` | `chooseModel` (provider→model), `pickAndWriteModel` (shared picker/write action), `ensureModel` (first-run pick; headless no-model fails fast). | 0002, 0017, 0019 |
@@ -235,7 +235,8 @@ global task prompt.**
   "maxIterations": 100,
   "hooks": { "onSandboxReady": ["npm install"] },
   "credentials": {
-    "GITHUB_TOKEN": "ghp_..."
+    "GITHUB_TOKEN": "ghp_...",
+    "GITLAB_TOKEN": "glpat_..."
   }
 }
 ```

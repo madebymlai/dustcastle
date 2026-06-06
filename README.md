@@ -61,8 +61,8 @@ HOST
 - **Host boundary, normal network.** Sandboxes inherit none of your host credentials
   by default, while using normal container network access so package managers, git
   dependencies, and the agent can reach what they need. Curated Credentials (today:
-  GitHub via `dustcastle config`) are the explicit opt-in path for private HTTPS git
-  dependencies.
+  GitHub/GitLab via `dustcastle config`) are the explicit opt-in path for private HTTPS
+  git dependencies.
 - **Automatic and quiet.** Detection, dependency caching, store garbage collection, and
   session reuse all happen on their own. One command, nothing to pass.
 

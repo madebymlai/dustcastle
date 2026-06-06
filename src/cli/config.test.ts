@@ -93,6 +93,7 @@ describe("runConfigHub", () => {
     await expect(code).resolves.toBe(EXIT_SUCCESS);
     expect(term.output).toContain("Credentials — configure sandbox credentials");
     expect(term.output).toContain("GitHub — GITHUB_TOKEN");
+    expect(term.output).toContain("GitLab — GITLAB_TOKEN");
     expect(term.output).not.toContain("ghp_secret");
     expect(term.errorOutput).toContain("credential GITHUB_TOKEN saved");
     expect(loadModelSelection(dir)?.model).toBe("old/model");
@@ -102,6 +103,26 @@ describe("runConfigHub", () => {
       prompt: "keep",
       credentials: { GITHUB_TOKEN: "ghp_secret" },
     });
+  });
+
+  it("writes a filled GitLab token from the credentials catalog", async () => {
+    const dir = tempHome();
+    const term = new InMemoryTerminal({ rows: 12 });
+    const code = runConfigHub(term, () => ONE_PROVIDER, dir);
+
+    term.feed("\x1b[B");
+    term.feed("\r");
+    await Promise.resolve();
+    term.feed("\x1b[B");
+    term.feed("\r");
+    await Promise.resolve();
+    term.feed("glpat_secret\r");
+
+    await expect(code).resolves.toBe(EXIT_SUCCESS);
+    expect(term.output).toContain("GitLab — GITLAB_TOKEN");
+    expect(term.output).not.toContain("glpat_secret");
+    expect(term.errorOutput).toContain("credential GITLAB_TOKEN saved");
+    expect(loadCredentialValues(dir)).toEqual({ GITLAB_TOKEN: "glpat_secret" });
   });
 
   it("returns success when the credentials action is cancelled without writing", async () => {

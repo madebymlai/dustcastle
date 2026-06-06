@@ -70,19 +70,24 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0020 network posture)", () => {
     expect(planSandbox({ ecosystems: [{ provisioned, detection }] })).not.toHaveProperty("egress");
   });
 
-  it("injects configured GitHub credentials as sandbox env plus ambient host-scoped git config", () => {
+  it("injects configured forge credentials as sandbox env plus ambient host-scoped git config", () => {
     const plan = planSandbox({
       ecosystems: [{ provisioned, detection }],
-      credentials: { GITHUB_TOKEN: "ghp_secret" },
+      credentials: { GITHUB_TOKEN: "ghp_secret", GITLAB_TOKEN: "glpat_secret" },
     });
     const env = plan.podmanOptions.env ?? {};
 
     expect(env.GITHUB_TOKEN).toBe("ghp_secret");
-    expect(env.GIT_CONFIG_COUNT).toBe("1");
+    expect(env.GITLAB_TOKEN).toBe("glpat_secret");
+    expect(env.GIT_CONFIG_COUNT).toBe("2");
     expect(env.GIT_CONFIG_KEY_0).toBe("credential.https://github.com.helper");
     expect(env.GIT_CONFIG_VALUE_0).toContain("x-access-token");
     expect(env.GIT_CONFIG_VALUE_0).not.toContain("ghp_secret");
+    expect(env.GIT_CONFIG_KEY_1).toBe("credential.https://gitlab.com.helper");
+    expect(env.GIT_CONFIG_VALUE_1).toContain("oauth2");
+    expect(env.GIT_CONFIG_VALUE_1).not.toContain("glpat_secret");
     expect(plan.setupCommands.join("\n")).not.toContain("ghp_secret");
+    expect(plan.setupCommands.join("\n")).not.toContain("glpat_secret");
   });
 });
 

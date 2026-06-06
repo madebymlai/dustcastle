@@ -1,11 +1,11 @@
 /**
  * The Credential Registry (ADR 0018): a closed, curated catalog of recognised
  * sandbox credentials. Operators fill values; descriptors own the env key and any
- * tool-specific wiring (today: a host-scoped git credential helper).
+ * tool-specific wiring (today: host-scoped git credential helpers).
  */
 
 /** The closed set of curated Credential descriptors. */
-export type Credential = "github";
+export type Credential = "github" | "gitlab";
 
 export interface GitCredentialWiring {
   /** HTTPS host this credential applies to. */
@@ -28,9 +28,17 @@ const GITHUB: CredentialDescriptor = {
   git: { host: "github.com", username: "x-access-token" },
 };
 
+const GITLAB: CredentialDescriptor = {
+  credential: "gitlab",
+  label: "GitLab",
+  envName: "GITLAB_TOKEN",
+  git: { host: "gitlab.com", username: "oauth2" },
+};
+
 /** Closed by construction: adding a Credential union member without a descriptor fails tsc. */
 const BY_CREDENTIAL: Record<Credential, CredentialDescriptor> = {
   github: GITHUB,
+  gitlab: GITLAB,
 };
 
 export const CREDENTIALS: readonly CredentialDescriptor[] = Object.values(BY_CREDENTIAL);
@@ -46,8 +54,8 @@ export type CredentialValues = Record<string, string>;
  *   - the raw token under its curated env name;
  *   - ambient GIT_CONFIG_* entries that install host-scoped credential helpers.
  *
- * The helper references the token by env var (`$GITHUB_TOKEN`) instead of embedding
- * the value, so no token is placed in a git URL or a GIT_CONFIG_VALUE string.
+ * The helper references the token by env var (for example, `$GITHUB_TOKEN`) instead
+ * of embedding the value, so no token is placed in a git URL or a GIT_CONFIG_VALUE string.
  */
 export function credentialEnv(values: CredentialValues): Record<string, string> {
   const env: Record<string, string> = {};
