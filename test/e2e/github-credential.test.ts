@@ -46,7 +46,7 @@ describe("GitHub credential injection e2e", () => {
       prepared,
       projectDir,
       container: "dustcastle-github-credential-e2e",
-      test: { command: "npm test", expect: /ok/ },
+      test: { command: "npm test", expect: /pass 1/ },
       afterSetup: async (exec) => {
         const clone = await exec(`git ls-remote ${shellQuote(repoUrl)} HEAD`);
         expect(clone.code, clone.err).toBe(0);
