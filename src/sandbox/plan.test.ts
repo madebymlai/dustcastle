@@ -268,16 +268,16 @@ describe("planSandbox — Python always-impure path installs into ./site", () =>
     expect(cmds.join("\n")).not.toContain("cp -RL");
   });
 
-  it("uv exports its hash-pinned requirements first, then installs them into ./site", () => {
+  it("uv exports its requirements (no hashes, no editable project) first, then installs them into ./site", () => {
     expect(setup("uv").slice(1)).toEqual([
-      "uv export --format requirements-txt -o requirements.txt",
+      "uv export --no-hashes --no-emit-project --format requirements-txt -o requirements.txt",
       "pip install -r requirements.txt --target site",
     ]);
   });
 
-  it("poetry exports its hash-pinned requirements first, then installs them into ./site", () => {
+  it("poetry exports its requirements (no hashes) first, then installs them into ./site", () => {
     expect(setup("poetry").slice(1)).toEqual([
-      "poetry export --format requirements.txt -o requirements.txt",
+      "poetry export --without-hashes --format requirements.txt -o requirements.txt",
       "pip install -r requirements.txt --target site",
     ]);
   });

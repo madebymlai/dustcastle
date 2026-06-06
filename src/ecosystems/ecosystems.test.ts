@@ -171,16 +171,16 @@ describe("Ecosystem Registry (ADR 0001 internal curation)", () => {
         expect(packageManagerDescriptor("pip").installCommand).toEqual([sharedPipInstall]);
       });
 
-      it("uv exports its hash-pinned requirements, then installs them into site", () => {
+      it("uv exports its requirements (no hashes, no editable project), then installs them into site", () => {
         expect(packageManagerDescriptor("uv").installCommand).toEqual([
-          "uv export --format requirements-txt -o requirements.txt",
+          "uv export --no-hashes --no-emit-project --format requirements-txt -o requirements.txt",
           sharedPipInstall,
         ]);
       });
 
-      it("poetry exports its hash-pinned requirements, then installs them into site", () => {
+      it("poetry exports its requirements (no hashes), then installs them into site", () => {
         expect(packageManagerDescriptor("poetry").installCommand).toEqual([
-          "poetry export --format requirements.txt -o requirements.txt",
+          "poetry export --without-hashes --format requirements.txt -o requirements.txt",
           sharedPipInstall,
         ]);
       });

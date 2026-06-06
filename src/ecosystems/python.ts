@@ -23,11 +23,18 @@ import type {
  */
 const PIP_INSTALL_INTO_SITE = "pip install -r requirements.txt --target site";
 
-/** uv's in-Sandbox export step: materialise the hash-pinned requirements.txt from uv.lock. */
-const UV_EXPORT = "uv export --format requirements-txt -o requirements.txt";
+/**
+ * uv's in-Sandbox export step: materialise requirements.txt from uv.lock.
+ * `--no-hashes` keeps reproducibility out of scope (ADR 0012) AND lets a git dep install
+ * (a git source has no wheel hash, so pip's hash-checking would otherwise reject it).
+ * `--no-emit-project` drops the project's own editable self-entry (`-e file://…workspace`):
+ * the worktree IS the project (already on PYTHONPATH), so only its deps belong in ./site,
+ * and pip can neither hash-check nor `--target`-install an editable directory.
+ */
+const UV_EXPORT = "uv export --no-hashes --no-emit-project --format requirements-txt -o requirements.txt";
 
-/** poetry's in-Sandbox export step (hashes ON by default — no `--without-hashes`). */
-const POETRY_EXPORT = "poetry export --format requirements.txt -o requirements.txt";
+/** poetry's in-Sandbox export step: `--without-hashes` so git deps install and reproducibility stays out of scope (ADR 0012). */
+const POETRY_EXPORT = "poetry export --without-hashes --format requirements.txt -o requirements.txt";
 
 /**
  * The Python Ecosystem descriptors (ADR 0006 + its 2026-05-30 amendment / ADR 0012).
