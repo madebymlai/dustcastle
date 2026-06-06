@@ -26,7 +26,7 @@ const detection: Detection = {
   toolchainVersion: "1.26.3",
 };
 
-describe("planSandbox (ADR 0002 mounts seam, ADR 0005 access)", () => {
+describe("planSandbox (ADR 0002 mounts seam, ADR 0020 network posture)", () => {
   it("bind-mounts the physical Store read-only at the canonical /nix/store", () => {
     const plan = planSandbox({ ecosystems: [{ provisioned, detection }] });
 

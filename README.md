@@ -141,7 +141,7 @@ the design rather than being a special case:
 | Slot | npm / TS | Python | Rust | Go | Ruby |
 |---|---|---|---|---|---|
 | **Toolchain** (from shared store) | node, pnpm | python, uv | rustc, cargo | go | ruby, bundler |
-| **Install deps** (real manager, then cached) | `npm ci` | `uv sync` | `cargo fetch` | `go mod download` | `bundle install` |
+| **Install deps** (real manager, then cached) | `npm install` | `pip install` / `uv export` | `cargo fetch` | `go mod download` | `bundle install` |
 | **Run tests** (sandbox capability) | `vitest` | `pytest` | `cargo test` | `go test` | `rspec` |
 
 The toolchain comes from the shared store. The dependencies are installed by the repo's

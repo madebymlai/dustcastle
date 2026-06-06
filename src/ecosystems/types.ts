@@ -7,8 +7,7 @@
  *     recognises itself in a directory, resolves which Package Manager a repo
  *     uses, and reads its Toolchain version (ADR 0006a/b/d);
  *   - a {@link PackageManagerDescriptor} owns the DISPATCH grain — the Toolchain
- *     Nix expression, the in-Sandbox install command, and the registry host
- *     (ADR 0006a, ADR 0012).
+ *     Nix expression and the in-Sandbox install command (ADR 0006a, ADR 0012).
  *
  * The `Detection` type lives here too — it is the Registry's output shape — and
  * is re-exported from `src/detect/index.ts` so existing import paths keep working.
@@ -27,7 +26,7 @@ export type PackageManager = "npm" | "pnpm" | "yarn" | "bun" | "go" | "pip" | "u
 /**
  * What detection concludes about one directory: which Ecosystem it is and the
  * package manager that signalled it (ADR 0006 — the lockfile names the manager,
- * which selects the install command + registry host).
+ * which selects the install command).
  */
 export interface Detection {
   readonly ecosystem: Ecosystem;
@@ -124,8 +123,8 @@ export interface PackageManagerDescriptor {
    * `--require-hashes`) — they hard-fail without a lockfile, which is exactly the
    * common loose case, and the byte-reproducibility they buy is out of scope (ADR
    * 0012). go/cargo already had this shape; node/python converged onto it. Its
-   * assembled output is what the deps cache stores (only for lock-grade repos — a
-   * loose resolves are cached by ADR 0016's manifest/lockfile fingerprint). uv/poetry
+   * assembled output is what the deps cache stores (lock-grade repos by lockfile
+   * fingerprint; loose resolves by ADR 0016's manifest fingerprint). uv/poetry
    * prepend their own `export` step before the shared pip install.
    *
    * REQUIRED on EVERY descriptor (go/cargo included): there is no pure-vs-impure

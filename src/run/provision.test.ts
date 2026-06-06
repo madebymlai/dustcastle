@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => {
     cachePool,
     podman: vi.fn((opts: unknown) => ({ opts })),
     detect: vi.fn(() => [{ packageManager: "npm" }]),
-    planSandbox: vi.fn(() => ({
+    planSandbox: vi.fn((_spec: unknown) => ({
       podmanOptions: {},
       setupCommands: [],
       hostWorktreeReady: [],
@@ -93,8 +93,10 @@ describe("withProvisionedSandbox Store pool seam", () => {
       ecosystems: expect.any(Array),
       cacheDir: "/tmp/dustcastle-deps-cache",
     });
-    expect((mocks.planSandbox.mock.calls as unknown[][])[0]?.[0]).not.toHaveProperty("confinement");
-    expect((mocks.podman.mock.calls as unknown[][])[0]?.[0]).not.toHaveProperty("network");
+    const [planSpec] = mocks.planSandbox.mock.calls[0] ?? [];
+    const [podmanOptions] = mocks.podman.mock.calls[0] ?? [];
+    expect(planSpec).not.toHaveProperty("confinement");
+    expect(podmanOptions).not.toHaveProperty("network");
     expect(mocks.ensureImage).toHaveBeenCalledTimes(1);
   });
 

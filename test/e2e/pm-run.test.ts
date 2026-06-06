@@ -8,8 +8,8 @@ import { PNPM_SAMPLE, YARN_SAMPLE, runInSandbox, stageFixtureProject } from "./f
 // SLICE 2b GATE — the pnpm + yarn ecosystem paths under ADR 0012:
 //   a pnpm/yarn project → dustcastle provisions the Node Toolchain (only) → `node
 //   --test` runs GREEN inside a podman container, with node_modules installed
-//   IN-SANDBOX by a real `pnpm install --frozen-lockfile` / `yarn install
-//   resolving install, NOT mounted offline from a deps FOD.
+//   IN-SANDBOX by the manager's resolving install (`pnpm install` / `yarn install`),
+//   NOT mounted offline from a deps FOD.
 //
 // (Pre-ADR-0012 this was a pure, offline build with `network: none`; that model is
 // gone — see ADR 0012 and dustcastle-61j.) Gated by DUSTCASTLE_E2E=1.
