@@ -1,4 +1,5 @@
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
+import { credentialEnv, type CredentialValues } from "../credentials/index.js";
 import { AGENT_SPEC, imageRef } from "./image.js";
 import type { Detection } from "../detect/index.js";
 import { ecosystemFor, packageManagerDescriptor } from "../ecosystems/index.js";
@@ -43,6 +44,8 @@ export interface SandboxPlanSpec {
    * git-preinstalled image; an override must keep that guarantee.
    */
   readonly imageName?: string;
+  /** Plaintext Credential values loaded from the global config for this run. */
+  readonly credentials?: CredentialValues;
 }
 
 /**
@@ -106,6 +109,10 @@ export function planSandbox(spec: SandboxPlanSpec): SandboxPlan {
       // Merge each Ecosystem's run env (PATH + cache vars). A polyglot repo puts
       // every Toolchain on PATH.
       ...mergeEnv(ecosystems),
+      // Curated Credentials are explicit sandbox inputs (ADR 0018): token env plus
+      // ambient GIT_CONFIG_* helper wiring. Helpers reference the env var rather
+      // than embedding token values.
+      ...credentialEnv(spec.credentials ?? {}),
     },
   };
 

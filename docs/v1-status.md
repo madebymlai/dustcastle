@@ -209,12 +209,13 @@ via `dustcastle config` (re-pick).
 
 | Module | Responsibility | ADR |
 |---|---|---|
-| `src/config/global.ts` | The global config (`~/.dustcastle/config.json`): `loadModelSelection` / `writeModel` (preserves other keys), `buildPiAgent`, `agentAuthMounts` (the `~/.pi/agent` mount), and `loadHandoff` — model + optional task (`prompt`/`promptFile`, also global) → `SandcastleHandoff`, or `undefined` when there's nothing to launch. Pure + total. | 0002, 0009 |
+| `src/config/global.ts` | The global config (`~/.dustcastle/config.json`): `loadModelSelection` / `writeModel` (preserves other keys), `loadCredentialValues` / `writeCredentialValue` (plaintext Credential values under `credentials`), `buildPiAgent`, `agentAuthMounts` (the `~/.pi/agent` mount), and `loadHandoff` — model + optional task (`prompt`/`promptFile`, also global) → `SandcastleHandoff`, or `undefined` when there's nothing to launch. Pure + total. | 0002, 0009, 0018 |
+| `src/credentials/index.ts` | Closed Credential Registry. GitHub ships first (`GITHUB_TOKEN`, `x-access-token`, host-scoped `credential.https://github.com.helper`) plus the env/GIT_CONFIG assembler and agent-env collision guard. | 0018 |
 | `src/cli/pi-models.ts` | `parsePiModels` (pure: skip header, `provider/model` values) + `listPiModels` (runs `pi --list-models`, captures **stderr**). | 0002 |
 | `src/cli/select.ts` | `singleSelect` arrow-key TUI, ported from agentstack's `tui.mjs`. | 0002 |
 | `src/cli/model.ts` | `chooseModel` (provider→model), `pickAndWriteModel` (shared picker/write action), `ensureModel` (first-run pick; headless no-model fails fast). | 0002, 0017, 0019 |
-| `src/run/index.ts` | `run()` merges `agentAuthMounts()` into the Sandbox plan's `mounts` before `sandcastle.run()`. | 0002 |
-| `src/cli/config.ts` | `dustcastle config` hub, with the model action reusing `pickAndWriteModel` and hub/action cancellation mapped to exit-without-write. | 0019 |
+| `src/run/index.ts` | `run()` merges `agentAuthMounts()` into the Sandbox plan's `mounts` before `sandcastle.run()` and loads configured Credentials into the sandbox plan after checking agent-env collisions. | 0002, 0018 |
+| `src/cli/config.ts` | `dustcastle config` hub, with the model action reusing `pickAndWriteModel`, the Credentials action listing the curated catalog and writing values, and hub/action cancellation mapped to exit-without-write. | 0018, 0019 |
 | `src/cli/main.ts` | `dustcastle config` dispatch; removed standalone `dustcastle model`; `run` calls `ensureModel()` (first-run picker/headless fail-fast) then launches from the global `loadHandoff()`, surfacing `pi @ <model>`. | 0002, 0017, 0019 |
 
 Config + parser + auth mount are exhaustively unit-tested (18 tests, pure — no pi,
@@ -232,7 +233,10 @@ global task prompt.**
   "thinking": "high",
   "prompt": "do the task",
   "maxIterations": 100,
-  "hooks": { "onSandboxReady": ["npm install"] }
+  "hooks": { "onSandboxReady": ["npm install"] },
+  "credentials": {
+    "GITHUB_TOKEN": "ghp_..."
+  }
 }
 ```
 

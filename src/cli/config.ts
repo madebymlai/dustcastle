@@ -1,3 +1,5 @@
+import { CREDENTIALS, credentialDescriptor, type Credential } from "../credentials/index.js";
+import { writeCredentialValue } from "../config/global.js";
 import { EXIT_FAILURE, EXIT_SUCCESS } from "./exit-codes.js";
 import { listPiModels } from "./pi-models.js";
 import { singleSelect } from "./select.js";
@@ -10,7 +12,21 @@ import {
 
 const CONFIG_ACTIONS = [
   { label: "Model — choose the pi agent model", value: "model" },
+  { label: "Credentials — configure sandbox credentials", value: "credentials" },
 ] as const;
+
+const CREDENTIAL_OPTIONS: ReadonlyArray<{ readonly label: string; readonly value: Credential }> = CREDENTIALS.map(
+  (credential) => ({
+    label: `${credential.label} — ${credential.envName}`,
+    value: credential.credential,
+  }),
+);
+
+const KEY_ENTER = "\r";
+const KEY_NEWLINE = "\n";
+const KEY_CTRL_C = "\x03";
+const KEY_BACKSPACE = "\b";
+const KEY_DELETE = "\x7f";
 
 type ConfigAction = (typeof CONFIG_ACTIONS)[number]["value"];
 
@@ -46,6 +62,8 @@ async function runConfigAction(
   switch (action) {
     case "model":
       return modelOutcomeExitCode(await pickAndWriteModel(term, listModels, dir));
+    case "credentials":
+      return credentialsOutcomeExitCode(await pickAndWriteCredential(term, dir));
   }
   return assertNever(action);
 }
@@ -59,6 +77,63 @@ function modelOutcomeExitCode(outcome: PickAndWriteModelOutcome): number {
       return EXIT_FAILURE;
   }
   return assertNever(outcome);
+}
+
+type PickAndWriteCredentialOutcome = "saved" | "cancelled";
+
+async function pickAndWriteCredential(
+  term: Terminal,
+  dir: string | undefined,
+): Promise<PickAndWriteCredentialOutcome> {
+  const selected = await singleSelect("Which credential?", CREDENTIAL_OPTIONS, term);
+  if (selected === undefined) return "cancelled";
+
+  const descriptor = credentialDescriptor(selected);
+  const value = await promptHiddenLine(`Enter ${descriptor.envName}: `, term);
+  if (value === undefined) return "cancelled";
+  const writeOpts = dir === undefined ? {} : { dir };
+  writeCredentialValue(descriptor.envName, value, writeOpts);
+  term.error(`credential ${descriptor.envName} saved\n`);
+  return "saved";
+}
+
+function credentialsOutcomeExitCode(outcome: PickAndWriteCredentialOutcome): number {
+  switch (outcome) {
+    case "saved":
+    case "cancelled":
+      return EXIT_SUCCESS;
+  }
+  return assertNever(outcome);
+}
+
+function promptHiddenLine(prompt: string, term: Terminal): Promise<string | undefined> {
+  term.write(`\n${prompt}`);
+  return new Promise((resolve) => {
+    let value = "";
+    let dispose = (): void => undefined;
+    const finish = (outcome: string | undefined): void => {
+      dispose();
+      term.write("\n");
+      resolve(outcome);
+    };
+    dispose = term.onKey((chunk) => {
+      for (const key of chunk) {
+        if (key === KEY_CTRL_C) {
+          finish(undefined);
+          return;
+        }
+        if (key === KEY_ENTER || key === KEY_NEWLINE) {
+          finish(value);
+          return;
+        }
+        if (key === KEY_DELETE || key === KEY_BACKSPACE) {
+          value = value.slice(0, -1);
+          continue;
+        }
+        value += key;
+      }
+    });
+  });
 }
 
 function assertNever(value: never): never {

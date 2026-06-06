@@ -19,8 +19,8 @@ export const USAGE = `dustcastle — a global toolchain manager for AI coding ag
 Usage:
   dustcastle run        Provision this project from the shared Nix Store, then run
                         the built-in orchestration loop over the repo's beads issues.
-  dustcastle config     Open the global config hub (including the pi agent model
-                        picker saved globally for every project).
+  dustcastle config     Open the global config hub (pi agent model picker and
+                        curated sandbox Credentials such as GitHub).
   dustcastle gc         Sweep the shared Nix Store now (optimise + collect unrooted
                         paths). Active runs stay protected by their scoped roots.`;
 

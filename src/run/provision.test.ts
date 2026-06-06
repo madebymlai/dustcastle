@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => {
     populateCommand: vi.fn(() => "true"),
     spawnAutoGc: vi.fn(),
     agentAuthMounts: vi.fn(() => []),
+    loadCredentialValues: vi.fn(() => ({})),
     runStreamingAsync: vi.fn(async () => {}),
   };
 });
@@ -65,6 +66,7 @@ vi.mock("../cli/autogc.js", () => ({ spawnAutoGc: mocks.spawnAutoGc }));
 vi.mock("../config/global.js", () => ({
   DUSTCASTLE_HOME: "/home/dustcastle",
   agentAuthMounts: mocks.agentAuthMounts,
+  loadCredentialValues: mocks.loadCredentialValues,
 }));
 vi.mock("../process/streaming.js", () => ({ runStreamingAsync: mocks.runStreamingAsync }));
 
@@ -92,6 +94,7 @@ describe("withProvisionedSandbox Store pool seam", () => {
     expect(mocks.planSandbox).toHaveBeenCalledWith({
       ecosystems: expect.any(Array),
       cacheDir: "/tmp/dustcastle-deps-cache",
+      credentials: {},
     });
     const [planSpec] = mocks.planSandbox.mock.calls[0] ?? [];
     const [podmanOptions] = mocks.podman.mock.calls[0] ?? [];

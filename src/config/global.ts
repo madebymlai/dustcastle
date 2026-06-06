@@ -43,10 +43,14 @@ export function readGlobalConfig(dir: string = DUSTCASTLE_HOME): Record<string, 
   } catch (e) {
     throw new Error(`invalid ~/.dustcastle/config.json: not valid JSON (${(e as Error).message})`);
   }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+  if (!isRecord(raw)) {
     throw new Error("invalid ~/.dustcastle/config.json: expected a JSON object");
   }
-  return raw as Record<string, unknown>;
+  return raw;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** The configured model selection, or `undefined` when no model is set yet. */
@@ -71,13 +75,54 @@ export function writeModel(
     throw new Error("model must be a non-empty pi model selector");
   }
   const dir = opts.dir ?? DUSTCASTLE_HOME;
-  const existing = existsSync(globalConfigPath(dir)) ? readGlobalConfig(dir) ?? {} : {};
+  const existing = readGlobalConfig(dir) ?? {};
   const thinking = opts.thinking !== undefined ? parseThinking(opts.thinking) : undefined;
   const next: Record<string, unknown> = {
     ...existing,
     model,
     ...(thinking !== undefined ? { thinking } : {}),
   };
+  writeGlobalConfig(dir, next);
+}
+
+/** Configured plaintext Credential values, keyed by their curated env name. */
+export function loadCredentialValues(dir: string = DUSTCASTLE_HOME): Record<string, string> {
+  const raw = readGlobalConfig(dir);
+  if (raw === undefined) return {};
+  const credentials = raw.credentials;
+  if (!isRecord(credentials)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(credentials)) {
+    if (typeof value === "string" && value.trim() !== "") out[key] = value;
+  }
+  return out;
+}
+
+/** Persist one plaintext Credential value, preserving all other global config keys. */
+export function writeCredentialValue(
+  envName: string,
+  value: string,
+  opts: { dir?: string } = {},
+): void {
+  if (typeof envName !== "string" || envName.trim() === "") {
+    throw new Error("credential env name must be non-empty");
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error("credential value must be non-empty");
+  }
+  const dir = opts.dir ?? DUSTCASTLE_HOME;
+  const existing = readGlobalConfig(dir) ?? {};
+  const existingCredentials = isRecord(existing.credentials) ? existing.credentials : {};
+  writeGlobalConfig(dir, {
+    ...existing,
+    credentials: {
+      ...existingCredentials,
+      [envName]: value,
+    },
+  });
+}
+
+function writeGlobalConfig(dir: string, next: Record<string, unknown>): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(globalConfigPath(dir), `${JSON.stringify(next, null, 2)}\n`);
 }

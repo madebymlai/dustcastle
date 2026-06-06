@@ -69,6 +69,21 @@ describe("planSandbox (ADR 0002 mounts seam, ADR 0020 network posture)", () => {
   it("does not surface an egress decision on the plan (ADR 0020)", () => {
     expect(planSandbox({ ecosystems: [{ provisioned, detection }] })).not.toHaveProperty("egress");
   });
+
+  it("injects configured GitHub credentials as sandbox env plus ambient host-scoped git config", () => {
+    const plan = planSandbox({
+      ecosystems: [{ provisioned, detection }],
+      credentials: { GITHUB_TOKEN: "ghp_secret" },
+    });
+    const env = plan.podmanOptions.env ?? {};
+
+    expect(env.GITHUB_TOKEN).toBe("ghp_secret");
+    expect(env.GIT_CONFIG_COUNT).toBe("1");
+    expect(env.GIT_CONFIG_KEY_0).toBe("credential.https://github.com.helper");
+    expect(env.GIT_CONFIG_VALUE_0).toContain("x-access-token");
+    expect(env.GIT_CONFIG_VALUE_0).not.toContain("ghp_secret");
+    expect(plan.setupCommands.join("\n")).not.toContain("ghp_secret");
+  });
 });
 
 // Node provisioning: the Toolchain is nodejs and deps install in-Sandbox via the

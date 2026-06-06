@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { globalConfigPath, loadModelSelection } from "../config/global.js";
+import { globalConfigPath, loadCredentialValues, loadModelSelection } from "../config/global.js";
 import { runConfigHub } from "./config.js";
 import { EXIT_FAILURE, EXIT_SUCCESS } from "./exit-codes.js";
 import type { PiModelOption } from "./pi-models.js";
@@ -75,6 +75,47 @@ describe("runConfigHub", () => {
     await expect(code).resolves.toBe(EXIT_SUCCESS);
     expect(readFileSync(globalConfigPath(dir), "utf8")).toBe(before);
     expect(loadModelSelection(dir)?.model).toBe("old/model");
+  });
+
+  it("lists credential descriptors and writes a filled GitHub token without clobbering config", async () => {
+    const dir = tempHome();
+    writeFileSync(globalConfigPath(dir), JSON.stringify({ model: "old/model", prompt: "keep" }, null, 2) + "\n");
+    const term = new InMemoryTerminal({ rows: 12 });
+    const code = runConfigHub(term, () => ONE_PROVIDER, dir);
+
+    term.feed("\x1b[B");
+    term.feed("\r");
+    await Promise.resolve();
+    term.feed("\r");
+    await Promise.resolve();
+    term.feed("ghp_secret\r");
+
+    await expect(code).resolves.toBe(EXIT_SUCCESS);
+    expect(term.output).toContain("Credentials — configure sandbox credentials");
+    expect(term.output).toContain("GitHub — GITHUB_TOKEN");
+    expect(term.output).not.toContain("ghp_secret");
+    expect(term.errorOutput).toContain("credential GITHUB_TOKEN saved");
+    expect(loadModelSelection(dir)?.model).toBe("old/model");
+    expect(loadCredentialValues(dir)).toEqual({ GITHUB_TOKEN: "ghp_secret" });
+    expect(JSON.parse(readFileSync(globalConfigPath(dir), "utf8"))).toMatchObject({
+      model: "old/model",
+      prompt: "keep",
+      credentials: { GITHUB_TOKEN: "ghp_secret" },
+    });
+  });
+
+  it("returns success when the credentials action is cancelled without writing", async () => {
+    const dir = tempHome();
+    const term = new InMemoryTerminal({ rows: 12 });
+    const code = runConfigHub(term, () => ONE_PROVIDER, dir);
+
+    term.feed("\x1b[B");
+    term.feed("\r");
+    await Promise.resolve();
+    term.feed("\x03");
+
+    await expect(code).resolves.toBe(EXIT_SUCCESS);
+    expect(loadCredentialValues(dir)).toEqual({});
   });
 
   it("returns failure without fetching models when the terminal is not interactive", async () => {
