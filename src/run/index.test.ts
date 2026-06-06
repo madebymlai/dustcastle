@@ -8,6 +8,7 @@ import {
   installHookTimeoutMs,
   populateDepsCache,
   withSetupHooks,
+  run,
   type GcProjectKeyInput,
 } from "./index.js";
 import { createMemoryLogger } from "../log/fake.js";
@@ -29,6 +30,27 @@ function gcKeyInput(packageManager: "npm" | "pnpm", toolchainStorePath: string):
     provisioned: { toolchainStorePath },
   };
 }
+
+describe("run credential collision guard", () => {
+  it("fails on a credential/agent env collision before provisioning", async () => {
+    let provisioned = false;
+
+    await expect(
+      run({
+        cwd: "/path/that/should/not/be/detected",
+        handoff: {
+          agent: { name: "pi", env: { GITHUB_TOKEN: "agent-owned" } },
+          prompt: "hi",
+        } as unknown as Parameters<typeof run>[0]["handoff"],
+        onPrepared: () => {
+          provisioned = true;
+        },
+      }),
+    ).rejects.toThrow(/credential env GITHUB_TOKEN collides with agent provider env/);
+
+    expect(provisioned).toBe(false);
+  });
+});
 
 describe("gcProjectKey", () => {
   it("keys Store recency by package manager and Toolchain store hash", () => {

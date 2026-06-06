@@ -8,6 +8,8 @@ import {
   globalConfigPath,
   loadHandoff,
   loadModelSelection,
+  loadCredentialValues,
+  writeCredentialValue,
   writeModel,
 } from "./global.js";
 
@@ -66,6 +68,33 @@ describe("writeModel / loadModelSelection (the global model choice)", () => {
   it("throws on malformed JSON", () => {
     const dir = home({ "config.json": "{ not json" });
     expect(() => loadModelSelection(dir)).toThrow(/not valid JSON/);
+  });
+});
+
+describe("writeCredentialValue / loadCredentialValues", () => {
+  it("persists a credential value under ~/.dustcastle/config.json without clobbering other keys", () => {
+    const dir = home();
+    cfg(dir, { model: "old/one", prompt: "keep", credentials: { OLD_TOKEN: "old" } });
+
+    writeCredentialValue("GITHUB_TOKEN", "ghp_secret", { dir });
+
+    expect(loadCredentialValues(dir)).toEqual({ GITHUB_TOKEN: "ghp_secret", OLD_TOKEN: "old" });
+    expect(JSON.parse(readFileSync(globalConfigPath(dir), "utf8"))).toEqual({
+      model: "old/one",
+      prompt: "keep",
+      credentials: { OLD_TOKEN: "old", GITHUB_TOKEN: "ghp_secret" },
+    });
+  });
+
+  it("ignores empty or malformed credential values when loading", () => {
+    const dir = home();
+    cfg(dir, { credentials: { GITHUB_TOKEN: "", OTHER: 12 } });
+
+    expect(loadCredentialValues(dir)).toEqual({});
+  });
+
+  it("rejects an empty credential value", () => {
+    expect(() => writeCredentialValue("GITHUB_TOKEN", "  ", { dir: home() })).toThrow(/non-empty/);
   });
 });
 

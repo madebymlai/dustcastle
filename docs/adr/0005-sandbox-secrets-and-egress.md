@@ -1,6 +1,6 @@
 # Sandbox access: default-deny on secrets, scoped egress
 
->Status: partially superseded. Decision 2 (scoped network egress) is superseded by [ADR 0020](0020-remove-scoped-egress.md): dustcastle is a toolchain/deps manager, not a containment sandbox. The container Boundary and default-deny host credentials remain.
+>Status: partially superseded. Decision 1's "never a dustcastle config file" posture is superseded for curated Credentials by [ADR 0018](0018-credential-injection-channel.md). Decision 2 (scoped network egress) is superseded by [ADR 0020](0020-remove-scoped-egress.md): dustcastle is a toolchain/deps manager, not a containment sandbox. The container Boundary and default-deny ambient host credentials remain.
 
 An autonomous agent — and any third-party code it runs (a build, a test, an impure `postinstall`) — executes inside the Sandbox. The container Boundary ([ADR 0003](0003-container-boundary-for-v1.md)) stops the agent damaging the *host*, but "safe to point at my work repos" is decided by **what the Sandbox can reach**. We make that **default-deny**.
 

@@ -18,7 +18,8 @@ import {
 } from "../store/depscache/index.js";
 import { spawnAutoGc } from "../cli/autogc.js";
 import { noopLogger, type Logger } from "../log/index.js";
-import { agentAuthMounts, DUSTCASTLE_HOME } from "../config/global.js";
+import { agentAuthMounts, DUSTCASTLE_HOME, loadCredentialValues } from "../config/global.js";
+import { validateCredentialKeysDisjointFromAgentEnv } from "../credentials/index.js";
 import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.js";
 
 export { gcProjectKey, storeClosures, type GcProjectKeyInput } from "./storeClosures.js";
@@ -38,6 +39,8 @@ export interface PrepareOptions {
    * are cached here, one entry per ecosystem keyed by its deps fingerprint.
    */
   readonly depsCacheDir?: string;
+  /** Override the global config dir (tests); production uses ~/.dustcastle. */
+  readonly configDir?: string;
 }
 
 /** The deterministic result of dustcastle's pipeline: detect → provision → plan. */
@@ -109,6 +112,7 @@ export async function prepareRun(opts: PrepareOptions): Promise<PreparedRun> {
     plan: planSandbox({
       ecosystems,
       cacheDir,
+      credentials: loadCredentialValues(opts.configDir),
     }),
   };
 }
@@ -188,6 +192,7 @@ export interface RunOptions extends ProvisionOptions {
 export async function run(
   opts: RunOptions,
 ): Promise<Awaited<ReturnType<typeof sandcastle.run>>> {
+  validateCredentialKeysDisjointFromAgentEnv(opts.handoff.agent.env);
   return withProvisionedSandbox(opts, async ({ provider, withSetupHooks: setup }) => {
     const hooks = setup(opts.handoff.hooks);
     return sandcastle.run({ ...opts.handoff, sandbox: provider, hooks });

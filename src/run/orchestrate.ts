@@ -4,6 +4,7 @@ import { join } from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { orchestrationPromptPath, type PromptPhase } from "../agent/prompts.js";
 import { buildPiAgent, loadModelSelection } from "../config/global.js";
+import { validateCredentialKeysDisjointFromAgentEnv } from "../credentials/index.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import {
   closeEligibleEpics,
@@ -223,6 +224,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
     throw new Error("orchestrate: no model configured. Run `dustcastle config` first.");
   }
   const agent = deps.buildPiAgent(selection);
+  validateCredentialKeysDisjointFromAgentEnv(agent.env);
   const targetBranch = opts.targetBranch ?? deps.currentGitBranch(opts.cwd);
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
   const logger = opts.logger ?? noopLogger;

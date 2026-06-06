@@ -58,9 +58,11 @@ HOST
   next sandbox restores it instantly instead of reinstalling.
 - **Any ecosystem, no config.** The language, package manager, and dependencies are
   detected from your lockfile. There is no `dustcastle.toml` and nothing to wire up.
-- **Host boundary, normal network.** Sandboxes inherit none of your host credentials,
-  while using normal container network access so package managers, git dependencies,
-  and the agent can reach what they need.
+- **Host boundary, normal network.** Sandboxes inherit none of your host credentials
+  by default, while using normal container network access so package managers, git
+  dependencies, and the agent can reach what they need. Curated Credentials (today:
+  GitHub via `dustcastle config`) are the explicit opt-in path for private HTTPS git
+  dependencies.
 - **Automatic and quiet.** Detection, dependency caching, store garbage collection, and
   session reuse all happen on their own. One command, nothing to pass.
 

@@ -1,3 +1,5 @@
+import { CREDENTIALS, credentialDescriptor, type Credential } from "../credentials/index.js";
+import { writeCredentialValue } from "../config/global.js";
 import { EXIT_FAILURE, EXIT_SUCCESS } from "./exit-codes.js";
 import { listPiModels } from "./pi-models.js";
 import { singleSelect } from "./select.js";
@@ -10,6 +12,7 @@ import {
 
 const CONFIG_ACTIONS = [
   { label: "Model — choose the pi agent model", value: "model" },
+  { label: "Credentials — configure sandbox credentials", value: "credentials" },
 ] as const;
 
 type ConfigAction = (typeof CONFIG_ACTIONS)[number]["value"];
@@ -46,6 +49,8 @@ async function runConfigAction(
   switch (action) {
     case "model":
       return modelOutcomeExitCode(await pickAndWriteModel(term, listModels, dir));
+    case "credentials":
+      return credentialsOutcomeExitCode(await pickAndWriteCredential(term, dir));
   }
   return assertNever(action);
 }
@@ -59,6 +64,66 @@ function modelOutcomeExitCode(outcome: PickAndWriteModelOutcome): number {
       return EXIT_FAILURE;
   }
   return assertNever(outcome);
+}
+
+type PickAndWriteCredentialOutcome = "saved" | "cancelled";
+
+async function pickAndWriteCredential(
+  term: Terminal,
+  dir: string | undefined,
+): Promise<PickAndWriteCredentialOutcome> {
+  const options = CREDENTIALS.map((c) => ({
+    label: `${c.label} — ${c.envName}`,
+    value: c.credential,
+  }));
+  const selected = await singleSelect("Which credential?", options, term);
+  if (selected === undefined) return "cancelled";
+
+  const descriptor = credentialDescriptor(selected as Credential);
+  const value = await promptHiddenLine(`Enter ${descriptor.envName}: `, term);
+  if (value === undefined) return "cancelled";
+  writeCredentialValue(descriptor.envName, value, dir === undefined ? undefined : { dir });
+  term.error(`credential ${descriptor.envName} saved\n`);
+  return "saved";
+}
+
+function credentialsOutcomeExitCode(outcome: PickAndWriteCredentialOutcome): number {
+  switch (outcome) {
+    case "saved":
+    case "cancelled":
+      return EXIT_SUCCESS;
+  }
+  return assertNever(outcome);
+}
+
+function promptHiddenLine(prompt: string, term: Terminal): Promise<string | undefined> {
+  term.write(`\n${prompt}`);
+  return new Promise((resolve) => {
+    let value = "";
+    let dispose = (): void => undefined;
+    const finish = (outcome: string | undefined): void => {
+      dispose();
+      term.write("\n");
+      resolve(outcome);
+    };
+    dispose = term.onKey((chunk) => {
+      for (const key of [...chunk]) {
+        if (key === "\x03") {
+          finish(undefined);
+          return;
+        }
+        if (key === "\r" || key === "\n") {
+          finish(value);
+          return;
+        }
+        if (key === "\x7f" || key === "\b") {
+          value = value.slice(0, -1);
+          continue;
+        }
+        value += key;
+      }
+    });
+  });
 }
 
 function assertNever(value: never): never {
