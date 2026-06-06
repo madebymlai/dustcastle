@@ -55,13 +55,13 @@ describe("posture logging", () => {
   it("omits the agent line when no agent runs, and emits the note as a bare message", () => {
     const logger = createMemoryLogger();
     logPosture(logger, prepared, {
-      note: "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
+      note: "(sandbox provisioned and ready; run `dustcastle config` to choose an agent model)",
     });
 
     expect(logger.records.map((r) => r.msg)).toEqual([
       "store provisioned (rootless nix-portable)",
       "node toolchain ready",
-      "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
+      "(sandbox provisioned and ready; run `dustcastle config` to choose an agent model)",
     ]);
     expect(logger.records.some((r) => r.msg === "agent ready")).toBe(false);
   });

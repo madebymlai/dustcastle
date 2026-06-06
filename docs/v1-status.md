@@ -184,13 +184,13 @@ Three handoff items, each TDD'd and green (102 unit · 4 gated e2e):
 | **(1-tail)** Production egress backend wired into `run()` | `ensureEgress` brings up the `--internal` egress network (idempotent — tolerates already-exists) + the dual-homed proxy container before `sandcastle.run()`, and tears them down after (guaranteed via `finally`); a failed proxy start rolls back a network it created. No-op on the closed/pure path. Driven through an injected podman runner so the command sequence is unit-tested on this bridge-less host; the live run stays gated for a capable host. | `src/sandbox/egress-runtime.ts`, `src/run/index.ts` |
 | **(4)** Spike cleanup (finished) | Go sample committed to `test/fixtures/go-sample`; `ensureNixPortable()` owns the `nix-portable` binary (seeded at `~/.dustcastle/bin/`); `fixture.ts` repointed at the committed paths and the e2e drop the binary injection (default to the owned copy). The Go e2e (`store` + `run`) proven green from the new paths **before** the throwaway `spike-go-store/` was deleted. | `test/e2e/fixture.ts`, the four e2e gates |
 
-## Slice 5 — `dustcastle model` + global pi config for `sandcastle.run()` (DONE, green)
+## Slice 5 — `dustcastle config` + global pi config for `sandcastle.run()` (DONE, green)
 
 Item (3c)'s **wiring half**. dustcastle drives the **pi** coding agent only
 (mirroring agentstack), and the agent model is a **single global choice every
 project / every instance shares** — there is **no project-local config** (the why:
 [ADR 0009](adr/0009-no-project-local-config.md)). The model lives in
-`~/.dustcastle/config.json`; a new `dustcastle model` command picks it (same picker
+`~/.dustcastle/config.json`; the `dustcastle config` hub picks it (same picker
 as agentstack), and `dustcastle run` reads it anywhere. This replaces the v1
 `DUSTCASTLE_MODEL` / `DUSTCASTLE_PROMPT` env stopgap.
 
@@ -205,25 +205,26 @@ mount, which the Nix Store replaces (the point of §3c).
 **The picker** mirrors agentstack: `pi --list-models` (parsed from pi's **stderr**)
 → pick provider (when >1) → pick model → write the global config. It runs on the
 **first** `dustcastle run` with no model yet (the install-time pick) and on demand
-via `dustcastle model` (re-pick).
+via `dustcastle config` (re-pick).
 
 | Module | Responsibility | ADR |
 |---|---|---|
 | `src/config/global.ts` | The global config (`~/.dustcastle/config.json`): `loadModelSelection` / `writeModel` (preserves other keys), `buildPiAgent`, `agentAuthMounts` (the `~/.pi/agent` mount), and `loadHandoff` — model + optional task (`prompt`/`promptFile`, also global) → `SandcastleHandoff`, or `undefined` when there's nothing to launch. Pure + total. | 0002, 0009 |
 | `src/cli/pi-models.ts` | `parsePiModels` (pure: skip header, `provider/model` values) + `listPiModels` (runs `pi --list-models`, captures **stderr**). | 0002 |
 | `src/cli/select.ts` | `singleSelect` arrow-key TUI, ported from agentstack's `tui.mjs`. | 0002 |
-| `src/cli/model.ts` | `chooseModel` (provider→model), `runModelCommand` (`dustcastle model`, TTY-guarded), `ensureModel` (first-run pick; headless no-model fails fast). | 0002, 0017 |
+| `src/cli/model.ts` | `chooseModel` (provider→model), `pickAndWriteModel` (shared picker/write action), `ensureModel` (first-run pick; headless no-model fails fast). | 0002, 0017, 0019 |
 | `src/run/index.ts` | `run()` merges `agentAuthMounts()` into the Sandbox plan's `mounts` before `sandcastle.run()`. | 0002 |
-| `src/cli/main.ts` | New `dustcastle model` command; `run` calls `ensureModel()` (first-run picker/headless fail-fast) then launches from the global `loadHandoff()`, surfacing `pi @ <model>`. | 0002, 0017 |
+| `src/cli/config.ts` | `dustcastle config` hub, with the model action reusing `pickAndWriteModel` and hub/action cancellation mapped to exit-without-write. | 0019 |
+| `src/cli/main.ts` | `dustcastle config` dispatch; removed standalone `dustcastle model`; `run` calls `ensureModel()` (first-run picker/headless fail-fast) then launches from the global `loadHandoff()`, surfacing `pi @ <model>`. | 0002, 0017, 0019 |
 
 Config + parser + auth mount are exhaustively unit-tested (18 tests, pure — no pi,
 no podman); `listPiModels` verified live against real pi. The **live agent run**
 needs (a) a host `pi login` and (b) a pi-equipped sandbox image, so it stays
 gated/manual (see Deferred) — but the open wiring question is **settled: a global
-pi model (`dustcastle model`), the `~/.pi/agent` login mount, and an optional
+pi model (`dustcastle config`), the `~/.pi/agent` login mount, and an optional
 global task prompt.**
 
-**`~/.dustcastle/config.json` shape** (`dustcastle model` writes `model`; the rest is optional):
+**`~/.dustcastle/config.json` shape** (`dustcastle config` writes `model`; the rest is optional):
 
 ```json
 {
@@ -435,13 +436,13 @@ real `nix-store --gc` behind `DUSTCASTLE_E2E` against a scratch store.
 ## Deferred (correctly, per kickoff build order)
 
 - **Live `sandcastle.run()` agent orchestration** — fully **wired**: `src/run/run` + the CLI
-  drive `sandcastle.run()` with the **pi** agent at the global model (`dustcastle model`), the host
+  drive `sandcastle.run()` with the **pi** agent at the global model (`dustcastle config`), the host
   `~/.pi/agent` login mounted into the sandbox, and an optional global task prompt (Slice 5 — the
   open wiring question is settled). What remains gated is only the **live agent execution**, which
   needs (a) a host `pi login` and (b) a sandbox image carrying the `pi` binary (agentstack bakes
   `@mariozechner/pi-coding-agent` into its Containerfile; dustcastle's stock `debian:bookworm` does
   not yet). The deterministic gate proves the provisioning seam instead. To run it manually: `pi` →
-  `/login`, `dustcastle model`, add a `prompt` to `~/.dustcastle/config.json`, use a pi-equipped
+  `/login`, `dustcastle config`, add a `prompt` to `~/.dustcastle/config.json`, use a pi-equipped
   image, `dustcastle run`.
 - **vendorHash discovery** is unit-tested (`parseVendorHashMismatch`) and runs when `vendorHash`
   is omitted, but the e2e supplies the known hash for a fast warm-Store cache hit — the live

@@ -8,17 +8,19 @@ import { orchestrate } from "../run/orchestrate.js";
 import { readLastSweepLine } from "../store/autogc.js";
 import { join } from "node:path";
 import { runAutoGcCommand } from "./autogc.js";
+import { runConfigHub } from "./config.js";
 import { runGcCommand } from "./gc.js";
-import { ensureModel, runModelCommand } from "./model.js";
-import { processTerminal } from "./terminal.js";
+import { ensureModel } from "./model.js";
+import { processTerminal, type Terminal } from "./terminal.js";
+import { pathToFileURL } from "node:url";
 
-const USAGE = `dustcastle — a global toolchain manager for AI coding agent sandboxes.
+export const USAGE = `dustcastle — a global toolchain manager for AI coding agent sandboxes.
 
 Usage:
   dustcastle run        Provision this project from the shared Nix Store, then run
                         the built-in orchestration loop over the repo's beads issues.
-  dustcastle model      Choose the pi agent model (saved globally; every project
-                        uses it). Run automatically the first time you 'run'.
+  dustcastle config     Open the global config hub (including the pi agent model
+                        picker saved globally for every project).
   dustcastle gc         Sweep the shared Nix Store now (optimise + collect unrooted
                         paths). Active runs stay protected by their scoped roots.`;
 
@@ -26,14 +28,20 @@ function createCliLogger() {
   return createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
 }
 
-async function main(argv: string[]): Promise<number> {
+export interface CliDeps {
+  readonly terminal?: () => Terminal;
+  readonly runConfig?: (term: Terminal) => Promise<number>;
+}
+
+export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number> {
   const command = argv[0] ?? "run";
   if (command === "-h" || command === "--help" || command === "help") {
     console.log(USAGE);
     return EXIT_SUCCESS;
   }
-  if (command === "model") {
-    return runModelCommand(processTerminal());
+  const terminal = deps.terminal ?? processTerminal;
+  if (command === "config") {
+    return (deps.runConfig ?? ((term) => runConfigHub(term)))(terminal());
   }
   if (command === "gc") {
     return runGcCommand({ logger: createCliLogger().child({ mod: "gc" }) });
@@ -52,9 +60,9 @@ async function main(argv: string[]): Promise<number> {
 
   // The agent model is a single global choice every project shares (no
   // project-local config). The first run with no model configured picks one
-  // interactively — same as agentstack's install flow; `dustcastle model`
+  // interactively — same as agentstack's install flow; `dustcastle config`
   // re-picks. Headless with no model fails fast before provisioning.
-  const modelOutcome = await ensureModel(processTerminal());
+  const modelOutcome = await ensureModel(terminal());
   switch (modelOutcome) {
     case "proceed":
       break;
@@ -90,7 +98,7 @@ async function main(argv: string[]): Promise<number> {
       ...(agentModelHosts !== undefined ? { agentModelHosts } : {}),
     });
     logPosture(rootLogger, prepared, {
-      note: "(sandbox provisioned and ready; run `dustcastle model` to choose an agent model)",
+      note: "(sandbox provisioned and ready; run `dustcastle config` to choose an agent model)",
     });
     return EXIT_SUCCESS;
   }
@@ -113,10 +121,16 @@ async function main(argv: string[]): Promise<number> {
   return EXIT_SUCCESS;
 }
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (err: unknown) => {
-    console.error(`dustcastle: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(EXIT_FAILURE);
-  },
-);
+function isDirectCli(): boolean {
+  return process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+if (isDirectCli()) {
+  runCli(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (err: unknown) => {
+      console.error(`dustcastle: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(EXIT_FAILURE);
+    },
+  );
+}

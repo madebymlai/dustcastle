@@ -7,7 +7,7 @@ import { PROVIDER_API_HOSTS } from "./provider-hosts.js";
 
 // dustcastle's **global** config (ADR 0002). The agent model is a single global
 // choice every project / every instance shares — there is no project-local config.
-// `dustcastle model` writes the selection here; `dustcastle run` reads it anywhere.
+// `dustcastle config` writes the selection here; `dustcastle run` reads it anywhere.
 // dustcastle drives the **pi** coding agent only: the user authenticates once on
 // the host (`pi` → `/login`, stored in `~/.pi/agent`, mounted into the sandbox),
 // and the model is pi's own `provider/model` selector (e.g. "deepseek/deepseek-v4-pro").
