@@ -83,7 +83,7 @@ export function restoreCommand(restore: DepsCacheCommandInput): string {
   const restoreSteps = shellAnd([
     `rm -f ${shellQuote(sentinel)}`,
     `rm -rf ${shellQuote(stageDir)}`,
-    `cp -RL ${shellQuote(src)} ${shellQuote(stageDir)}`,
+    `cp -a ${shellQuote(src)} ${shellQuote(stageDir)}`,
     `chmod -R u+rwX ${shellQuote(stageDir)}`,
     `touch ${shellQuote(cacheEntryDir)}`,
   ]);
@@ -107,7 +107,7 @@ export function populateCommand(populate: DepsCacheCommandInput): string {
     `mkdir -p ${shellQuote(cacheEntryDir)}`,
     `rm -f ${shellQuote(marker)}`,
     `rm -rf ${shellQuote(tmp)}`,
-    `cp -RL ${shellQuote(stageDir)} ${shellQuote(tmp)}`,
+    `cp -a ${shellQuote(stageDir)} ${shellQuote(tmp)}`,
     `rm -rf ${shellQuote(dest)}`,
     `mv ${shellQuote(tmp)} ${shellQuote(dest)}`,
     `touch ${shellQuote(marker)}`,

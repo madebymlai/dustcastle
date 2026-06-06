@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, execSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -76,7 +77,7 @@ describe("deps-cache shell command builders (copy assembled deps — ADR 0016)",
 
     expect(cmd).toBe(
       "if [ -f '/c/abc/.dustcastle-deps-cache-complete' ] && [ -d '/c/abc/node_modules' ]; then " +
-        "rm -f '.dustcastle-deps-install-success-node_modules' && rm -rf 'node_modules' && cp -RL '/c/abc/node_modules' 'node_modules' && chmod -R u+rwX 'node_modules' && touch '/c/abc'; " +
+        "rm -f '.dustcastle-deps-install-success-node_modules' && rm -rf 'node_modules' && cp -a '/c/abc/node_modules' 'node_modules' && chmod -R u+rwX 'node_modules' && touch '/c/abc'; " +
         "fi",
     );
   });
@@ -90,9 +91,33 @@ describe("deps-cache shell command builders (copy assembled deps — ADR 0016)",
 
     expect(cmd).toBe(
       "if [ -f '.dustcastle-deps-install-success-node_modules' ] && [ -d 'node_modules' ]; then " +
-        "mkdir -p '/c/abc' && rm -f '/c/abc/.dustcastle-deps-cache-complete' && rm -rf '/c/abc/node_modules.tmp' && cp -RL 'node_modules' '/c/abc/node_modules.tmp' && rm -rf '/c/abc/node_modules' && mv '/c/abc/node_modules.tmp' '/c/abc/node_modules' && touch '/c/abc/.dustcastle-deps-cache-complete'; " +
+        "mkdir -p '/c/abc' && rm -f '/c/abc/.dustcastle-deps-cache-complete' && rm -rf '/c/abc/node_modules.tmp' && cp -a 'node_modules' '/c/abc/node_modules.tmp' && rm -rf '/c/abc/node_modules' && mv '/c/abc/node_modules.tmp' '/c/abc/node_modules' && touch '/c/abc/.dustcastle-deps-cache-complete'; " +
         "fi",
     );
-    expect(cmd).not.toContain(`cp -RL '${installSuccessSentinel("node_modules")}'`);
+    expect(cmd).not.toContain(`cp -a '${installSuccessSentinel("node_modules")}'`);
+  });
+
+  it("populates through dangling symlinks and restores relative node bin shims to a new worktree", () => {
+    const cacheDir = tmp();
+    const original = tmp();
+    const restored = tmp();
+    const depsKey = "abc";
+
+    mkdirSync(join(original, "node_modules", ".bin"), { recursive: true });
+    mkdirSync(join(original, "node_modules", "real-pkg"), { recursive: true });
+    const cli = join(original, "node_modules", "real-pkg", "cli.js");
+    writeFileSync(cli, "#!/usr/bin/env node\nconsole.log('shim-ok');\n");
+    chmodSync(cli, 0o755);
+    symlinkSync("../real-pkg/cli.js", join(original, "node_modules", ".bin", "real-pkg"));
+    symlinkSync("../missing-target", join(original, "node_modules", "dangling-link"));
+    writeFileSync(join(original, installSuccessSentinel("node_modules")), "");
+
+    execSync(populateCommand({ cacheDir, depsKey, stageDir: "node_modules" }), { cwd: original, shell: "/bin/sh" });
+
+    expect(existsSync(completeMarker(cacheDir, depsKey))).toBe(true);
+
+    execSync(restoreCommand({ cacheDir, depsKey, stageDir: "node_modules" }), { cwd: restored, shell: "/bin/sh" });
+
+    expect(execFileSync(join(restored, "node_modules", ".bin", "real-pkg"), { encoding: "utf8" })).toBe("shim-ok\n");
   });
 });
