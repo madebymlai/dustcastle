@@ -33,7 +33,7 @@ const BY_CREDENTIAL: Record<Credential, CredentialDescriptor> = {
   github: GITHUB,
 };
 
-export const CREDENTIALS: readonly CredentialDescriptor[] = [GITHUB];
+export const CREDENTIALS: readonly CredentialDescriptor[] = Object.values(BY_CREDENTIAL);
 
 export function credentialDescriptor(credential: Credential): CredentialDescriptor {
   return BY_CREDENTIAL[credential];

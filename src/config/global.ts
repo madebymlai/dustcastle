@@ -43,10 +43,14 @@ export function readGlobalConfig(dir: string = DUSTCASTLE_HOME): Record<string, 
   } catch (e) {
     throw new Error(`invalid ~/.dustcastle/config.json: not valid JSON (${(e as Error).message})`);
   }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+  if (!isRecord(raw)) {
     throw new Error("invalid ~/.dustcastle/config.json: expected a JSON object");
   }
-  return raw as Record<string, unknown>;
+  return raw;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** The configured model selection, or `undefined` when no model is set yet. */
@@ -71,7 +75,7 @@ export function writeModel(
     throw new Error("model must be a non-empty pi model selector");
   }
   const dir = opts.dir ?? DUSTCASTLE_HOME;
-  const existing = existsSync(globalConfigPath(dir)) ? readGlobalConfig(dir) ?? {} : {};
+  const existing = readGlobalConfig(dir) ?? {};
   const thinking = opts.thinking !== undefined ? parseThinking(opts.thinking) : undefined;
   const next: Record<string, unknown> = {
     ...existing,
@@ -86,7 +90,7 @@ export function loadCredentialValues(dir: string = DUSTCASTLE_HOME): Record<stri
   const raw = readGlobalConfig(dir);
   if (raw === undefined) return {};
   const credentials = raw.credentials;
-  if (typeof credentials !== "object" || credentials === null || Array.isArray(credentials)) return {};
+  if (!isRecord(credentials)) return {};
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(credentials)) {
     if (typeof value === "string" && value.trim() !== "") out[key] = value;
@@ -107,11 +111,8 @@ export function writeCredentialValue(
     throw new Error("credential value must be non-empty");
   }
   const dir = opts.dir ?? DUSTCASTLE_HOME;
-  const existing = existsSync(globalConfigPath(dir)) ? readGlobalConfig(dir) ?? {} : {};
-  const existingCredentials =
-    typeof existing.credentials === "object" && existing.credentials !== null && !Array.isArray(existing.credentials)
-      ? (existing.credentials as Record<string, unknown>)
-      : {};
+  const existing = readGlobalConfig(dir) ?? {};
+  const existingCredentials = isRecord(existing.credentials) ? existing.credentials : {};
   writeGlobalConfig(dir, {
     ...existing,
     credentials: {

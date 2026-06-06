@@ -15,6 +15,19 @@ const CONFIG_ACTIONS = [
   { label: "Credentials — configure sandbox credentials", value: "credentials" },
 ] as const;
 
+const CREDENTIAL_OPTIONS: ReadonlyArray<{ readonly label: string; readonly value: Credential }> = CREDENTIALS.map(
+  (credential) => ({
+    label: `${credential.label} — ${credential.envName}`,
+    value: credential.credential,
+  }),
+);
+
+const KEY_ENTER = "\r";
+const KEY_NEWLINE = "\n";
+const KEY_CTRL_C = "\x03";
+const KEY_BACKSPACE = "\b";
+const KEY_DELETE = "\x7f";
+
 type ConfigAction = (typeof CONFIG_ACTIONS)[number]["value"];
 
 /**
@@ -72,17 +85,14 @@ async function pickAndWriteCredential(
   term: Terminal,
   dir: string | undefined,
 ): Promise<PickAndWriteCredentialOutcome> {
-  const options = CREDENTIALS.map((c) => ({
-    label: `${c.label} — ${c.envName}`,
-    value: c.credential,
-  }));
-  const selected = await singleSelect("Which credential?", options, term);
+  const selected = await singleSelect("Which credential?", CREDENTIAL_OPTIONS, term);
   if (selected === undefined) return "cancelled";
 
-  const descriptor = credentialDescriptor(selected as Credential);
+  const descriptor = credentialDescriptor(selected);
   const value = await promptHiddenLine(`Enter ${descriptor.envName}: `, term);
   if (value === undefined) return "cancelled";
-  writeCredentialValue(descriptor.envName, value, dir === undefined ? undefined : { dir });
+  const writeOpts = dir === undefined ? {} : { dir };
+  writeCredentialValue(descriptor.envName, value, writeOpts);
   term.error(`credential ${descriptor.envName} saved\n`);
   return "saved";
 }
@@ -107,16 +117,16 @@ function promptHiddenLine(prompt: string, term: Terminal): Promise<string | unde
       resolve(outcome);
     };
     dispose = term.onKey((chunk) => {
-      for (const key of [...chunk]) {
-        if (key === "\x03") {
+      for (const key of chunk) {
+        if (key === KEY_CTRL_C) {
           finish(undefined);
           return;
         }
-        if (key === "\r" || key === "\n") {
+        if (key === KEY_ENTER || key === KEY_NEWLINE) {
           finish(value);
           return;
         }
-        if (key === "\x7f" || key === "\b") {
+        if (key === KEY_DELETE || key === KEY_BACKSPACE) {
           value = value.slice(0, -1);
           continue;
         }
