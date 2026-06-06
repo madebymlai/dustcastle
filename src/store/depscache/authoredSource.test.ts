@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readGitHeadAuthoredSource } from "./authoredSource.js";
+import { readGitHeadAuthoredSource, readWorktreeAuthoredSource } from "./authoredSource.js";
 
 const tmps: string[] = [];
 function tmp(): string {
@@ -23,6 +23,7 @@ function committedProject(files: Record<string, string>): string {
   git("config", "user.email", "t@t");
   git("config", "user.name", "t");
   for (const [name, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
     writeFileSync(join(dir, name), content);
   }
   git("add", "-A");
@@ -99,5 +100,34 @@ describe("readGitHeadAuthoredSource (committed HEAD content reader)", () => {
     expect(content).toBeInstanceOf(Buffer);
     // Must return the committed content, not the dirty worktree
     expect(content!.toString()).toBe('{"name":"committed"}');
+  });
+
+  it("reads the file at projectDir, not the repo root, when projectDir is a subdirectory", () => {
+    // A monorepo: a same-named dependency file at the root AND in a member subdir.
+    // The reader must address it relative to projectDir (the member), not the repo
+    // root — git's `HEAD:<path>` is root-relative by default, which is the bug.
+    const root = committedProject({
+      "package.json": '{"name":"root"}',
+      "packages/foo/package.json": '{"name":"foo"}',
+    });
+
+    const content = readGitHeadAuthoredSource(join(root, "packages", "foo"), "package.json");
+    expect(content).toBeInstanceOf(Buffer);
+    expect(content!.toString()).toBe('{"name":"foo"}');
+  });
+
+  it("agrees with the worktree reader for the same (projectDir, file) in a subdirectory", () => {
+    // The two AuthoredSource adapters must be substitutable: given the same
+    // projectDir they must resolve the same logical file. A subdir is where they
+    // used to diverge (worktree → subdir file, git-HEAD → repo-root file).
+    const root = committedProject({
+      "package.json": '{"name":"root"}',
+      "packages/foo/package.json": '{"name":"foo"}',
+    });
+    const member = join(root, "packages", "foo");
+
+    expect(readGitHeadAuthoredSource(member, "package.json")).toEqual(
+      readWorktreeAuthoredSource(member, "package.json"),
+    );
   });
 });

@@ -32,9 +32,13 @@ export function readGitHeadAuthoredSource(projectDir: string, fileName: string):
     return readWorktreeAuthoredSource(projectDir, fileName);
   }
 
+  // `HEAD:<path>` is resolved relative to the REPO ROOT by default; the leading `./`
+  // makes git resolve it relative to the cwd (projectDir, via `-C`) instead. Without
+  // it a workspace member (projectDir = a subdir) would fingerprint the root's file,
+  // not its own — diverging from readWorktreeAuthoredSource's join(projectDir, fileName).
   const show = spawnSync(
     "git",
-    ["-C", projectDir, "show", `HEAD:${fileName}`],
+    ["-C", projectDir, "show", `HEAD:./${fileName}`],
     { encoding: "buffer" },
   );
   if (show.status !== 0) {

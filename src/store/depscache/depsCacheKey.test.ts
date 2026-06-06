@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Detection } from "../../detect/index.js";
 import { depsCacheKey, readWorktreeAuthoredSource } from "./index.js";
@@ -26,6 +27,22 @@ afterEach(() => {
 
 const nodeNpm: Detection = { ecosystem: "node", packageManager: "npm" };
 const goModules: Detection = { ecosystem: "go", packageManager: "go" };
+
+/** Create a committed git repo in a temp dir with the given (possibly nested) file tree. */
+function committedProject(files: Record<string, string>): string {
+  const dir = projectDir();
+  const git = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  git("init", "-q");
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "t");
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
+    writeFileSync(join(dir, name), content);
+  }
+  git("add", "-A");
+  git("commit", "-q", "-m", "init");
+  return dir;
+}
 
 describe("depsCacheKey (project deps fingerprint — ADR 0016)", () => {
   it("can fingerprint dependency inputs from an injected authored-source reader", () => {
@@ -286,6 +303,32 @@ describe("depsCacheKey (project deps fingerprint — ADR 0016)", () => {
 
       expect(key1).toBeDefined();
       expect(key2).toBe(key1);
+    });
+  });
+
+  describe("project grain: fingerprints projectDir's committed files, not the repo root", () => {
+    it("keys a workspace-member subdir on its own committed lockfile, distinct from the root's", () => {
+      // A monorepo with a committed lockfile at BOTH the root and a member subdir.
+      // Invoked for the member (as prepareWorkspace does, cwd = member dir), the key
+      // must fingerprint the MEMBER's lockfile — not the repo root's (git HEAD:<path>
+      // is root-relative by default, which would wrongly collapse them onto one key).
+      const root = committedProject({
+        "package-lock.json": '{"lockfileVersion":3,"name":"root"}',
+        "packages/foo/package-lock.json": '{"lockfileVersion":3,"name":"foo"}',
+      });
+      const member = join(root, "packages", "foo");
+
+      const rootKey = depsCacheKey(root, nodeNpm);
+      const memberKey = depsCacheKey(member, nodeNpm);
+
+      // Different committed deps → different keys (would be EQUAL before the fix).
+      expect(memberKey).not.toBe(rootKey);
+
+      // And the member key is exactly the key over the member's own committed bytes.
+      const memberBytes = new Map<string, Buffer>([
+        ["package-lock.json", Buffer.from('{"lockfileVersion":3,"name":"foo"}')],
+      ]);
+      expect(memberKey).toBe(depsCacheKey(member, nodeNpm, (_d, f) => memberBytes.get(f)));
     });
   });
 
