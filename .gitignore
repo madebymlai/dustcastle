@@ -32,3 +32,8 @@ result-*
 /.beads/
 # Local beads downgrade backup (clutter, never tracked).
 /.beads.bak-pre-downgrade/
+
+# Domain glossary kept local: untracked so an agent run can't re-commit an
+# unreviewed version (see AGENTS.md "Domain docs"). Re-track deliberately if/when
+# its contents are reviewed.
+/CONTEXT.md
