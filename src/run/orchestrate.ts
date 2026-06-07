@@ -44,7 +44,7 @@ export function phaseConfig(phase: PromptPhase): PhaseConfig {
 // Deterministic branch name for an issue. Re-planning the same issue always
 // yields the same branch, so accumulated progress on it is preserved.
 export function branchForIssue(id: string): string {
-  return `dustcastle/issue-${id}`;
+  return `sandcastle/issue-${id}`;
 }
 
 // Agent-context docs the implement/review WORKTREE needs even when a project
