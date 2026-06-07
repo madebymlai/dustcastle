@@ -17,7 +17,7 @@ After all branches are merged, make a single commit summarizing the merge.
 
 For each branch that was merged, close its issue using the following command:
 
-`bd close <ID> --reason="Completed by Sandcastle"`
+`bd close <ID> --reason="Completed by Dustcastle"`
 
 Here are all the issues:
 

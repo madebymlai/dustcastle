@@ -50,8 +50,8 @@ function repoWithStrandedBranch(branch: string): string {
 }
 
 describe("branchForIssue", () => {
-  it("is the deterministic sandcastle/issue-{id} branch name", () => {
-    expect(branchForIssue("42")).toBe("sandcastle/issue-42");
+  it("is the deterministic dustcastle/issue-{id} branch name", () => {
+    expect(branchForIssue("42")).toBe("dustcastle/issue-42");
   });
 });
 
@@ -93,11 +93,11 @@ describe("worktreeCopies (what the per-issue worktree carries past the git check
 describe("implementArgs", () => {
   it("maps an issue to the implement prompt's placeholders", () => {
     expect(
-      implementArgs({ id: "42", title: "Fix auth bug", branch: "sandcastle/issue-42" }),
+      implementArgs({ id: "42", title: "Fix auth bug", branch: "dustcastle/issue-42" }),
     ).toEqual({
       TASK_ID: "42",
       ISSUE_TITLE: "Fix auth bug",
-      BRANCH: "sandcastle/issue-42",
+      BRANCH: "dustcastle/issue-42",
     });
   });
 });
@@ -106,11 +106,11 @@ describe("reviewArgs", () => {
   it("passes both the branch and the base branch to the review prompt", () => {
     expect(
       reviewArgs(
-        { id: "42", title: "Fix auth bug", branch: "sandcastle/issue-42" },
+        { id: "42", title: "Fix auth bug", branch: "dustcastle/issue-42" },
         "main",
       ),
     ).toEqual({
-      BRANCH: "sandcastle/issue-42",
+      BRANCH: "dustcastle/issue-42",
       BASE_BRANCH: "main",
     });
   });
@@ -120,11 +120,11 @@ describe("mergeArgs", () => {
   it("renders the completed branches and issues as markdown lists", () => {
     expect(
       mergeArgs([
-        { id: "42", title: "Fix auth bug", branch: "sandcastle/issue-42" },
-        { id: "7", title: "Add logging", branch: "sandcastle/issue-7" },
+        { id: "42", title: "Fix auth bug", branch: "dustcastle/issue-42" },
+        { id: "7", title: "Add logging", branch: "dustcastle/issue-7" },
       ]),
     ).toEqual({
-      BRANCHES: "- sandcastle/issue-42\n- sandcastle/issue-7",
+      BRANCHES: "- dustcastle/issue-42\n- dustcastle/issue-7",
       ISSUES: "- 42: Fix auth bug\n- 7: Add logging",
     });
   });
@@ -365,7 +365,7 @@ describe("orchestrate merge gate (regression: a branch left ahead by a prior loo
     const dir = strandedRepo(branch);
     expect(branchAheadOf(dir, "main", branch)).toBe(true); // a prior loop's commit
     expect(branchAheadOf(dir, "main", "main")).toBe(false); // nothing ahead of itself
-    expect(branchAheadOf(dir, "main", "sandcastle/issue-nope")).toBe(false); // unborn → fail-safe
+    expect(branchAheadOf(dir, "main", "dustcastle/issue-nope")).toBe(false); // unborn → fail-safe
   });
 
   it("merges the stranded branch even when this loop's worker produces no new commits", async () => {

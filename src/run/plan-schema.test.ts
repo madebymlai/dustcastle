@@ -4,13 +4,13 @@ import { planSchema } from "./plan-schema.js";
 describe("planSchema", () => {
   it("accepts a well-formed plan of unblocked issues", () => {
     const parsed = planSchema.parse({
-      issues: [{ id: "42", title: "Fix auth bug", branch: "sandcastle/issue-42" }],
+      issues: [{ id: "42", title: "Fix auth bug", branch: "dustcastle/issue-42" }],
     });
     expect(parsed.issues).toHaveLength(1);
     expect(parsed.issues[0]).toEqual({
       id: "42",
       title: "Fix auth bug",
-      branch: "sandcastle/issue-42",
+      branch: "dustcastle/issue-42",
     });
   });
 
