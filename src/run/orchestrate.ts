@@ -8,7 +8,6 @@ import { validateCredentialKeysDisjointFromAgentEnv } from "../credentials/index
 import { noopLogger, type Logger } from "../log/index.js";
 import {
   bdReady,
-  branchForIssue,
   closeEligibleEpics,
   ensureBeads,
   realBeadsPreflightDeps,
@@ -131,7 +130,7 @@ const DEFAULT_MAX_LOOPS = 10;
 export const MERGE_ATTEMPTS = 3;
 
 export interface OrchestrateOptions extends ProvisionOptions {
-  /** Max plan→execute→merge cycles (default 10). */
+  /** Max execute→merge cycles (default 10). */
   readonly maxLoops?: number;
   /** Base branch the work merges into; defaults to the repo's current branch. */
   readonly targetBranch?: string;
@@ -217,14 +216,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
 
     for (let loop = 1; loop <= maxLoops; loop++) {
       logger.info({ event: "ready_pull", loop, maxLoops }, "pulling Ready set");
-      let issues: ReadyIssue[];
-      try {
-        issues = deps.bdReady(opts.cwd);
-      } catch (error) {
-        // A `bd ready` failure (non-zero exit or unparseable JSON) is an infra error
-        // — propagate it rather than swallowing.
-        throw error;
-      }
+      const issues: ReadyIssue[] = deps.bdReady(opts.cwd);
 
       if (issues.length === 0) {
         // Reap epics whose children are all done before going idle — they are

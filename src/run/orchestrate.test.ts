@@ -47,12 +47,6 @@ function repoWithStrandedBranch(branch: string): string {
   return dir;
 }
 
-describe("branchForIssue", () => {
-  it("is the deterministic sandcastle/issue-{id} branch name", () => {
-    expect(branchForIssue("42")).toBe("sandcastle/issue-42");
-  });
-});
-
 describe("worktreeCopies (what the per-issue worktree carries past the git checkout)", () => {
   const tmps: string[] = [];
   afterEach(() => {
