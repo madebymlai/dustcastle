@@ -487,18 +487,17 @@ Modules (each pure helper TDD'd — 13 new unit tests, all green; 217 total):
 
 | Module | Responsibility |
 |---|---|
-| `src/agent/prompts/*.md` + `prompts.ts` | The four bundled prompts (beads commands inline) + loader (`orchestrationPromptPath` / `loadOrchestrationPrompt`). `scripts/copy-assets.mjs` copies them into `dist/` at build (tsc emits only .js). |
-| `src/run/plan-schema.ts` | zod `planSchema` + `sandcastle.Output.object` `<plan>` definition. |
-| `src/run/orchestrate.ts` | Pure helpers: `branchForIssue`, `implementArgs`/`reviewArgs`/`mergeArgs`, `completedFrom` (only fulfilled outcomes with commits>0 advance to merge), `phaseConfig`. Plus the gated live loop `orchestrate()` + `executeIssue()`. |
-| `src/run/beads.ts` | Host preflight (`bd` on PATH + `.beads/` exists), injectable. |
+| `src/agent/prompts/*.md` + `prompts.ts` | The three bundled prompts (beads commands inline) + loader (`orchestrationPromptPath` / `loadOrchestrationPrompt`). `scripts/copy-assets.mjs` copies them into `dist/` at build (tsc emits only .js). |
+| `src/run/orchestrate.ts` | Pure helpers: `implementArgs`/`reviewArgs`/`mergeArgs`, `completedFrom` (only fulfilled outcomes with commits>0 advance to merge), `phaseConfig`. Plus the gated live loop `orchestrate()` + `executeIssue()`. |
+| `src/run/beads.ts` | Host preflight (`bd` on PATH + `.beads/` exists), `bdReady`/`ReadyIssue`/`branchForIssue` (Ready set + deterministic branch naming), `closeEligibleEpics`, injectable. |
 | `src/run/index.ts` | Extracted `withProvisionedSandbox` — the egress + scoped-GC-root confinement bracket (ADR 0005/0007), now shared by `run()` and `orchestrate()` so the invariant lives in one place. |
 
-Decisions locked (with the user): **zod** for the plan schema · **beads** as the tracker (baking
+Decisions locked (with the user): **beads** as the tracker (baking
 `bd` into the sandbox image = gated image work) · **single global model** (`buildPiAgent(loadModelSelection())`, ADR 0009) · `dustcastle run` *is* the orchestrator.
 
 `.beads` handling mirrors agentstack (`bin/sandcastle-setup.mjs`): `.beads/` is git-excluded
 (stealth) and carries a Dolt DB, so execute worktrees force-copy it via
-`copyToWorktree: [".beads"]`; plan/merge run on the host checkout so `bd close` persists.
+`copyToWorktree: [".beads"]`; the Merger runs on the host checkout so `bd close` persists.
 
 Findings / corrections made while porting:
 - **Inline `prompt` strings get no processing** in sandcastle (no `{{KEY}}`, no `` !`cmd` ``);
