@@ -9,8 +9,8 @@ export type PickAndWriteModelOutcome = "saved" | "cancelled" | "no-models";
 
 const NO_MODELS_MESSAGE =
   "dustcastle: no pi models found. Run `pi` then `/login` to authenticate, then re-run `dustcastle config`.\n";
-const NO_CONFIGURED_MODEL_MESSAGE =
-  "dustcastle: no model configured — run `dustcastle config`\n";
+export const NO_CONFIGURED_MODEL_MESSAGE =
+  "dustcastle: no model configured — run `dustcastle config`";
 
 /**
  * Interactively choose a pi model (provider → model), mirroring agentstack's
@@ -82,7 +82,7 @@ export async function ensureModel(
   const existing = loadModelSelection(dir);
   if (existing !== undefined) return "proceed";
   if (!term.isTTY) {
-    term.error(NO_CONFIGURED_MODEL_MESSAGE);
+    term.error(`${NO_CONFIGURED_MODEL_MESSAGE}\n`);
     return "no-model";
   }
 

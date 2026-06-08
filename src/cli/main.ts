@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { runAutoGcCommand } from "./autogc.js";
 import { runConfigHub } from "./config.js";
 import { runGcCommand } from "./gc.js";
-import { ensureModel, type EnsureModelOutcome } from "./model.js";
+import { ensureModel, NO_CONFIGURED_MODEL_MESSAGE, type EnsureModelOutcome } from "./model.js";
 import { processTerminal, type Terminal } from "./terminal.js";
 import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
@@ -87,9 +87,9 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
 
   // No agent model: nothing can run. Print the config hint and exit without
   // provisioning anything (no Store, no GC roots, no deps-cache entries).
-  // Unified across all modes (ADR 0017, refined in dustcastle-50k.1).
+  // Unified across all modes (ADR 0017).
   if (selection === undefined) {
-    console.error("dustcastle: no model configured — run `dustcastle config`");
+    console.error(NO_CONFIGURED_MODEL_MESSAGE);
     return EXIT_FAILURE;
   }
 
