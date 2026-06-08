@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
+import { EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
 import { runCli, USAGE } from "./main.js";
 import { InMemoryTerminal } from "./terminal.js";
 
@@ -23,6 +23,22 @@ describe("runCli command dispatch", () => {
     try {
       await expect(runCli(["model"])).resolves.toBe(EXIT_USAGE);
       expect(error.mock.calls[0]?.[0]).toContain("unknown command 'model'");
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("exits with the config hint when no model is configured, without provisioning", async () => {
+    const term = new InMemoryTerminal({ isTTY: true });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const exitCode = await runCli(["run"], {
+        terminal: () => term,
+        ensureModel: async () => "proceed",
+        loadModelSelection: () => undefined,
+      });
+      expect(exitCode).toBe(EXIT_FAILURE);
+      expect(error).toHaveBeenCalledWith("dustcastle: no model configured — run `dustcastle config`");
     } finally {
       error.mockRestore();
     }

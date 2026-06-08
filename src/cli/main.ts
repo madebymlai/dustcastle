@@ -1,16 +1,15 @@
 #!/usr/bin/env node
-import { DUSTCASTLE_HOME, loadModelSelection } from "../config/global.js";
+import { DUSTCASTLE_HOME, loadModelSelection, type ModelSelection } from "../config/global.js";
 import { createLogger } from "../log/pino.js";
 import { logPosture, logSweep } from "./posture.js";
 import { EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
-import { prepareRun } from "../run/index.js";
 import { orchestrate } from "../run/orchestrate.js";
 import { readLastSweepLine } from "../store/autogc.js";
 import { join } from "node:path";
 import { runAutoGcCommand } from "./autogc.js";
 import { runConfigHub } from "./config.js";
 import { runGcCommand } from "./gc.js";
-import { ensureModel } from "./model.js";
+import { ensureModel, type EnsureModelOutcome } from "./model.js";
 import { processTerminal, type Terminal } from "./terminal.js";
 import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
@@ -32,6 +31,8 @@ function createCliLogger() {
 export interface CliDeps {
   readonly terminal?: () => Terminal;
   readonly runConfig?: (term: Terminal) => Promise<number>;
+  readonly ensureModel?: (term: Terminal) => Promise<EnsureModelOutcome>;
+  readonly loadModelSelection?: () => ModelSelection | undefined;
 }
 
 export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number> {
@@ -63,7 +64,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   // project-local config). The first run with no model configured picks one
   // interactively — same as agentstack's install flow; `dustcastle config`
   // re-picks. Headless with no model fails fast before provisioning.
-  const modelOutcome = await ensureModel(terminal());
+  const modelOutcome = await (deps.ensureModel ?? ensureModel)(terminal());
   switch (modelOutcome) {
     case "proceed":
       break;
@@ -83,19 +84,14 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
 
   // dustcastle's half: detect → realize the Store → plan the Sandbox. Surface
   // the active runtime mode (ADR 0008 — never silent) and what was provisioned.
-  const selection = loadModelSelection();
+  const selection = (deps.loadModelSelection ?? loadModelSelection)();
 
-  // No agent model: nothing runs in the Sandbox. Provision the Store, print the
-  // posture, and stop — the user picks a model and re-runs.
+  // No agent model: nothing can run. Print the config hint and exit without
+  // provisioning anything (no Store, no GC roots, no deps-cache entries).
+  // Unified across all modes (ADR 0017, refined in dustcastle-50k.1).
   if (selection === undefined) {
-    const prepared = await prepareRun({
-      cwd,
-      logger: rootLogger.child({ mod: "store" }),
-    });
-    logPosture(rootLogger, prepared, {
-      note: "(sandbox provisioned and ready; run `dustcastle config` to choose an agent model)",
-    });
-    return EXIT_SUCCESS;
+    console.error("dustcastle: no model configured — run `dustcastle config`");
+    return EXIT_FAILURE;
   }
 
   // A model is set: drive the parallel-planner-with-review loop (plan → execute+
