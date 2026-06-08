@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as sandcastle from "@ai-hero/sandcastle";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
 import {
@@ -14,17 +13,16 @@ import {
   mergeArgs,
   orchestrate,
   phaseConfig,
-  PLANNER_ATTEMPTS,
   reviewArgs,
   worktreeCopies,
 } from "./orchestrate.js";
 import type { IssueOutcome, OrchestrateDeps } from "./orchestrate.js";
-import type { PlannedIssue } from "./plan-schema.js";
+import type { ReadyIssue } from "./beads.js";
+import { loadOrchestrationPrompt } from "../agent/prompts.js";
 
-function issue(id: string): PlannedIssue {
+function issue(id: string): ReadyIssue {
   return { id, title: `Issue ${id}`, branch: branchForIssue(id) };
 }
-import { loadOrchestrationPrompt } from "../agent/prompts.js";
 
 // A real repo whose `main` has one commit and whose deterministic per-issue `branch`
 // carries an EXTRA, unmerged commit — the "stranded" state an interrupted earlier loop
@@ -48,12 +46,6 @@ function repoWithStrandedBranch(branch: string): string {
   git("switch", "-q", "main");
   return dir;
 }
-
-describe("branchForIssue", () => {
-  it("is the deterministic sandcastle/issue-{id} branch name", () => {
-    expect(branchForIssue("42")).toBe("sandcastle/issue-42");
-  });
-});
 
 describe("worktreeCopies (what the per-issue worktree carries past the git checkout)", () => {
   const tmps: string[] = [];
@@ -148,9 +140,9 @@ describe("orchestrate logging", () => {
           prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      bdReady: () => [issue("42")],
       run: async (args) => {
         runNames.push(String(args.name));
-        if (args.name === "Planner") return { output: { issues: [issue("42")] } };
         if (args.name === "Merger") merged = true;
         return { output: { issues: [] } };
       },
@@ -168,12 +160,12 @@ describe("orchestrate logging", () => {
       deps,
     });
 
-    expect(runNames).toEqual(["Planner", "Merger"]);
+    expect(runNames).toEqual(["Merger"]);
     expect(root.records).toEqual([
       {
         level: "info",
-        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
-        msg: "planning",
+        fields: { mod: "orchestrate", event: "ready_pull", loop: 1, maxLoops: 1 },
+        msg: "pulling Ready set",
         args: [],
       },
       {
@@ -203,7 +195,7 @@ describe("orchestrate logging", () => {
           prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
-      run: async () => ({ output: { issues: [] } }),
+      bdReady: () => [],
       closeEligibleEpics: () => ({ closed: ["dustcastle-9lx"], count: 1 }),
     };
 
@@ -218,8 +210,8 @@ describe("orchestrate logging", () => {
     expect(root.records).toEqual([
       {
         level: "info",
-        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
-        msg: "planning",
+        fields: { mod: "orchestrate", event: "ready_pull", loop: 1, maxLoops: 1 },
+        msg: "pulling Ready set",
         args: [],
       },
       {
@@ -254,7 +246,7 @@ describe("orchestrate logging", () => {
           prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
-      run: async () => ({ output: { issues: [] } }),
+      bdReady: () => [],
       closeEligibleEpics: () => ({ closed: [], count: 0 }),
     };
 
@@ -269,8 +261,8 @@ describe("orchestrate logging", () => {
     expect(root.records).toEqual([
       {
         level: "info",
-        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
-        msg: "planning",
+        fields: { mod: "orchestrate", event: "ready_pull", loop: 1, maxLoops: 1 },
+        msg: "pulling Ready set",
         args: [],
       },
       {
@@ -294,7 +286,7 @@ describe("orchestrate logging", () => {
           prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
-      run: async () => ({ output: { issues: [] } }),
+      bdReady: () => [],
       closeEligibleEpics: () => {
         throw new Error("bd exited 1");
       },
@@ -313,8 +305,8 @@ describe("orchestrate logging", () => {
     expect(root.records).toEqual([
       {
         level: "info",
-        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
-        msg: "planning",
+        fields: { mod: "orchestrate", event: "ready_pull", loop: 1, maxLoops: 1 },
+        msg: "pulling Ready set",
         args: [],
       },
       {
@@ -330,6 +322,71 @@ describe("orchestrate logging", () => {
         args: [],
       },
     ]);
+  });
+});
+
+describe("orchestrate bdReady-driven loop", () => {
+  it("propagates a bdReady failure instead of swallowing it", async () => {
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      bdReady: () => {
+        throw new Error("bd exited 1");
+      },
+    };
+
+    await expect(
+      orchestrate({
+        cwd: "/repo",
+        maxLoops: 1,
+        beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+        deps,
+      }),
+    ).rejects.toThrow("bd exited 1");
+  });
+
+  it("re-pulls across loops — a second bdReady call picks up newly-unblocked issues", async () => {
+    const readyCalls: number[] = [];
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      branchAheadOf: () => false, // nothing merges
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      bdReady: () => {
+        readyCalls.push(readyCalls.length);
+        // Loop 1: two issues; loop 2: empty (idle).
+        if (readyCalls.length === 1) return [issue("1"), issue("2")];
+        return [];
+      },
+      createSandbox: async () => ({
+        run: async () => ({ commits: [] }),
+        close: async () => {},
+      }),
+    };
+
+    await orchestrate({
+      cwd: "/repo",
+      maxLoops: 3,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: createMemoryLogger().child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    // Proves the loop re-pulls: two calls to bdReady (loop 1 with issues, loop 2 empty).
+    expect(readyCalls).toEqual([0, 1]);
   });
 });
 
@@ -381,9 +438,9 @@ describe("orchestrate merge gate (regression: a branch left ahead by a prior loo
           prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      bdReady: () => [issue("42")],
       run: async (args) => {
         runNames.push(String(args.name));
-        if (args.name === "Planner") return { output: { issues: [issue("42")] } };
         // The Merger lands the stranded branch into main (the post-merge verification
         // then sees a clean, single-shot merge — no retry).
         if (args.name === "Merger") {
@@ -441,6 +498,7 @@ describe("orchestrate merge verification (Bug B: a Merger that no-ops must not p
           prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      bdReady: () => [issue("42")],
       // The worker finds the work already on the stranded branch and commits nothing new.
       createSandbox: async () => ({
         run: async () => ({ commits: [] }),
@@ -459,7 +517,6 @@ describe("orchestrate merge verification (Bug B: a Merger that no-ops must not p
     const deps: Partial<OrchestrateDeps> = {
       ...baseDeps(),
       run: async (args) => {
-        if (args.name === "Planner") return { output: { issues: [issue("42")] } };
         if (args.name === "Merger") mergerCalls++; // no-op: the branch never lands
         return { output: { issues: [] } };
       },
@@ -492,7 +549,6 @@ describe("orchestrate merge verification (Bug B: a Merger that no-ops must not p
     const deps: Partial<OrchestrateDeps> = {
       ...baseDeps(),
       run: async (args) => {
-        if (args.name === "Planner") return { output: { issues: [issue("42")] } };
         if (args.name === "Merger") {
           mergerCalls++;
           if (mergerCalls === 2) {
@@ -528,7 +584,6 @@ describe("orchestrate merge verification (Bug B: a Merger that no-ops must not p
     const deps: Partial<OrchestrateDeps> = {
       ...baseDeps(),
       run: async (args) => {
-        if (args.name === "Planner") return { output: { issues: [issue("42")] } };
         if (args.name === "Merger") {
           mergerCalls++;
           execFileSync("git", ["merge", "--ff-only", branch], { cwd: dir, stdio: "ignore" });
@@ -555,214 +610,11 @@ describe("orchestrate merge verification (Bug B: a Merger that no-ops must not p
   });
 });
 
-describe("orchestrate planner resilience (Bug A: a malformed <plan> must not crash the run)", () => {
-  // Sandcastle rejects a malformed <plan> with StructuredOutputError, exactly as the
-  // library does at runtime; the optional sessionId is what makes the documented
-  // resume-with-feedback recovery possible.
-  function planParseError(sessionId?: string): sandcastle.StructuredOutputError {
-    return new sandcastle.StructuredOutputError(
-      "Structured output tag <plan> contains invalid JSON",
-      {
-        tag: "plan",
-        rawMatched: "{ not json",
-        commits: [],
-        branch: "main",
-        ...(sessionId !== undefined ? { sessionId } : {}),
-      },
-    );
-  }
-
-  // The orchestrate seams every Bug-A test shares; each test supplies its own `run`.
-  function baseDeps(): Partial<OrchestrateDeps> {
-    return {
-      loadModelSelection: () => ({ model: "test/model" }),
-      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
-      currentGitBranch: () => "main",
-      branchAheadOf: () => true,
-      withProvisionedSandbox: async (_opts, body) =>
-        body({
-          provider: {},
-          prepared: {},
-          withSetupHooks: () => ({}),
-        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
-      createSandbox: async () => ({
-        run: async () => ({ commits: [{ sha: "a" }] }),
-        close: async () => {},
-      }),
-    };
-  }
-
-  const beads = { hasBdBinary: () => true, beadsDirExists: () => true };
-
-  it("recovers a malformed <plan> by resuming the planner session with feedback, then continues", async () => {
-    const plannerArgs: Record<string, unknown>[] = [];
-    const runNames: string[] = [];
-    const deps: Partial<OrchestrateDeps> = {
-      ...baseDeps(),
-      run: async (args) => {
-        runNames.push(String(args.name));
-        if (args.name === "Planner") {
-          plannerArgs.push(args);
-          if (plannerArgs.length === 1) throw planParseError("sess-1");
-          return { output: { issues: [issue("42")] } };
-        }
-        return { output: { issues: [] } };
-      },
-    };
-
-    await expect(
-      orchestrate({
-        cwd: "/repo",
-        maxLoops: 1,
-        beads,
-        logger: createMemoryLogger().child({ mod: "orchestrate" }),
-        deps,
-      }),
-    ).resolves.toBeUndefined();
-
-    // Recovered on the resume — not a blind re-plan: same session + inline corrective
-    // prompt, with promptFile dropped (it is mutually exclusive with prompt) and the
-    // structured-output definition kept so the resumed plan is re-validated.
-    expect(plannerArgs).toHaveLength(2);
-    expect(plannerArgs[1]).toMatchObject({ resumeSession: "sess-1" });
-    expect(plannerArgs[1]!.promptFile).toBeUndefined();
-    expect(String(plannerArgs[1]!.prompt)).toContain("<plan>");
-    expect(plannerArgs[1]!.output).toBe(plannerArgs[0]!.output);
-    expect(runNames).toContain("Merger"); // the run proceeded normally after recovery
-  });
-
-  it("stops the run gracefully after exhausting planner retries — never crashes, never reaps", async () => {
-    const root = createMemoryLogger();
-    let plannerCalls = 0;
-    let reaped = false;
-    const deps: Partial<OrchestrateDeps> = {
-      ...baseDeps(),
-      run: async (args) => {
-        if (args.name === "Planner") {
-          plannerCalls++;
-          throw planParseError(`sess-${plannerCalls}`);
-        }
-        return { output: { issues: [] } };
-      },
-      closeEligibleEpics: () => {
-        reaped = true;
-        return { closed: [], count: 0 };
-      },
-    };
-
-    await expect(
-      orchestrate({
-        cwd: "/repo",
-        maxLoops: 3,
-        beads,
-        logger: root.child({ mod: "orchestrate" }),
-        deps,
-      }),
-    ).resolves.toBeUndefined();
-
-    // Bounded retries within the one loop, then stop — NOT maxLoops × attempts, and
-    // NOT an idle-reap (an unparseable plan is not evidence the work is finished).
-    expect(plannerCalls).toBe(PLANNER_ATTEMPTS);
-    expect(reaped).toBe(false);
-    expect(
-      root.records.some((r) => r.level === "error" && r.fields.event === "planner_failed"),
-    ).toBe(true);
-  });
-
-  it("gives up immediately (no blind re-plan) when the rejected output has no resumable session", async () => {
-    let plannerCalls = 0;
-    const deps: Partial<OrchestrateDeps> = {
-      ...baseDeps(),
-      run: async (args) => {
-        if (args.name === "Planner") {
-          plannerCalls++;
-          throw planParseError(); // no sessionId ⇒ nothing to resume
-        }
-        return { output: { issues: [] } };
-      },
-    };
-
-    await expect(
-      orchestrate({
-        cwd: "/repo",
-        maxLoops: 1,
-        beads,
-        logger: createMemoryLogger().child({ mod: "orchestrate" }),
-        deps,
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(plannerCalls).toBe(1); // cannot resume, so no retry — but no crash either
-  });
-
-  it("stops gracefully when the session resume itself fails — recovery never crashes the run", async () => {
-    // The first planner output is rejected WITH a sessionId, so recovery tries to resume;
-    // but sandcastle's resume precheck throws a plain Error (e.g. the session was never
-    // captured to host). That must degrade to a clean stop, not propagate as a crash.
-    const root = createMemoryLogger();
-    let plannerCalls = 0;
-    const deps: Partial<OrchestrateDeps> = {
-      ...baseDeps(),
-      run: async (args) => {
-        if (args.name === "Planner") {
-          plannerCalls++;
-          if (args.resumeSession !== undefined) {
-            throw new Error(`resumeSession "${String(args.resumeSession)}" not found`);
-          }
-          throw planParseError("sess-1");
-        }
-        return { output: { issues: [] } };
-      },
-    };
-
-    await expect(
-      orchestrate({
-        cwd: "/repo",
-        maxLoops: 1,
-        beads,
-        logger: root.child({ mod: "orchestrate" }),
-        deps,
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(plannerCalls).toBe(2); // initial parse failure, then the failed resume attempt
-    expect(
-      root.records.some(
-        (r) => r.level === "warn" && r.fields.event === "planner_resume_failed",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not swallow a non-parse planner error — sandbox/infra failures still surface", async () => {
-    const deps: Partial<OrchestrateDeps> = {
-      ...baseDeps(),
-      run: async (args) => {
-        if (args.name === "Planner") throw new Error("sandbox vanished");
-        return { output: { issues: [] } };
-      },
-    };
-
-    await expect(
-      orchestrate({
-        cwd: "/repo",
-        maxLoops: 1,
-        beads,
-        logger: createMemoryLogger().child({ mod: "orchestrate" }),
-        deps,
-      }),
-    ).rejects.toThrow("sandbox vanished");
-  });
-});
-
 describe("phaseConfig", () => {
-  it("gives each phase its iteration budget; only plan uses structured output", () => {
-    expect(phaseConfig("plan")).toEqual({ maxIterations: 1, structuredOutput: true });
-    expect(phaseConfig("implement")).toEqual({
-      maxIterations: 100,
-      structuredOutput: false,
-    });
-    expect(phaseConfig("review")).toEqual({ maxIterations: 1, structuredOutput: false });
-    expect(phaseConfig("merge")).toEqual({ maxIterations: 1, structuredOutput: false });
+  it("gives each phase its iteration budget; no plan phase remains", () => {
+    expect(phaseConfig("implement")).toEqual({ maxIterations: 100 });
+    expect(phaseConfig("review")).toEqual({ maxIterations: 1 });
+    expect(phaseConfig("merge")).toEqual({ maxIterations: 1 });
   });
 });
 
@@ -788,15 +640,11 @@ describe("promptArgs cover their prompt's placeholders exactly", () => {
     });
   }
 
-  it("the plan prompt takes no args (structured output only)", () => {
-    expect(placeholders(loadOrchestrationPrompt("plan"))).toEqual(new Set());
-  });
-
   it("never uses sandcastle's reserved auto-injected branch placeholders", () => {
     // Passing {{SOURCE_BRANCH}} / {{TARGET_BRANCH}} in promptArgs is an error —
     // sandcastle injects them itself. We deliberately use our own {{BASE_BRANCH}}.
     const reserved = new Set(["SOURCE_BRANCH", "TARGET_BRANCH"]);
-    for (const phase of ["plan", "implement", "review", "merge"] as const) {
+    for (const phase of ["implement", "review", "merge"] as const) {
       for (const key of placeholders(loadOrchestrationPrompt(phase))) {
         expect(reserved.has(key)).toBe(false);
       }
@@ -806,10 +654,6 @@ describe("promptArgs cover their prompt's placeholders exactly", () => {
 
 describe("loadOrchestrationPrompt", () => {
   it("loads each bundled phase prompt with its beads commands and placeholders", () => {
-    const plan = loadOrchestrationPrompt("plan");
-    expect(plan).toContain("bd ready");
-    expect(plan).toContain("<plan>");
-
     const implement = loadOrchestrationPrompt("implement");
     expect(implement).toContain("{{TASK_ID}}");
     expect(implement).toContain("{{ISSUE_TITLE}}");

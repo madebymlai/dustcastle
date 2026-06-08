@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// The four orchestration phases. dustcastle ships these prompts as a built-in
+// The three orchestration phases. dustcastle ships these prompts as a built-in
 // workflow — they are not user-supplied or configurable (the loop is a
-// first-class feature, like agentstack's parallel-planner-with-review).
-export type PromptPhase = "plan" | "implement" | "review" | "merge";
+// first-class feature).
+export type PromptPhase = "implement" | "review" | "merge";
 
 // The prompts live as .md files next to this module so they read as markdown
 // rather than escaped string literals. import.meta.url resolves to src/ under

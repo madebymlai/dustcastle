@@ -7,10 +7,12 @@ import { buildPiAgent, loadModelSelection } from "../config/global.js";
 import { validateCredentialKeysDisjointFromAgentEnv } from "../credentials/index.js";
 import { noopLogger, type Logger } from "../log/index.js";
 import {
+  bdReady,
   closeEligibleEpics,
   ensureBeads,
   realBeadsPreflightDeps,
   type BeadsPreflightDeps,
+  type ReadyIssue,
 } from "./beads.js";
 import {
   withProvisionedSandbox,
@@ -18,33 +20,23 @@ import {
   type ProvisionOptions,
   type SandcastleHandoff,
 } from "./index.js";
-import { planOutput, type PlannedIssue } from "./plan-schema.js";
+
+export { branchForIssue } from "./beads.js";
 
 export interface PhaseConfig {
   readonly maxIterations: number;
-  // Only the plan phase emits a structured <plan>; structured output requires
-  // maxIterations: 1 (sandcastle aborts otherwise).
-  readonly structuredOutput: boolean;
 }
 
-// Per-phase iteration budgets, mirroring agentstack's loop: the implementer
-// gets a long leash; plan/review/merge each run a single pass.
+// Per-phase iteration budgets: the implementer gets a long leash;
+// review/merge each run a single pass.
 export function phaseConfig(phase: PromptPhase): PhaseConfig {
   switch (phase) {
     case "implement":
-      return { maxIterations: 100, structuredOutput: false };
-    case "plan":
-      return { maxIterations: 1, structuredOutput: true };
+      return { maxIterations: 100 };
     case "review":
     case "merge":
-      return { maxIterations: 1, structuredOutput: false };
+      return { maxIterations: 1 };
   }
-}
-
-// Deterministic branch name for an issue. Re-planning the same issue always
-// yields the same branch, so accumulated progress on it is preserved.
-export function branchForIssue(id: string): string {
-  return `sandcastle/issue-${id}`;
 }
 
 // Agent-context docs the implement/review WORKTREE needs even when a project
@@ -65,7 +57,7 @@ export function worktreeCopies(cwd: string): string[] {
 }
 
 // {{...}} substitutions for the implement prompt.
-export function implementArgs(issue: PlannedIssue): Record<string, string> {
+export function implementArgs(issue: ReadyIssue): Record<string, string> {
   return {
     TASK_ID: issue.id,
     ISSUE_TITLE: issue.title,
@@ -80,7 +72,7 @@ export function implementArgs(issue: PlannedIssue): Record<string, string> {
 // not sandcastle's "host active branch at run() time" (which is undefined for a
 // per-issue worktree). agentstack's prompt left this unfilled (a latent gap).
 export function reviewArgs(
-  issue: PlannedIssue,
+  issue: ReadyIssue,
   baseBranch: string,
 ): Record<string, string> {
   return {
@@ -91,7 +83,7 @@ export function reviewArgs(
 
 // {{...}} substitutions for the merge prompt: markdown lists of the completed
 // issues' branches and their id/title, for the merger to merge and close.
-export function mergeArgs(issues: readonly PlannedIssue[]): Record<string, string> {
+export function mergeArgs(issues: readonly ReadyIssue[]): Record<string, string> {
   return {
     BRANCHES: issues.map((i) => `- ${i.branch}`).join("\n"),
     ISSUES: issues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
@@ -102,7 +94,7 @@ export function mergeArgs(issues: readonly PlannedIssue[]): Record<string, strin
 // from the branch's state versus the target (see {@link branchAheadOf}), not from
 // this loop's commit count, so the outcome carries only the issue.
 export interface IssueOutcome {
-  readonly issue: PlannedIssue;
+  readonly issue: ReadyIssue;
 }
 
 // Of the parallel per-issue outcomes, the mergeable ones are those whose pipeline
@@ -112,8 +104,8 @@ export interface IssueOutcome {
 // order is preserved.
 export function completedFrom(
   results: readonly PromiseSettledResult<IssueOutcome>[],
-  isMergeable: (issue: PlannedIssue) => boolean,
-): PlannedIssue[] {
+  isMergeable: (issue: ReadyIssue) => boolean,
+): ReadyIssue[] {
   return results
     .filter(
       (r): r is PromiseFulfilledResult<IssueOutcome> => r.status === "fulfilled",
@@ -125,19 +117,8 @@ export function completedFrom(
 // ── The live multi-phase loop (gated: needs a pi+bd sandbox image, a host pi
 //    login, and a repo with beads issues — DUSTCASTLE_E2E on a capable host) ──
 
-/** agentstack's MAX_ITERATIONS: plan→execute→merge cycles before stopping. */
+/** MAX_ITERATIONS: ready→execute→merge cycles before stopping. */
 const DEFAULT_MAX_LOOPS = 10;
-
-/**
- * A non-deterministic planner occasionally emits a malformed `<plan>` that sandcastle
- * rejects with {@link sandcastle.StructuredOutputError} (missing tag / bad JSON / wrong
- * shape). That single bad generation must NOT kill a multi-loop run, so the planner
- * phase is attempted this many times — recovering between attempts by resuming that same
- * agent session with corrective feedback (sandcastle's documented recovery kit). A
- * resumed attempt is re-validated against the schema, so this re-asks for a WELL-FORMED
- * plan; it never accepts a malformed one.
- */
-export const PLANNER_ATTEMPTS = 3;
 
 /**
  * The Merger is a single-shot LLM agent prompted to merge the completed branches and
@@ -149,7 +130,7 @@ export const PLANNER_ATTEMPTS = 3;
 export const MERGE_ATTEMPTS = 3;
 
 export interface OrchestrateOptions extends ProvisionOptions {
-  /** Max plan→execute→merge cycles (default 10). */
+  /** Max execute→merge cycles (default 10). */
   readonly maxLoops?: number;
   /** Base branch the work merges into; defaults to the repo's current branch. */
   readonly targetBranch?: string;
@@ -159,10 +140,6 @@ export interface OrchestrateOptions extends ProvisionOptions {
   readonly logger?: Logger;
   /** Override the live sandcastle/model/provisioning seams (tests). */
   readonly deps?: Partial<OrchestrateDeps>;
-}
-
-interface PlannerResult {
-  readonly output: { readonly issues: PlannedIssue[] };
 }
 
 interface PhaseResult {
@@ -185,7 +162,8 @@ export interface OrchestrateDeps {
     opts: ProvisionOptions,
     body: (sandbox: ProvisionedSandbox) => Promise<T>,
   ): Promise<T>;
-  run(args: Record<string, unknown>): Promise<PlannerResult>;
+  bdReady(cwd: string): ReadyIssue[];
+  run(args: Record<string, unknown>): Promise<unknown>;
   createSandbox(args: Record<string, unknown>): Promise<IssueSandbox>;
   closeEligibleEpics(cwd: string): { closed: string[]; count: number };
 }
@@ -196,24 +174,24 @@ const liveOrchestrateDeps: OrchestrateDeps = {
   currentGitBranch,
   branchAheadOf,
   withProvisionedSandbox,
+  bdReady,
   run: sandcastle.run as unknown as OrchestrateDeps["run"],
   createSandbox: sandcastle.createSandbox as unknown as OrchestrateDeps["createSandbox"],
   closeEligibleEpics,
 };
 
 /**
- * The parallel-planner-with-review loop, ported from agentstack's `.sandcastle`
- * but on dustcastle's Store-provisioned podman provider (ADR 0001/0002). Each
- * cycle: one planner reads ready beads issues and emits a `<plan>` of unblocked
- * issues; each issue is implemented then reviewed in its own per-issue sandbox in
- * parallel; one merger merges the branches that committed and closes their issues.
- * Repeats so newly-unblocked issues get picked up.
+ * The deterministic Ready-set drain loop: each cycle pulls the Ready set from
+ * `bd ready`, implements then reviews each issue in its own per-issue sandbox in
+ * parallel, then merges the branches that landed and closes their issues. Repeats
+ * so newly-unblocked issues get picked up. There is no LLM planning phase — the
+ * Ready set is deterministic, drawn straight from beads.
  *
- * Plan and merge run on the host checkout (`sandcastle.run`) so `bd close`
- * persists to the real `.beads`; execute runs in isolated worktrees that carry a
- * copy of `.beads` and the agent-context docs (CONTEXT.md/CODING_STANDARDS.md/…) via
- * `copyToWorktree` — sandcastle's seam for files a clean git checkout omits
- * (the Dolt DB is git-excluded; context docs may be gitignored).
+ * Implement and review run in isolated worktrees that carry a copy of `.beads`
+ * and the agent-context docs (CONTEXT.md/CODING_STANDARDS.md/…) via `copyToWorktree`
+ * — sandcastle's seam for files a clean git checkout omits (the Dolt DB is
+ * git-excluded; context docs may be gitignored). The Merger runs on the host
+ * checkout so `bd close` persists to the real `.beads`.
  */
 export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   ensureBeads(opts.beads ?? realBeadsPreflightDeps(opts.cwd));
@@ -237,40 +215,12 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
     const hooks = withSetupHooks();
 
     for (let loop = 1; loop <= maxLoops; loop++) {
-      logger.info({ event: "planning", loop, maxLoops }, "planning");
-      const planned = await runPlannerWithRecovery(
-        deps.run,
-        {
-          sandbox: provider,
-          agent,
-          name: "Planner",
-          promptFile: orchestrationPromptPath("plan"),
-          maxIterations: phaseConfig("plan").maxIterations,
-          output: planOutput,
-          hooks,
-        },
-        logger,
-        loop,
-      );
-      if (planned === undefined) {
-        // Every attempt this loop produced an unparseable <plan>. Stop the run rather
-        // than crash — prior loops' merges already persist — and WITHOUT reaping epics:
-        // a malformed plan is not evidence the remaining work is finished. The next
-        // `dustcastle run` re-plans from current beads state.
-        logger.error(
-          { event: "planner_failed", loop, attempts: PLANNER_ATTEMPTS },
-          "planner produced no parseable <plan>; stopping",
-        );
-        return;
-      }
+      logger.info({ event: "ready_pull", loop, maxLoops }, "pulling Ready set");
+      const issues: ReadyIssue[] = deps.bdReady(opts.cwd);
 
-      // sandcastle has already validated output against planSchema at runtime;
-      // annotate the boundary because zod's inferred type doesn't flow through the
-      // run() overload (it widens to any).
-      const issues: PlannedIssue[] = planned.output.issues;
       if (issues.length === 0) {
         // Reap epics whose children are all done before going idle — they are
-        // containers the planner never picks up, so nothing else would close
+        // containers that `bd ready` never returns, so nothing else would close
         // them. A reap hiccup must not fail an otherwise-finished run, so warn
         // and leave them for the next run rather than throwing.
         try {
@@ -335,7 +285,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
 }
 
 interface ExecuteIssueArgs {
-  readonly issue: PlannedIssue;
+  readonly issue: ReadyIssue;
   readonly provider: ProvisionedSandbox["provider"];
   readonly agent: sandcastle.AgentProvider;
   readonly hooks: NonNullable<SandcastleHandoff["hooks"]>;
@@ -393,89 +343,6 @@ async function executeIssue(args: ExecuteIssueArgs): Promise<IssueOutcome> {
   }
 }
 
-/**
- * Run the planner, recovering from a rejected `<plan>` by resuming that same agent
- * session with corrective feedback — sandcastle ships {@link sandcastle.StructuredOutputError}
- * with `sessionId` precisely so the caller can ask the agent to re-emit valid output
- * without losing its planning context. Bounded to {@link PLANNER_ATTEMPTS}; every attempt
- * keeps the structured-output definition, so a resumed plan is re-validated (this re-asks
- * for a well-formed plan, it never accepts a malformed one). Returns undefined when no
- * attempt yielded a parseable plan, so the caller can stop the run gracefully instead of
- * crashing. A non-parse error from the FIRST (normal) planner call is the run's normal
- * error path and propagates unchanged; a non-parse error raised while RESUMING (e.g.
- * sandcastle's resume precheck when the session was never captured to host) means recovery
- * itself is unavailable, so we stop gracefully rather than let it crash the run.
- */
-async function runPlannerWithRecovery(
-  run: OrchestrateDeps["run"],
-  plannerArgs: Record<string, unknown>,
-  logger: Logger,
-  loop: number,
-): Promise<PlannerResult | undefined> {
-  let args = plannerArgs;
-  let resuming = false; // true once we are re-running via session resume (recovery)
-  for (let attempt = 1; attempt <= PLANNER_ATTEMPTS; attempt++) {
-    try {
-      return await run(args);
-    } catch (error) {
-      if (!(error instanceof sandcastle.StructuredOutputError)) {
-        // A non-parse failure on the FIRST (normal) planner call is the run's normal
-        // error path — propagate it. The same WHILE RESUMING means our own recovery
-        // could not run (e.g. sandcastle's resume precheck threw because the session was
-        // never captured to host); that must never crash a run a malformed plan should
-        // merely have paused, so stop gracefully instead.
-        if (!resuming) throw error;
-        logger.warn(
-          {
-            event: "planner_resume_failed",
-            loop,
-            err: error instanceof Error ? error.message : String(error),
-          },
-          "could not resume the planner session to recover; stopping",
-        );
-        return undefined;
-      }
-      logger.warn(
-        {
-          event: "planner_parse_failed",
-          loop,
-          attempt,
-          maxAttempts: PLANNER_ATTEMPTS,
-          err: error.message,
-        },
-        "planner emitted an unparseable <plan>",
-      );
-      // Recover only by resuming the rejected session with feedback. Without a captured
-      // session there is nothing to resume, so stop rather than blindly re-plan.
-      if (error.sessionId === undefined || attempt === PLANNER_ATTEMPTS) return undefined;
-      // `prompt` and `promptFile` are mutually exclusive — swap the file out for the
-      // inline corrective prompt and resume that session.
-      const { promptFile: _promptFile, ...rest } = args;
-      args = { ...rest, resumeSession: error.sessionId, prompt: plannerFeedback(error) };
-      resuming = true;
-    }
-  }
-  return undefined;
-}
-
-/**
- * The corrective prompt for a planner session resume: states exactly why the previous
- * structured output was rejected (and what it contained) and asks for a clean re-emit.
- * The literal `<tag>` must appear because sandcastle re-validates that a resumed prompt
- * names the structured-output tag when `output` is set (see RunOptions.output).
- */
-function plannerFeedback(error: sandcastle.StructuredOutputError): string {
-  const cause =
-    error.rawMatched !== undefined
-      ? `${error.message}. Your previous output contained:\n\n${error.rawMatched}`
-      : error.message;
-  return (
-    `That response was rejected: ${cause}\n\n` +
-    `Re-emit your answer as a single <${error.tag}>…</${error.tag}> block whose contents ` +
-    `are valid JSON matching the required schema, and output nothing else.`
-  );
-}
-
 interface MergePhaseArgs {
   readonly run: OrchestrateDeps["run"];
   readonly branchAheadOf: OrchestrateDeps["branchAheadOf"];
@@ -484,7 +351,7 @@ interface MergePhaseArgs {
   readonly hooks: NonNullable<SandcastleHandoff["hooks"]>;
   readonly cwd: string;
   readonly targetBranch: string;
-  readonly completed: readonly PlannedIssue[];
+  readonly completed: readonly ReadyIssue[];
   readonly logger: Logger;
   readonly loop: number;
 }
@@ -505,7 +372,7 @@ async function mergeCompleted(args: MergePhaseArgs): Promise<void> {
     { event: "merge", loop, completedCount: args.completed.length },
     "merging branches",
   );
-  let toMerge: readonly PlannedIssue[] = args.completed;
+  let toMerge: readonly ReadyIssue[] = args.completed;
   for (let attempt = 1; attempt <= MERGE_ATTEMPTS; attempt++) {
     await run({
       sandbox: provider,
