@@ -918,7 +918,7 @@ describe("dustlessWorktreeCopies (base copies + gitignored dirs in dustless mode
 
   it("in dustless mode, augments base copies with gitignored dirs, deduplicating overlaps", () => {
     const dir = gitRepoWithContext(["node_modules"]);
-    const copies = dustlessWorktreeCopies(dir, { dustless: true });
+    const copies = dustlessWorktreeCopies(dir, true);
     expect(copies).toContain(".beads");
     expect(copies).toContain("CONTEXT.md");
     expect(copies).toContain("node_modules");
@@ -928,7 +928,7 @@ describe("dustlessWorktreeCopies (base copies + gitignored dirs in dustless mode
 
   it("in dustless mode with no gitignored dirs, returns base copies unchanged", () => {
     const dir = gitRepoWithContext([]);
-    const copies = dustlessWorktreeCopies(dir, { dustless: true });
+    const copies = dustlessWorktreeCopies(dir, true);
     expect(copies).toContain(".beads");
     expect(copies.filter((c) => c === ".beads")).toHaveLength(1);
   });
@@ -943,7 +943,7 @@ describe("orchestrate dustless seam selection", () => {
   it("in dustless mode, passes host-ignored deps dirs in copyToWorktree to createSandbox", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-cwt-"));
     tmps.push(dir);
-    // Bare-git-repo setup (no .gitignore commit — untracked node_modules won't show as ignored)
+
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
     execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "ignore" });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });

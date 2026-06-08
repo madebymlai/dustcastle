@@ -91,7 +91,6 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
     );
     return output
       .split("\0")
-      .filter((entry) => entry.length > 0)
       .filter((entry) => entry.endsWith("/")) // only directories (trailing slash from --directory)
       .map((entry) => entry.slice(0, -1)); // strip trailing slash
   } catch {
@@ -108,10 +107,10 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
  */
 export function dustlessWorktreeCopies(
   cwd: string,
-  opts?: { dustless?: boolean },
+  dustless?: boolean,
 ): string[] {
   const base = worktreeCopies(cwd);
-  if (!opts?.dustless) return base;
+  if (!dustless) return base;
   const ignored = dustlessIgnoredDirs(cwd);
   const baseSet = new Set(base);
   return [...base, ...ignored.filter((d) => !baseSet.has(d))];
@@ -298,7 +297,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
 
   // `.beads` + any agent-context docs the isolated worktrees must carry past the
   // git checkout (computed once from the host project root).
-  const copyToWorktree = dustlessWorktreeCopies(opts.cwd, opts.dustless !== undefined ? { dustless: opts.dustless } : undefined);
+  const copyToWorktree = dustlessWorktreeCopies(opts.cwd, opts.dustless);
 
   // The dustless flag selects the host bracket (noSandbox) instead of the Store
   // bracket (podman). Both satisfy the same body contract so the loop is identical.
