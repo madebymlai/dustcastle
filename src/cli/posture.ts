@@ -80,6 +80,17 @@ interface ParsedSweep {
 
 const SWEEP_LINE_PATTERN = /^(\d+) last sweep freed (\d+) bytes \((\d+) path\(s\) collected\)$/;
 
+/**
+ * Surface the host posture for a dustless run: a dedicated warn-level line stating
+ * the agent acts directly on the host with no isolation, plus the agent runner/model
+ * line (ADR 0014 — never-silent). No confirmation prompt is shown — the `-d` flag is
+ * the opt-in, and `noSandbox` already honors the agent's own permission model.
+ */
+export function logHostPosture(logger: Logger, agent: AgentPosture): void {
+  logger.warn("agents act directly on the host with no isolation");
+  logger.info({ ...agent }, "agent ready");
+}
+
 function parseSweepLine(line: string): ParsedSweep | undefined {
   const match = SWEEP_LINE_PATTERN.exec(line);
   if (match === null) return undefined;

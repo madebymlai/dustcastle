@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { DUSTCASTLE_HOME, loadModelSelection, type ModelSelection } from "../config/global.js";
 import { createLogger } from "../log/pino.js";
-import { logPosture, logSweep } from "./posture.js";
+import { logHostPosture, logPosture, logSweep } from "./posture.js";
 import { EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
 import { orchestrate, type OrchestrateOptions } from "../run/orchestrate.js";
 import { parseRunArgs } from "./parseRunArgs.js";
@@ -102,6 +102,15 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   //
   // Parse the dustless flag from argv[1:] (argv[0] is the "run" command).
   const { dustless } = parseRunArgs(argv.slice(1));
+
+  // Surface the host posture for a dustless run: the agent acts directly on the
+  // host with no isolation (ADR 0014 — never-silent). No confirmation prompt is
+  // shown — the `-d` flag is the opt-in, and `noSandbox` already honors the
+  // agent's own permission model.
+  if (dustless) {
+    logHostPosture(rootLogger, { runner: "pi", model: selection.model, mount: "~/.pi/agent" });
+  }
+
   const runOrchestrate = deps.orchestrate ?? orchestrate;
   await runOrchestrate({
     cwd,
