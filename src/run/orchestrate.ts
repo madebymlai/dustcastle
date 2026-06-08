@@ -223,8 +223,10 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
         // containers that `bd ready` never returns, so nothing else would close
         // them. A reap hiccup must not fail an otherwise-finished run, so warn
         // and leave them for the next run rather than throwing.
+        let reaped = 0;
         try {
           const { closed, count } = deps.closeEligibleEpics(opts.cwd);
+          reaped = count;
           if (count > 0) {
             logger.info({ event: "epic_close_eligible", closed: closed.join(", "), count }, "reaped finished epics");
           }
@@ -234,6 +236,13 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
             { event: "epic_reap_failed", err },
             "epic reap failed; leaving epics for the next run",
           );
+        }
+        // Closing an epic unblocks any issue that was blocked-by it, so those
+        // become Ready on the next pull. Loop again to drain them rather than
+        // declaring idle here — otherwise the newly-unblocked work is stranded
+        // until the next run.
+        if (reaped > 0) {
+          continue;
         }
         logger.info({ event: "idle", loop, maxLoops }, "nothing left to do");
         return;
