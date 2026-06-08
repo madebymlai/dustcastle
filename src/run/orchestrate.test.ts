@@ -191,8 +191,9 @@ describe("orchestrate logging", () => {
     ]);
   });
 
-  it("reaps close-eligible epics, logging the reap before declaring idle", async () => {
+  it("reaps close-eligible epics, then re-plans and idles only once the reap finds nothing", async () => {
     const root = createMemoryLogger();
+    const reapCalls: number[] = [];
     const deps: Partial<OrchestrateDeps> = {
       loadModelSelection: () => ({ model: "test/model" }),
       buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
@@ -204,12 +205,19 @@ describe("orchestrate logging", () => {
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       run: async () => ({ output: { issues: [] } }),
-      closeEligibleEpics: () => ({ closed: ["dustcastle-9lx"], count: 1 }),
+      // Loop 1 closes an epic (which would unblock dependents), so the loop must
+      // re-plan; loop 2's reap finds nothing close-eligible, so the run idles.
+      closeEligibleEpics: () => {
+        reapCalls.push(reapCalls.length);
+        return reapCalls.length === 1
+          ? { closed: ["dustcastle-9lx"], count: 1 }
+          : { closed: [], count: 0 };
+      },
     };
 
     await orchestrate({
       cwd: "/repo",
-      maxLoops: 1,
+      maxLoops: 2,
       beads: { hasBdBinary: () => true, beadsDirExists: () => true },
       logger: root.child({ mod: "orchestrate" }),
       deps,
@@ -218,7 +226,7 @@ describe("orchestrate logging", () => {
     expect(root.records).toEqual([
       {
         level: "info",
-        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 1 },
+        fields: { mod: "orchestrate", event: "planning", loop: 1, maxLoops: 2 },
         msg: "planning",
         args: [],
       },
@@ -235,11 +243,67 @@ describe("orchestrate logging", () => {
       },
       {
         level: "info",
-        fields: { mod: "orchestrate", event: "idle", loop: 1, maxLoops: 1 },
+        fields: { mod: "orchestrate", event: "planning", loop: 2, maxLoops: 2 },
+        msg: "planning",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { mod: "orchestrate", event: "idle", loop: 2, maxLoops: 2 },
         msg: "nothing left to do",
         args: [],
       },
     ]);
+  });
+
+  it("re-plans after a reap closes an epic — its newly-unblocked dependents get executed, not stranded", async () => {
+    const plannerCalls: number[] = [];
+    const reapCalls: number[] = [];
+    const executed: string[] = [];
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      branchAheadOf: () => false, // nothing merges
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: {},
+          prepared: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      run: async (args) => {
+        if (args.name !== "Planner") return { output: { issues: [] } };
+        plannerCalls.push(plannerCalls.length);
+        // Loop 1: nothing plannable — the dependent is still blocked by an open epic.
+        // Loop 2 (reached only if the reap re-plans): the now-unblocked dependent.
+        return plannerCalls.length === 2
+          ? { output: { issues: [issue("unblocked")] } }
+          : { output: { issues: [] } };
+      },
+      // The first reap closes the epic (unblocking the dependent); later reaps find nothing.
+      closeEligibleEpics: () => {
+        reapCalls.push(reapCalls.length);
+        return reapCalls.length === 1
+          ? { closed: ["epic-1"], count: 1 }
+          : { closed: [], count: 0 };
+      },
+      createSandbox: async (args) => {
+        executed.push(String(args.branch));
+        return { run: async () => ({ commits: [] }), close: async () => {} };
+      },
+    };
+
+    await orchestrate({
+      cwd: "/repo",
+      maxLoops: 3,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: createMemoryLogger().child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    // The reap on loop 1 must trigger another planning pass (loop 2) that finds and
+    // executes the dependent the closed epic unblocked — rather than declaring idle.
+    expect(executed).toEqual([branchForIssue("unblocked")]);
   });
 
   it("stays quiet about the reap when nothing was close-eligible (no count:0 noise)", async () => {
