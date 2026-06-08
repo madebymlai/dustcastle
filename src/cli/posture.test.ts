@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryLogger } from "../log/fake.js";
-import { logPosture, logSweep, type PreparedPosture } from "./posture.js";
+import { logHostPosture, logPosture, logSweep, type PreparedPosture } from "./posture.js";
 
 const prepared = {
   ecosystems: [
@@ -73,4 +73,27 @@ describe("posture logging", () => {
       { level: "info", fields: {}, msg: "last GC sweep: garbled gc line", args: [] },
     ]);
   });
+});
+
+describe("host posture logging", () => {
+  it("emits a warn-level no-isolation line and an info-level agent ready line", () => {
+    const logger = createMemoryLogger();
+    logHostPosture(logger, { runner: "pi", model: "openai/gpt-4.1", mount: "~/.pi/agent" });
+
+    expect(logger.records).toEqual([
+      {
+        level: "warn",
+        fields: {},
+        msg: "agents act directly on the host with no isolation",
+        args: [],
+      },
+      {
+        level: "info",
+        fields: { runner: "pi", model: "openai/gpt-4.1", mount: "~/.pi/agent" },
+        msg: "agent ready",
+        args: [],
+      },
+    ]);
+  });
+
 });
