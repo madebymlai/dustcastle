@@ -1,7 +1,7 @@
 <h1 align="center">d&nbsp;u&nbsp;s&nbsp;t&nbsp;c&nbsp;a&nbsp;s&nbsp;t&nbsp;l&nbsp;e</h1>
 
 <div align="center">
-<img src="docs/hero.png" alt="dustcastle" width="100%">
+<img src="docs/hero.png?v=2" alt="dustcastle" width="100%">
 
 <strong>One toolchain store for every AI-agent sandbox. Install once, share everywhere, any language.</strong>
 
