@@ -43,4 +43,17 @@ describe("runCli command dispatch", () => {
       error.mockRestore();
     }
   });
+
+  it("exits with EXIT_FAILURE in headless mode when no model is configured", async () => {
+    const term = new InMemoryTerminal({ isTTY: false });
+    const exitCode = await runCli(["run"], {
+      terminal: () => term,
+      ensureModel: async (t) => {
+        t.error("dustcastle: no model configured — run `dustcastle config`\n");
+        return "no-model";
+      },
+    });
+    expect(exitCode).toBe(EXIT_FAILURE);
+    expect(term.errorOutput).toContain("no model configured — run `dustcastle config`");
+  });
 });
