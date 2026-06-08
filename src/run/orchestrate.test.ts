@@ -145,7 +145,6 @@ describe("orchestrate logging", () => {
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       run: async (args) => {
@@ -201,7 +200,6 @@ describe("orchestrate logging", () => {
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       run: async () => ({ output: { issues: [] } }),
@@ -268,7 +266,6 @@ describe("orchestrate logging", () => {
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       run: async (args) => {
@@ -315,7 +312,6 @@ describe("orchestrate logging", () => {
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       run: async () => ({ output: { issues: [] } }),
@@ -355,7 +351,6 @@ describe("orchestrate logging", () => {
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       run: async () => ({ output: { issues: [] } }),
@@ -442,7 +437,6 @@ describe("orchestrate merge gate (regression: a branch left ahead by a prior loo
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       run: async (args) => {
@@ -502,7 +496,6 @@ describe("orchestrate merge verification (Bug B: a Merger that no-ops must not p
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       // The worker finds the work already on the stranded branch and commits nothing new.
@@ -646,7 +639,6 @@ describe("orchestrate planner resilience (Bug A: a malformed <plan> must not cra
       withProvisionedSandbox: async (_opts, body) =>
         body({
           provider: {},
-          prepared: {},
           withSetupHooks: () => ({}),
         } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
       createSandbox: async () => ({
@@ -815,6 +807,93 @@ describe("orchestrate planner resilience (Bug A: a malformed <plan> must not cra
         deps,
       }),
     ).rejects.toThrow("sandbox vanished");
+  });
+});
+
+describe("orchestrate dustless seam selection", () => {
+  it("routes to the host bracket when dustless is set; to the Store bracket otherwise", async () => {
+    const storeCalls: unknown[] = [];
+    const hostCalls: unknown[] = [];
+
+    async function runWithFlag(dustless: boolean): Promise<void> {
+      storeCalls.length = 0;
+      hostCalls.length = 0;
+      const deps: Partial<OrchestrateDeps> = {
+        loadModelSelection: () => ({ model: "test/model" }),
+        buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+        currentGitBranch: () => "main",
+        branchAheadOf: () => true,
+        withProvisionedSandbox: async (_opts, body) => {
+          storeCalls.push(_opts);
+          return body({
+            provider: { type: "podman" },
+            withSetupHooks: () => ({}),
+          } as unknown as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]);
+        },
+        withHostProvisioning: async (_opts, body) => {
+          hostCalls.push(_opts);
+          return body({
+            provider: { type: "noSandbox" },
+            withSetupHooks: () => ({}),
+          } as unknown as Parameters<Parameters<OrchestrateDeps["withHostProvisioning"]>[1]>[0]);
+        },
+        run: async () => ({ output: { issues: [] } }),
+        closeEligibleEpics: () => ({ closed: [], count: 0 }),
+      };
+      await orchestrate({
+        cwd: "/repo",
+        maxLoops: 1,
+        dustless,
+        beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+        logger: createMemoryLogger().child({ mod: "orchestrate" }),
+        deps,
+      });
+    }
+
+    // Store bracket when dustless is not set.
+    await runWithFlag(false);
+    expect(storeCalls).toHaveLength(1);
+    expect(hostCalls).toHaveLength(0);
+
+    // Host bracket when dustless is set.
+    await runWithFlag(true);
+    expect(hostCalls).toHaveLength(1);
+    expect(storeCalls).toHaveLength(0);
+  });
+
+  it("uses the Store bracket by default when no dustless flag is passed", async () => {
+    let calledStore = false;
+    let calledHost = false;
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      branchAheadOf: () => true,
+      withProvisionedSandbox: async (_opts, body) => {
+        calledStore = true;
+        return body({
+          provider: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]);
+      },
+      withHostProvisioning: (async (_opts, body) => {
+        calledHost = true;
+        return body({ provider: {}, withSetupHooks: () => ({}) } as never);
+      }) as OrchestrateDeps["withHostProvisioning"],
+      run: async () => ({ output: { issues: [] } }),
+      closeEligibleEpics: () => ({ closed: [], count: 0 }),
+    };
+
+    await orchestrate({
+      cwd: "/repo",
+      maxLoops: 1,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: createMemoryLogger().child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    expect(calledStore).toBe(true);
+    expect(calledHost).toBe(false);
   });
 });
 

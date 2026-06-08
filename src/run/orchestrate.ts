@@ -13,6 +13,7 @@ import {
   type BeadsPreflightDeps,
 } from "./beads.js";
 import {
+  withHostProvisioning,
   withProvisionedSandbox,
   type ProvisionedSandbox,
   type ProvisionOptions,
@@ -149,6 +150,8 @@ export const PLANNER_ATTEMPTS = 3;
 export const MERGE_ATTEMPTS = 3;
 
 export interface OrchestrateOptions extends ProvisionOptions {
+  /** Run the loop via noSandbox on the host (--dustless / -d). */
+  readonly dustless?: boolean;
   /** Max plan→execute→merge cycles (default 10). */
   readonly maxLoops?: number;
   /** Base branch the work merges into; defaults to the repo's current branch. */
@@ -185,9 +188,20 @@ export interface OrchestrateDeps {
     opts: ProvisionOptions,
     body: (sandbox: ProvisionedSandbox) => Promise<T>,
   ): Promise<T>;
+  withHostProvisioning<T>(
+    opts: ProvisionOptions,
+    body: (sandbox: ProvisionedSandbox) => Promise<T>,
+  ): Promise<T>;
   run(args: Record<string, unknown>): Promise<PlannerResult>;
   createSandbox(args: Record<string, unknown>): Promise<IssueSandbox>;
   closeEligibleEpics(cwd: string): { closed: string[]; count: number };
+}
+
+async function liveHostProvisioning<T>(
+  _opts: ProvisionOptions,
+  body: (sandbox: ProvisionedSandbox) => Promise<T>,
+): Promise<T> {
+  return withHostProvisioning(body);
 }
 
 const liveOrchestrateDeps: OrchestrateDeps = {
@@ -196,6 +210,7 @@ const liveOrchestrateDeps: OrchestrateDeps = {
   currentGitBranch,
   branchAheadOf,
   withProvisionedSandbox,
+  withHostProvisioning: liveHostProvisioning as OrchestrateDeps["withHostProvisioning"],
   run: sandcastle.run as unknown as OrchestrateDeps["run"],
   createSandbox: sandcastle.createSandbox as unknown as OrchestrateDeps["createSandbox"],
   closeEligibleEpics,
@@ -233,7 +248,10 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   // git checkout (computed once from the host project root).
   const copyToWorktree = worktreeCopies(opts.cwd);
 
-  await deps.withProvisionedSandbox(opts, async ({ provider, withSetupHooks }) => {
+  // The dustless flag selects the host bracket (noSandbox) instead of the Store
+  // bracket (podman). Both satisfy the same body contract so the loop is identical.
+  const bracket = opts.dustless ? deps.withHostProvisioning : deps.withProvisionedSandbox;
+  await bracket(opts, async ({ provider, withSetupHooks }) => {
     const hooks = withSetupHooks();
 
     for (let loop = 1; loop <= maxLoops; loop++) {

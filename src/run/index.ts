@@ -24,6 +24,8 @@ import { runStreamingAsync, type StreamingLogLevel } from "../process/streaming.
 
 export { gcProjectKey, storeClosures, type GcProjectKeyInput } from "./storeClosures.js";
 
+export { withHostProvisioning, type HostProvisioningOptions } from "./hostProvisioning.js";
+
 export interface PrepareOptions {
   /** The project directory to run in (defaults to the process cwd at the CLI). */
   readonly cwd: string;
@@ -201,7 +203,6 @@ export async function run(
 
 /** A provisioned sandbox seam shared by single-run and orchestration. */
 export interface ProvisionedSandbox {
-  readonly prepared: PreparedRun;
   /** The podman provider: Store mounted read-only and pi login mounted. */
   readonly provider: ReturnType<typeof podman>;
   /** Prepend dustcastle's deps-staging hooks ahead of the caller's onSandboxReady. */
@@ -318,7 +319,6 @@ export async function withProvisionedSandbox<T>(
     };
     const provider = podman(podmanOptions);
     const result = await body({
-      prepared,
       provider,
       withSetupHooks: (callerHooks) => withSetupHooks(callerHooks, prepared.plan),
     });

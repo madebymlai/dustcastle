@@ -3,7 +3,8 @@ import { DUSTCASTLE_HOME, loadModelSelection, type ModelSelection } from "../con
 import { createLogger } from "../log/pino.js";
 import { logPosture, logSweep } from "./posture.js";
 import { EXIT_FAILURE, EXIT_INTERRUPT, EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
-import { orchestrate } from "../run/orchestrate.js";
+import { orchestrate, type OrchestrateOptions } from "../run/orchestrate.js";
+import { parseRunArgs } from "./parseRunArgs.js";
 import { readLastSweepLine } from "../store/autogc.js";
 import { join } from "node:path";
 import { runAutoGcCommand } from "./autogc.js";
@@ -33,6 +34,7 @@ export interface CliDeps {
   readonly runConfig?: (term: Terminal) => Promise<number>;
   readonly ensureModel?: (term: Terminal) => Promise<EnsureModelOutcome>;
   readonly loadModelSelection?: () => ModelSelection | undefined;
+  readonly orchestrate?: (opts: OrchestrateOptions) => Promise<void>;
 }
 
 export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number> {
@@ -97,8 +99,13 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   // review → merge) over the repo's beads issues. orchestrate provisions exactly
   // ONCE. The posture banner prints from inside that flow (onPrepared), never a
   // pre-run provision.
-  await orchestrate({
+  //
+  // Parse the dustless flag from argv[1:] (argv[0] is the "run" command).
+  const { dustless } = parseRunArgs(argv.slice(1));
+  const runOrchestrate = deps.orchestrate ?? orchestrate;
+  await runOrchestrate({
     cwd,
+    dustless,
     logger: rootLogger.child({ mod: "orchestrate" }),
     onPrepared: (prepared) => {
       logPosture(rootLogger, prepared, {

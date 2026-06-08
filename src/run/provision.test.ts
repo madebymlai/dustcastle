@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     nixRunner,
     cachePool,
     podman: vi.fn((opts: unknown) => ({ opts })),
+    noSandbox: vi.fn(() => ({ type: "noSandbox" })),
     detect: vi.fn(() => [{ packageManager: "npm" }]),
     planSandbox: vi.fn((_spec: unknown) => ({
       podmanOptions: {},
@@ -50,6 +51,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("@ai-hero/sandcastle", () => ({ run: vi.fn(), createSandbox: vi.fn() }));
 vi.mock("@ai-hero/sandcastle/sandboxes/podman", () => ({ podman: mocks.podman }));
+vi.mock("@ai-hero/sandcastle/sandboxes/no-sandbox", () => ({ noSandbox: mocks.noSandbox }));
 vi.mock("../detect/index.js", () => ({ detect: mocks.detect }));
 vi.mock("../detect/workspace.js", () => ({ detectWorkspace: vi.fn() }));
 vi.mock("../sandbox/plan.js", () => ({ planSandbox: mocks.planSandbox }));
@@ -70,7 +72,7 @@ vi.mock("../config/global.js", () => ({
 }));
 vi.mock("../process/streaming.js", () => ({ runStreamingAsync: mocks.runStreamingAsync }));
 
-import { withProvisionedSandbox } from "./index.js";
+import { withHostProvisioning, withProvisionedSandbox } from "./index.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -145,5 +147,62 @@ describe("withProvisionedSandbox Store pool seam", () => {
     expect(legacyRunner).not.toHaveBeenCalled();
     expect(legacyAutoGcSpawn).not.toHaveBeenCalled();
     expect(mocks.spawnAutoGc).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("withHostProvisioning (dustless host bracket)", () => {
+  it("builds a noSandbox provider and passes caller hooks through unchanged", async () => {
+    const callerHooks = {
+      sandbox: { onSandboxReady: [{ command: "echo caller", timeoutMs: 5000 }] },
+    };
+
+    const result = await withHostProvisioning(async ({ provider, withSetupHooks }) => {
+      const hooks = withSetupHooks(callerHooks);
+      return { provider, hooks };
+    });
+
+    // It built a noSandbox provider.
+    expect(mocks.noSandbox).toHaveBeenCalledTimes(1);
+    expect(result.provider).toEqual({ type: "noSandbox" });
+
+    // Caller hooks passed through unchanged — no install or deps-staging commands prepended.
+    expect(result.hooks).toEqual(callerHooks);
+  });
+
+  it("provisions nothing — no detect, no Store, no image, no GC, no deps-cache", async () => {
+    await expect(
+      withHostProvisioning(async () => "ok"),
+    ).resolves.toBe("ok");
+
+    // No ecosystem detection.
+    expect(mocks.detect).not.toHaveBeenCalled();
+    // No Store provision.
+    expect(mocks.provisionStore).not.toHaveBeenCalled();
+    // No image build.
+    expect(mocks.ensureImage).not.toHaveBeenCalled();
+    // No GC.
+    expect(mocks.spawnAutoGc).not.toHaveBeenCalled();
+    // No deps-cache.
+    expect(mocks.depsCacheDecision).not.toHaveBeenCalled();
+    expect(mocks.defaultDepsCacheDir).not.toHaveBeenCalled();
+    expect(mocks.depsCachePool).not.toHaveBeenCalled();
+  });
+
+  it("withSetupHooks returns an empty hooks object when called with no caller hooks", async () => {
+    const result = await withHostProvisioning(async ({ withSetupHooks }) => {
+      return withSetupHooks();
+    });
+
+    expect(result).toEqual({});
+  });
+
+  it("never calls onPrepared (host bracket has no prepared run)", async () => {
+    const onPrepared = vi.fn();
+
+    await expect(
+      withHostProvisioning(async () => "ok", { onPrepared }),
+    ).resolves.toBe("ok");
+
+    expect(onPrepared).not.toHaveBeenCalled();
   });
 });

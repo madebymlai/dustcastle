@@ -56,4 +56,61 @@ describe("runCli command dispatch", () => {
     expect(exitCode).toBe(EXIT_FAILURE);
     expect(term.errorOutput).toContain("no model configured — run `dustcastle config`");
   });
+
+  it("parses --dustless from run args and passes dustless:true to orchestrate", async () => {
+    const term = new InMemoryTerminal({ isTTY: true });
+    let receivedDustless: boolean | undefined;
+    const orchestrate = vi.fn(async (opts: { dustless?: boolean }) => {
+      receivedDustless = opts.dustless;
+    });
+
+    await expect(
+      runCli(["run", "--dustless"], {
+        terminal: () => term,
+        ensureModel: async () => "proceed",
+        loadModelSelection: () => ({ model: "test/model" }),
+        orchestrate,
+      }),
+    ).resolves.toBe(EXIT_SUCCESS);
+
+    expect(receivedDustless).toBe(true);
+  });
+
+  it("parses -d from run args and passes dustless:true to orchestrate", async () => {
+    const term = new InMemoryTerminal({ isTTY: true });
+    let receivedDustless: boolean | undefined;
+    const orchestrate = vi.fn(async (opts: { dustless?: boolean }) => {
+      receivedDustless = opts.dustless;
+    });
+
+    await expect(
+      runCli(["run", "-d"], {
+        terminal: () => term,
+        ensureModel: async () => "proceed",
+        loadModelSelection: () => ({ model: "test/model" }),
+        orchestrate,
+      }),
+    ).resolves.toBe(EXIT_SUCCESS);
+
+    expect(receivedDustless).toBe(true);
+  });
+
+  it("passes dustless:false to orchestrate when no dustless flag is given", async () => {
+    const term = new InMemoryTerminal({ isTTY: true });
+    let receivedDustless: boolean | undefined;
+    const orchestrate = vi.fn(async (opts: { dustless?: boolean }) => {
+      receivedDustless = opts.dustless;
+    });
+
+    await expect(
+      runCli(["run"], {
+        terminal: () => term,
+        ensureModel: async () => "proceed",
+        loadModelSelection: () => ({ model: "test/model" }),
+        orchestrate,
+      }),
+    ).resolves.toBe(EXIT_SUCCESS);
+
+    expect(receivedDustless).toBe(false);
+  });
 });
