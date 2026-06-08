@@ -210,7 +210,7 @@ const liveOrchestrateDeps: OrchestrateDeps = {
   currentGitBranch,
   branchAheadOf,
   withProvisionedSandbox,
-  withHostProvisioning: liveHostProvisioning as OrchestrateDeps["withHostProvisioning"],
+  withHostProvisioning: liveHostProvisioning,
   run: sandcastle.run as unknown as OrchestrateDeps["run"],
   createSandbox: sandcastle.createSandbox as unknown as OrchestrateDeps["createSandbox"],
   closeEligibleEpics,

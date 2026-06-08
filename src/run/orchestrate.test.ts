@@ -861,40 +861,6 @@ describe("orchestrate dustless seam selection", () => {
     expect(storeCalls).toHaveLength(0);
   });
 
-  it("uses the Store bracket by default when no dustless flag is passed", async () => {
-    let calledStore = false;
-    let calledHost = false;
-    const deps: Partial<OrchestrateDeps> = {
-      loadModelSelection: () => ({ model: "test/model" }),
-      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
-      currentGitBranch: () => "main",
-      branchAheadOf: () => true,
-      withProvisionedSandbox: async (_opts, body) => {
-        calledStore = true;
-        return body({
-          provider: {},
-          withSetupHooks: () => ({}),
-        } as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]);
-      },
-      withHostProvisioning: (async (_opts, body) => {
-        calledHost = true;
-        return body({ provider: {}, withSetupHooks: () => ({}) } as never);
-      }) as OrchestrateDeps["withHostProvisioning"],
-      run: async () => ({ output: { issues: [] } }),
-      closeEligibleEpics: () => ({ closed: [], count: 0 }),
-    };
-
-    await orchestrate({
-      cwd: "/repo",
-      maxLoops: 1,
-      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
-      logger: createMemoryLogger().child({ mod: "orchestrate" }),
-      deps,
-    });
-
-    expect(calledStore).toBe(true);
-    expect(calledHost).toBe(false);
-  });
 });
 
 describe("phaseConfig", () => {

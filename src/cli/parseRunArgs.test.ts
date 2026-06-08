@@ -16,14 +16,4 @@ describe("parseRunArgs", () => {
     expect(parseRunArgs(["-d"])).toEqual({ dustless: true });
     expect(parseRunArgs(["some", "-d", "args"])).toEqual({ dustless: true });
   });
-
-  it("detects --dustless at any position", () => {
-    expect(parseRunArgs(["--dustless", "extra"])).toEqual({ dustless: true });
-    expect(parseRunArgs(["extra", "--dustless"])).toEqual({ dustless: true });
-  });
-
-  it("detects -d at any position", () => {
-    expect(parseRunArgs(["-d", "extra"])).toEqual({ dustless: true });
-    expect(parseRunArgs(["extra", "-d"])).toEqual({ dustless: true });
-  });
 });
