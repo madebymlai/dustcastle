@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
@@ -9,6 +9,8 @@ import {
   branchAheadOf,
   branchForIssue,
   completedFrom,
+  dustlessIgnoredDirs,
+  dustlessWorktreeCopies,
   implementArgs,
   MERGE_ATTEMPTS,
   mergeArgs,
@@ -810,7 +812,222 @@ describe("orchestrate planner resilience (Bug A: a malformed <plan> must not cra
   });
 });
 
+describe("dustlessIgnoredDirs (git-ignored dirs enumerated at repo root)", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+
+  const gitRepo = (setup: (dir: string) => void): string => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-ignored-"));
+    tmps.push(dir);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
+    setup(dir);
+    return dir;
+  };
+
+  it("returns gitignored directories that exist on the host", () => {
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), "node_modules/\nvendor/\n");
+      mkdirSync(join(d, "node_modules"));
+      writeFileSync(join(d, "node_modules", "dep.txt"), "x");
+      mkdirSync(join(d, "vendor"));
+      writeFileSync(join(d, "vendor", "lib.js"), "x");
+      execFileSync("git", ["add", ".gitignore"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir).sort()).toEqual(["node_modules", "vendor"]);
+  });
+
+  it("returns empty array when there are no gitignored directories", () => {
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, "tracked.txt"), "x");
+      mkdirSync(join(d, "untracked-dir"));
+      writeFileSync(join(d, "untracked-dir", "x.txt"), "x");
+      execFileSync("git", ["add", "tracked.txt"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir)).toEqual([]);
+  });
+
+  it("does not include ignored files, only directories (--directory collapses)", () => {
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), "ignored-file.txt\nnode_modules/\n");
+      writeFileSync(join(d, "ignored-file.txt"), "x");
+      mkdirSync(join(d, "node_modules"));
+      writeFileSync(join(d, "node_modules", "dep.txt"), "x");
+      execFileSync("git", ["add", ".gitignore"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir)).toEqual(["node_modules"]);
+  });
+
+  it("handles unusual filenames with spaces (NUL-delimited, quoting disabled)", () => {
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), "weird dir/\n");
+      mkdirSync(join(d, "weird dir"));
+      writeFileSync(join(d, "weird dir", "file.txt"), "x");
+      execFileSync("git", ["add", ".gitignore"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir)).toEqual(["weird dir"]);
+  });
+
+  it("returns empty array when not in a git repo (fails gracefully)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-nonrepo-"));
+    tmps.push(dir);
+    expect(dustlessIgnoredDirs(dir)).toEqual([]);
+  });
+});
+
+describe("dustlessWorktreeCopies (base copies + gitignored dirs in dustless mode)", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+
+  const gitRepoWithContext = (ignoredDirs: string[]): string => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-dw-"));
+    tmps.push(dir);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
+    // CONTEXT.md exists and is gitignored (like the real repo)
+    writeFileSync(join(dir, "CONTEXT.md"), "ctx");
+    writeFileSync(join(dir, ".gitignore"), ["CONTEXT.md", ...ignoredDirs.map((d) => `${d}/`)].join("\n") + "\n");
+    for (const d of ignoredDirs) {
+      mkdirSync(join(dir, d));
+      writeFileSync(join(dir, d, "dep.txt"), "x");
+    }
+    execFileSync("git", ["add", ".gitignore"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-qm", "init"], { cwd: dir, stdio: "ignore" });
+    return dir;
+  };
+
+  it("in normal mode, returns only base copies (.beads + existing context docs)", () => {
+    const dir = gitRepoWithContext(["node_modules", "vendor"]);
+    const copies = dustlessWorktreeCopies(dir);
+    // .beads is always included, CONTEXT.md exists
+    expect(copies).toContain(".beads");
+    expect(copies).toContain("CONTEXT.md");
+    expect(copies).not.toContain("node_modules");
+    expect(copies).not.toContain("vendor");
+  });
+
+  it("in dustless mode, augments base copies with gitignored dirs, deduplicating overlaps", () => {
+    const dir = gitRepoWithContext(["node_modules"]);
+    const copies = dustlessWorktreeCopies(dir, { dustless: true });
+    expect(copies).toContain(".beads");
+    expect(copies).toContain("CONTEXT.md");
+    expect(copies).toContain("node_modules");
+    // No duplicates
+    expect(copies.filter((c) => c === ".beads")).toHaveLength(1);
+  });
+
+  it("in dustless mode with no gitignored dirs, returns base copies unchanged", () => {
+    const dir = gitRepoWithContext([]);
+    const copies = dustlessWorktreeCopies(dir, { dustless: true });
+    expect(copies).toContain(".beads");
+    expect(copies.filter((c) => c === ".beads")).toHaveLength(1);
+  });
+});
+
 describe("orchestrate dustless seam selection", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+
+  it("in dustless mode, passes host-ignored deps dirs in copyToWorktree to createSandbox", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-cwt-"));
+    tmps.push(dir);
+    // Bare-git-repo setup (no .gitignore commit — untracked node_modules won't show as ignored)
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
+    writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
+    mkdirSync(join(dir, "node_modules"));
+    writeFileSync(join(dir, "node_modules", "dep.txt"), "x");
+    execFileSync("git", ["add", ".gitignore"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-qm", "init"], { cwd: dir, stdio: "ignore" });
+
+    let copyToWorktree: string[] | undefined;
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      branchAheadOf: () => true,
+      withHostProvisioning: async (_opts, body) =>
+        body({
+          provider: { type: "noSandbox" },
+          withSetupHooks: () => ({}),
+        } as unknown as Parameters<Parameters<OrchestrateDeps["withHostProvisioning"]>[1]>[0]),
+      run: async () => ({ output: { issues: [issue("42")] } }),
+      createSandbox: async (args) => {
+        copyToWorktree = args.copyToWorktree as string[];
+        return { run: async () => ({ commits: [] }), close: async () => {} };
+      },
+    };
+
+    await orchestrate({
+      cwd: dir,
+      maxLoops: 1,
+      dustless: true,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: createMemoryLogger().child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    expect(copyToWorktree).toBeDefined();
+    expect(copyToWorktree).toContain(".beads");
+    expect(copyToWorktree).toContain("node_modules");
+  });
+
+  it("in normal mode, does NOT include host-ignored dirs in copyToWorktree", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-cwt-"));
+    tmps.push(dir);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
+    writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
+    mkdirSync(join(dir, "node_modules"));
+    writeFileSync(join(dir, "node_modules", "dep.txt"), "x");
+    execFileSync("git", ["add", ".gitignore"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-qm", "init"], { cwd: dir, stdio: "ignore" });
+
+    let copyToWorktree: string[] | undefined;
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      branchAheadOf: () => true,
+      withProvisionedSandbox: async (_opts, body) =>
+        body({
+          provider: { type: "podman" },
+          withSetupHooks: () => ({}),
+        } as unknown as Parameters<Parameters<OrchestrateDeps["withProvisionedSandbox"]>[1]>[0]),
+      run: async () => ({ output: { issues: [issue("42")] } }),
+      createSandbox: async (args) => {
+        copyToWorktree = args.copyToWorktree as string[];
+        return { run: async () => ({ commits: [] }), close: async () => {} };
+      },
+    };
+
+    await orchestrate({
+      cwd: dir,
+      maxLoops: 1,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: createMemoryLogger().child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    expect(copyToWorktree).toBeDefined();
+    expect(copyToWorktree).toContain(".beads");
+    expect(copyToWorktree).not.toContain("node_modules");
+  });
+
   it("routes to the host bracket when dustless is set; to the Store bracket otherwise", async () => {
     const storeCalls: unknown[] = [];
     const hostCalls: unknown[] = [];
