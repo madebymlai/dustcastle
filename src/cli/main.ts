@@ -103,10 +103,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   // Parse the dustless flag from argv[1:] (argv[0] is the "run" command).
   const { dustless } = parseRunArgs(argv.slice(1));
 
-  // Surface the host posture for a dustless run: the agent acts directly on the
-  // host with no isolation (ADR 0014 — never-silent). No confirmation prompt is
-  // shown — the `-d` flag is the opt-in, and `noSandbox` already honors the
-  // agent's own permission model.
+  // Dustless run: surface host posture ahead of the loop (ADR 0014).
   if (dustless) {
     logHostPosture(rootLogger, { runner: "pi", model: selection.model, mount: "~/.pi/agent" });
   }
