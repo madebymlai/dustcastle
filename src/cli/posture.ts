@@ -85,8 +85,11 @@ const SWEEP_LINE_PATTERN = /^(\d+) last sweep freed (\d+) bytes \((\d+) path\(s\
  * the agent acts directly on the host with no isolation, plus the agent runner/model
  * line (ADR 0014 — never-silent). No confirmation prompt is shown — the `-d` flag is
  * the opt-in, and `noSandbox` already honors the agent's own permission model.
+ *
+ * No `mount` is reported: dustless mounts nothing — the agent runs as the host user
+ * off the host's own `~/.pi` login — so the runner/model alone are the honest facts.
  */
-export function logHostPosture(logger: Logger, agent: AgentPosture): void {
+export function logHostPosture(logger: Logger, agent: Pick<AgentPosture, "runner" | "model">): void {
   logger.warn("agents act directly on the host with no isolation");
   logger.info({ ...agent }, "agent ready");
 }

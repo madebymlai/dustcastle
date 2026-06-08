@@ -103,6 +103,26 @@ The first run downloads the base toolchain closure (a few minutes, one time). Ev
 after that, and every other project on your machine, reuses it instantly. A repeat run
 on an unchanged lockfile skips dependency installation entirely.
 
+## Running on the host (`--dustless`)
+
+On a host you already trust and have tooled — your own machine, or a CI runner where the
+language toolchains and dependencies already exist — you can skip the store, the
+container boundary, and detection entirely:
+
+```bash
+dustcastle run --dustless   # or -d
+```
+
+A dustless run drives the same orchestration loop directly on the host via sandcastle's
+no-sandbox provider. There is **no Nix store, no container, and no ecosystem detection**,
+so it runs even in repositories dustcastle doesn't recognize. Each issue's worktree
+inherits the host's already-installed dependencies (your git-ignored `node_modules`,
+`vendor`, `.venv`, …), and the agent uses your host's own `PATH`, `git`/`gh`, and `pi`
+login — nothing is provisioned or injected.
+
+The agent runs **with no isolation** — it acts directly on your host — so dustless is
+opt-in and prints a clear warning on every run. Use it only where you trust the work.
+
 ## How it works
 
 dustcastle is the **shared store manager and the UX around it**. It uses

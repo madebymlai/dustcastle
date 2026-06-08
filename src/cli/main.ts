@@ -105,7 +105,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
 
   // Dustless run: surface host posture ahead of the loop (ADR 0014).
   if (dustless) {
-    logHostPosture(rootLogger, { runner: "pi", model: selection.model, mount: "~/.pi/agent" });
+    logHostPosture(rootLogger, { runner: "pi", model: selection.model });
   }
 
   const runOrchestrate = deps.orchestrate ?? orchestrate;

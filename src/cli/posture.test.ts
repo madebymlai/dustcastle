@@ -78,7 +78,7 @@ describe("posture logging", () => {
 describe("host posture logging", () => {
   it("emits a warn-level no-isolation line and an info-level agent ready line", () => {
     const logger = createMemoryLogger();
-    logHostPosture(logger, { runner: "pi", model: "openai/gpt-4.1", mount: "~/.pi/agent" });
+    logHostPosture(logger, { runner: "pi", model: "openai/gpt-4.1" });
 
     expect(logger.records).toEqual([
       {
@@ -89,7 +89,7 @@ describe("host posture logging", () => {
       },
       {
         level: "info",
-        fields: { runner: "pi", model: "openai/gpt-4.1", mount: "~/.pi/agent" },
+        fields: { runner: "pi", model: "openai/gpt-4.1" },
         msg: "agent ready",
         args: [],
       },
