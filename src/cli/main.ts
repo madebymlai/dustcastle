@@ -82,8 +82,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   const lastSweep = readLastSweepLine(join(DUSTCASTLE_HOME, "gc.log"));
   if (lastSweep !== undefined) logSweep(rootLogger, lastSweep);
 
-  // dustcastle's half: detect → realize the Store → plan the Sandbox. Surface
-  // the active runtime mode (ADR 0008 — never silent) and what was provisioned.
+  // Load the global model selection — set by the first run or `dustcastle config`.
   const selection = (deps.loadModelSelection ?? loadModelSelection)();
 
   // No agent model: nothing can run. Print the config hint and exit without
