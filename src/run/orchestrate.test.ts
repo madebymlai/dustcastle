@@ -192,6 +192,75 @@ describe("orchestrate logging", () => {
     ]);
   });
 
+  it("surfaces a failed issue pipeline (createSandbox/worker throws) instead of swallowing it into a silent spin", async () => {
+    // Regression: Promise.allSettled drops rejections and the merge gate keys on
+    // branch-ahead-of-target, so a systematically failing executeIssue (e.g.
+    // createSandbox can't add the worktree in dustless mode) used to spin the loop
+    // forever — steady issueCount, completedCount 0, and NO error explaining why.
+    const root = createMemoryLogger();
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "develop",
+      branchAheadOf: () => false, // a failed pipeline never advanced its branch
+      withHostProvisioning: async (_opts, body) =>
+        body({
+          provider: {},
+          withSetupHooks: () => ({}),
+        } as Parameters<Parameters<OrchestrateDeps["withHostProvisioning"]>[1]>[0]),
+      run: async (args) =>
+        args.name === "Planner"
+          ? { output: { issues: [issue("42"), issue("7")] } }
+          : { output: { issues: [] } },
+      createSandbox: async () => {
+        throw new Error("git worktree add: fatal: invalid reference");
+      },
+    };
+
+    await orchestrate({
+      cwd: "/repo",
+      dustless: true,
+      maxLoops: 1,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: root.child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    // Both failures are reported, keyed to their issue, with the underlying error —
+    // the operator can now see WHY nothing merges.
+    const failures = root.records.filter((r) => r.fields.event === "issue_failed");
+    expect(failures).toEqual([
+      {
+        level: "error",
+        fields: {
+          mod: "orchestrate",
+          event: "issue_failed",
+          loop: 1,
+          issueId: "42",
+          branch: branchForIssue("42"),
+          err: "git worktree add: fatal: invalid reference",
+        },
+        msg: "issue pipeline failed; branch not advanced",
+        args: [],
+      },
+      {
+        level: "error",
+        fields: {
+          mod: "orchestrate",
+          event: "issue_failed",
+          loop: 1,
+          issueId: "7",
+          branch: branchForIssue("7"),
+          err: "git worktree add: fatal: invalid reference",
+        },
+        msg: "issue pipeline failed; branch not advanced",
+        args: [],
+      },
+    ]);
+    // The loop still degrades gracefully: nothing merged, so it skips the merge.
+    expect(root.records.some((r) => r.fields.event === "skip_merge")).toBe(true);
+  });
+
   it("reaps close-eligible epics, then re-plans and idles only once the reap finds nothing", async () => {
     const root = createMemoryLogger();
     const reapCalls: number[] = [];

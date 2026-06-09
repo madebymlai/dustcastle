@@ -384,6 +384,31 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
         ),
       );
 
+      // Promise.allSettled swallows rejections, and the merge gate below keys on
+      // branch-ahead-of-target — so a systematically failing pipeline (e.g.
+      // createSandbox can't add the per-issue worktree) would otherwise spin the loop
+      // silently: steady issueCount, completedCount 0, no error. Surface each failure,
+      // keyed to its issue, before the gate. allSettled preserves order, so outcomes[i]
+      // is issues[i].
+      outcomes.forEach((outcome, i) => {
+        const issue = issues[i];
+        if (outcome.status === "rejected" && issue !== undefined) {
+          logger.error(
+            {
+              event: "issue_failed",
+              loop,
+              issueId: issue.id,
+              branch: issue.branch,
+              err:
+                outcome.reason instanceof Error
+                  ? outcome.reason.message
+                  : String(outcome.reason),
+            },
+            "issue pipeline failed; branch not advanced",
+          );
+        }
+      });
+
       const completed = completedFrom(outcomes, (issue) =>
         deps.branchAheadOf(opts.cwd, targetBranch, issue.branch),
       );
