@@ -995,6 +995,17 @@ describe("dustlessWorktreeCopies (base copies + gitignored dirs in dustless mode
     expect(copies.filter((c) => c === ".beads")).toHaveLength(1);
   });
 
+  it("in dustless mode, never carries sandcastle's own .sandcastle dir (copying it into a worktree under it recurses into itself)", () => {
+    // Regression: .sandcastle is git-ignored, so it surfaced in the dustless copy set,
+    // but each per-issue worktree lives at .sandcastle/worktrees/… — copying .sandcastle
+    // in recursed into itself ("cp: cannot copy a directory into itself") and failed
+    // every issue.
+    const dir = gitRepoWithContext(["node_modules", ".sandcastle"]);
+    const copies = dustlessWorktreeCopies(dir, true);
+    expect(copies).toContain("node_modules");
+    expect(copies).not.toContain(".sandcastle");
+  });
+
   it("in dustless mode with no gitignored dirs, returns base copies unchanged", () => {
     const dir = gitRepoWithContext([]);
     const copies = dustlessWorktreeCopies(dir, true);

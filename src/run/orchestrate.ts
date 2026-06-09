@@ -105,13 +105,22 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
  * any install. Deduplicates overlaps (e.g. `.beads` is git-excluded and would appear
  * in both lists). Normal (Store-backed) mode only carries the base copies.
  */
+/** sandcastle's managed scratch dir (worktrees + logs); never copied into a worktree. */
+const SANDCASTLE_DIR = ".sandcastle";
+
 export function dustlessWorktreeCopies(
   cwd: string,
   dustless?: boolean,
 ): string[] {
   const base = worktreeCopies(cwd);
   if (!dustless) return base;
-  const ignored = dustlessIgnoredDirs(cwd);
+  // `.sandcastle` is sandcastle's own managed directory — it HOLDS the per-issue
+  // worktrees (`.sandcastle/worktrees/…`) and run logs, and is git-ignored, so it
+  // surfaces in dustlessIgnoredDirs. But each worktree lives UNDER it, so copying it
+  // in recurses into itself (`cp: cannot copy a directory into itself`) and fails
+  // every issue. It is orchestration scratch, never project deps the agent's tests
+  // need — exclude it.
+  const ignored = dustlessIgnoredDirs(cwd).filter((d) => d !== SANDCASTLE_DIR);
   const baseSet = new Set(base);
   return [...base, ...ignored.filter((d) => !baseSet.has(d))];
 }
