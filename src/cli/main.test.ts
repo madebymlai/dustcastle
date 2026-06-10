@@ -1,12 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE } from "./exit-codes.js";
 import { runCli, USAGE } from "./main.js";
+import { dustcastleVersion } from "../version.js";
 import { InMemoryTerminal } from "./terminal.js";
 
 describe("runCli command dispatch", () => {
   it("lists config rather than the removed standalone model command", () => {
     expect(USAGE).toContain("dustcastle config");
     expect(USAGE).not.toContain("dustcastle model");
+  });
+
+  it.each(["-v", "--version", "version"])("prints the package version for %s without provisioning", async (flag) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const orchestrate = vi.fn(async () => undefined);
+    try {
+      await expect(runCli([flag], { orchestrate })).resolves.toBe(EXIT_SUCCESS);
+      expect(log).toHaveBeenCalledWith(dustcastleVersion());
+      expect(orchestrate).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("dispatches dustcastle config to the config hub", async () => {

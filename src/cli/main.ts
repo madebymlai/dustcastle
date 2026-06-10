@@ -12,6 +12,7 @@ import { runConfigHub } from "./config.js";
 import { runGcCommand } from "./gc.js";
 import { ensureModel, NO_CONFIGURED_MODEL_MESSAGE, type EnsureModelOutcome } from "./model.js";
 import { processTerminal, type Terminal } from "./terminal.js";
+import { dustcastleVersion } from "../version.js";
 import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
 
@@ -23,7 +24,11 @@ Usage:
   dustcastle config     Open the global config hub (pi agent model picker and
                         curated sandbox Credentials such as GitHub).
   dustcastle gc         Sweep the shared Nix Store now (optimise + collect unrooted
-                        paths). Active runs stay protected by their scoped roots.`;
+                        paths). Active runs stay protected by their scoped roots.
+
+Options:
+  -v, --version         Print the dustcastle version and exit.
+  -h, --help            Print this help and exit.`;
 
 function createCliLogger() {
   return createLogger({ homeDir: DUSTCASTLE_HOME, env: process.env });
@@ -41,6 +46,10 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   const command = argv[0] ?? "run";
   if (command === "-h" || command === "--help" || command === "help") {
     console.log(USAGE);
+    return EXIT_SUCCESS;
+  }
+  if (command === "-v" || command === "--version" || command === "version") {
+    console.log(dustcastleVersion());
     return EXIT_SUCCESS;
   }
   const terminal = deps.terminal ?? processTerminal;
