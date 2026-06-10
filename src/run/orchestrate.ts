@@ -93,20 +93,29 @@ function trackedDirs(cwd: string): Set<string> {
   return dirs;
 }
 
+/** sandcastle's managed scratch dir (worktrees + run logs); never copied into a worktree. */
+const SANDCASTLE_DIR = ".sandcastle";
+
 /**
- * Enumerate the host's git-ignored directories at the repo root — the equivalent of
- * `git ls-files --others --ignored --exclude-standard --directory` with NUL-delimited
- * output and path-quoting disabled, so unusual filenames survive. Returns only
- * directory entries (the `--directory` flag collapses entire ignored trees to their
- * top-level directory, marked with a trailing slash).
+ * The host's git-ignored directories that are SAFE to copy into a per-issue worktree —
+ * built from `git ls-files --others --ignored --exclude-standard --directory` (NUL-delimited,
+ * path-quoting disabled so unusual filenames survive). The `--directory` flag collapses
+ * entire ignored trees to their top-level directory, marked with a trailing slash; only
+ * those directory entries are returned.
  *
- * Drops any entry whose parent directory will NOT exist in a clean worktree checkout
- * (i.e. a nested ignored dir under a parent with no tracked files, e.g. `scratch/__pycache__`
- * where `scratch/` is itself untracked). sandcastle's `copyToWorktree` runs `cp -R src dest`
- * with no `mkdir -p`, so such a path makes the copy fail (`cp: cannot create directory …:
- * No such file or directory`) and aborts the whole issue pipeline. A nested dir whose parent
- * IS tracked (e.g. a monorepo `packages/app/node_modules`) is kept — its parent is checked
- * out, so the copy lands. Gracefully returns [] when not in a git repo or the command fails.
+ * This is the single home for "which ignored dirs can be copied" — sandcastle's
+ * `copyToWorktree` does a bare `cp -R src dest` (no `mkdir -p`, copied INTO the worktree),
+ * so two classes of entry are dropped here rather than blowing up the copy and aborting the
+ * issue pipeline:
+ *   - a nested ignored dir whose parent has no tracked files (e.g. `scratch/__pycache__` where
+ *     `scratch/` is itself untracked): a clean checkout omits the parent, so `cp` fails with
+ *     `cannot create directory …: No such file or directory`. A nested dir whose parent IS
+ *     tracked (e.g. a monorepo `packages/app/node_modules`) is kept — its parent is checked out.
+ *   - `.sandcastle`, which HOLDS the worktrees (`.sandcastle/worktrees/…`): each worktree lives
+ *     under it, so copying it in recurses into itself (`cp: cannot copy a directory into itself`).
+ *     It is orchestration scratch, never project deps the agent's tests need.
+ *
+ * Gracefully returns [] when not in a git repo or when the command fails.
  */
 export function dustlessIgnoredDirs(cwd: string): string[] {
   try {
@@ -129,7 +138,8 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
       .split("\0")
       .filter((entry) => entry.endsWith("/")) // only directories (trailing slash from --directory)
       .map((entry) => entry.slice(0, -1)) // strip trailing slash
-      .filter((dir) => present.has(posix.dirname(dir))); // parent must exist in the checkout
+      .filter((dir) => present.has(posix.dirname(dir))) // parent must exist in the checkout
+      .filter((dir) => dir !== SANDCASTLE_DIR); // copying it recurses into itself
   } catch {
     return [];
   }
@@ -137,27 +147,18 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
 
 /**
  * The per-issue worktree copy set: base copies (`.beads` + agent-context docs) plus,
- * in dustless mode, the host's git-ignored directories — so the agent's tests find
- * already-installed Project Deps (`node_modules` / `vendor` / `.venv` / etc.) without
- * any install. Deduplicates overlaps (e.g. `.beads` is git-excluded and would appear
- * in both lists). Normal (Store-backed) mode only carries the base copies.
+ * in dustless mode, the host's copy-safe git-ignored directories ({@link dustlessIgnoredDirs})
+ * — so the agent's tests find already-installed Project Deps (`node_modules` / `vendor` /
+ * `.venv` / etc.) without any install. Deduplicates overlaps (e.g. `.beads` is git-excluded
+ * and would appear in both lists). Normal (Store-backed) mode only carries the base copies.
  */
-/** sandcastle's managed scratch dir (worktrees + logs); never copied into a worktree. */
-const SANDCASTLE_DIR = ".sandcastle";
-
 export function dustlessWorktreeCopies(
   cwd: string,
   dustless?: boolean,
 ): string[] {
   const base = worktreeCopies(cwd);
   if (!dustless) return base;
-  // `.sandcastle` is sandcastle's own managed directory — it HOLDS the per-issue
-  // worktrees (`.sandcastle/worktrees/…`) and run logs, and is git-ignored, so it
-  // surfaces in dustlessIgnoredDirs. But each worktree lives UNDER it, so copying it
-  // in recurses into itself (`cp: cannot copy a directory into itself`) and fails
-  // every issue. It is orchestration scratch, never project deps the agent's tests
-  // need — exclude it.
-  const ignored = dustlessIgnoredDirs(cwd).filter((d) => d !== SANDCASTLE_DIR);
+  const ignored = dustlessIgnoredDirs(cwd);
   const baseSet = new Set(base);
   return [...base, ...ignored.filter((d) => !baseSet.has(d))];
 }

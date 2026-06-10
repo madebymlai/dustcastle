@@ -975,6 +975,19 @@ describe("dustlessIgnoredDirs (git-ignored dirs enumerated at repo root)", () =>
     expect(dustlessIgnoredDirs(dir)).toEqual(["packages/app/node_modules"]);
   });
 
+  it("excludes sandcastle's own .sandcastle dir (each worktree lives under it; copying it recurses into itself)", () => {
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), ".sandcastle/\nnode_modules/\n");
+      mkdirSync(join(d, ".sandcastle", "worktrees"), { recursive: true });
+      writeFileSync(join(d, ".sandcastle", "run.log"), "x");
+      mkdirSync(join(d, "node_modules"));
+      writeFileSync(join(d, "node_modules", "dep.txt"), "x");
+      execFileSync("git", ["add", ".gitignore"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir)).toEqual(["node_modules"]);
+  });
+
   it("returns empty array when not in a git repo (fails gracefully)", () => {
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-nonrepo-"));
     tmps.push(dir);
