@@ -944,6 +944,37 @@ describe("dustlessIgnoredDirs (git-ignored dirs enumerated at repo root)", () =>
     expect(dustlessIgnoredDirs(dir)).toEqual(["weird dir"]);
   });
 
+  it("excludes a nested ignored dir whose parent has no tracked files (regression: scratch/__pycache__ aborted the issue pipeline)", () => {
+    // sandcastle's copyToWorktree does `cp -R src worktree/<path>` with no `mkdir -p`,
+    // so an ignored dir whose parent is absent from the clean checkout breaks the copy.
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), "__pycache__/\n");
+      mkdirSync(join(d, "scratch", "__pycache__"), { recursive: true });
+      writeFileSync(join(d, "scratch", "__pycache__", "m.pyc"), "x");
+      // scratch/ holds an untracked, NON-ignored file, so git does not collapse it to
+      // `scratch/`; it surfaces the ignored subtree `scratch/__pycache__/` instead. But
+      // scratch/ has no tracked files, so a clean worktree checkout omits it entirely.
+      writeFileSync(join(d, "scratch", "keep.txt"), "x");
+      execFileSync("git", ["add", ".gitignore"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir)).toEqual([]);
+  });
+
+  it("includes a nested ignored dir whose parent IS tracked (monorepo packages/app/node_modules)", () => {
+    // The parent (packages/app) carries a tracked file, so it exists in the clean
+    // checkout and the copy's destination parent is present — this dep must be carried.
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), "node_modules/\n");
+      mkdirSync(join(d, "packages", "app", "node_modules"), { recursive: true });
+      writeFileSync(join(d, "packages", "app", "node_modules", "dep.txt"), "x");
+      writeFileSync(join(d, "packages", "app", "index.ts"), "export {};\n");
+      execFileSync("git", ["add", ".gitignore", "packages/app/index.ts"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir)).toEqual(["packages/app/node_modules"]);
+  });
+
   it("returns empty array when not in a git repo (fails gracefully)", () => {
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-nonrepo-"));
     tmps.push(dir);

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { orchestrationPromptPath, type PromptPhase } from "../agent/prompts.js";
 import { buildPiAgent, loadModelSelection } from "../config/global.js";
@@ -66,12 +66,47 @@ export function worktreeCopies(cwd: string): string[] {
 }
 
 /**
+ * The repo-root-relative directories present in a clean git checkout: every ancestor
+ * directory of a tracked file, plus the repo root (posix `.`). Git never checks out a
+ * directory with no tracked files (it doesn't track empty dirs), so this is exactly the
+ * set of directories the per-issue worktree will already contain. Used to keep the
+ * dustless copy set to paths whose PARENT will exist in the worktree. Gracefully returns
+ * just the root when not in a git repo or the command fails.
+ */
+function trackedDirs(cwd: string): Set<string> {
+  const dirs = new Set<string>(["."]); // repo root — posix.dirname() of a top-level entry
+  try {
+    const output = execFileSync(
+      "git",
+      ["-c", "core.quotePath=false", "ls-files", "-z"],
+      { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+    );
+    for (const file of output.split("\0")) {
+      if (file === "") continue;
+      for (let dir = posix.dirname(file); dir !== "."; dir = posix.dirname(dir)) {
+        dirs.add(dir);
+      }
+    }
+  } catch {
+    // not a git repo / git failure — root only
+  }
+  return dirs;
+}
+
+/**
  * Enumerate the host's git-ignored directories at the repo root — the equivalent of
  * `git ls-files --others --ignored --exclude-standard --directory` with NUL-delimited
  * output and path-quoting disabled, so unusual filenames survive. Returns only
  * directory entries (the `--directory` flag collapses entire ignored trees to their
- * top-level directory, marked with a trailing slash). Gracefully returns [] when not
- * in a git repo or when the command fails for any reason.
+ * top-level directory, marked with a trailing slash).
+ *
+ * Drops any entry whose parent directory will NOT exist in a clean worktree checkout
+ * (i.e. a nested ignored dir under a parent with no tracked files, e.g. `scratch/__pycache__`
+ * where `scratch/` is itself untracked). sandcastle's `copyToWorktree` runs `cp -R src dest`
+ * with no `mkdir -p`, so such a path makes the copy fail (`cp: cannot create directory …:
+ * No such file or directory`) and aborts the whole issue pipeline. A nested dir whose parent
+ * IS tracked (e.g. a monorepo `packages/app/node_modules`) is kept — its parent is checked
+ * out, so the copy lands. Gracefully returns [] when not in a git repo or the command fails.
  */
 export function dustlessIgnoredDirs(cwd: string): string[] {
   try {
@@ -89,10 +124,12 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
       ],
       { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
     );
+    const present = trackedDirs(cwd);
     return output
       .split("\0")
       .filter((entry) => entry.endsWith("/")) // only directories (trailing slash from --directory)
-      .map((entry) => entry.slice(0, -1)); // strip trailing slash
+      .map((entry) => entry.slice(0, -1)) // strip trailing slash
+      .filter((dir) => present.has(posix.dirname(dir))); // parent must exist in the checkout
   } catch {
     return [];
   }
