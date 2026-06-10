@@ -56,9 +56,37 @@ jobs:
       # authorized by the package's Trusted Publisher config on npmjs.com. npm
       # generates provenance automatically. `prepack` (npm run build) runs as
       # part of `npm publish`.
+      #
+      # Provenance signing writes to sigstore's public-good Rekor transparency
+      # log, which intermittently times out (TLOG_CREATE_ENTRY_ERROR / "aborted"
+      # fetch to rekor.sigstore.dev) and aborts the publish before the tarball
+      # lands. That's transient, not a package problem, so retry a few times
+      # rather than forcing a manual re-run. After each failed attempt, re-check
+      # the registry: if the version is now present, an earlier attempt actually
+      # succeeded (or another run won the race) and we treat it as done — this
+      # keeps the step idempotent and avoids a spurious "cannot publish over
+      # previously published version" on the next try.
       - name: Publish to npm
         if: steps.check.outputs.publish == 'true'
-        run: npm publish --access public
+        env:
+          VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          for attempt in 1 2 3; do
+            if npm publish --access public; then
+              echo "Published dustcastle@$VERSION on attempt $attempt."
+              exit 0
+            fi
+            if npm view "dustcastle@$VERSION" version >/dev/null 2>&1; then
+              echo "dustcastle@$VERSION is already on npm — a prior attempt succeeded. Done."
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Publish attempt $attempt failed (likely a transient sigstore/provenance error); retrying in 15s..."
+              sleep 15
+            fi
+          done
+          echo "npm publish failed after 3 attempts." >&2
+          exit 1
 
       # Tag + release are made idempotent: a tag that already exists on the
       # remote (e.g. pushed manually before the bump landed) must not abort the
