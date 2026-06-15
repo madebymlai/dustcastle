@@ -66,19 +66,24 @@ export function worktreeCopies(cwd: string): string[] {
 }
 
 /**
- * The repo-root-relative directories present in a clean git checkout: every ancestor
- * directory of a tracked file, plus the repo root (posix `.`). Git never checks out a
- * directory with no tracked files (it doesn't track empty dirs), so this is exactly the
- * set of directories the per-issue worktree will already contain. Used to keep the
- * dustless copy set to paths whose PARENT will exist in the worktree. Gracefully returns
- * just the root when not in a git repo or the command fails.
+ * The repo-root-relative directories a clean checkout of `ref` contains: every ancestor
+ * directory of a file COMMITTED in that ref's tree, plus the repo root (posix `.`). Git
+ * never checks out a directory with no files (it doesn't track empty dirs), so this is
+ * exactly the set of directories a per-issue worktree checked out at `ref` will already
+ * contain. Read from the committed TREE (`git ls-tree <ref>`), NOT the index
+ * (`git ls-files`): the worktree is `git worktree add <path> <ref>` — a checkout of
+ * `ref`'s commit — so the index would mispredict it on two counts, both of which
+ * blow up the bare `cp` below: staged-but-uncommitted host files, and (the common one)
+ * an issue branch that has DIVERGED from the host and lacks a directory the host has.
+ * Used to keep the dustless copy set to paths whose PARENT will exist in that worktree.
+ * Gracefully returns just the root when not in a git repo, `ref` is unborn, or git fails.
  */
-function trackedDirs(cwd: string): Set<string> {
+function trackedDirs(cwd: string, ref: string): Set<string> {
   const dirs = new Set<string>(["."]); // repo root — posix.dirname() of a top-level entry
   try {
     const output = execFileSync(
       "git",
-      ["-c", "core.quotePath=false", "ls-files", "-z"],
+      ["-c", "core.quotePath=false", "ls-tree", "-r", "-z", "--name-only", ref],
       { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
     );
     for (const file of output.split("\0")) {
@@ -88,7 +93,7 @@ function trackedDirs(cwd: string): Set<string> {
       }
     }
   } catch {
-    // not a git repo / git failure — root only
+    // not a git repo / unborn ref / git failure — root only
   }
   return dirs;
 }
@@ -103,21 +108,27 @@ const SANDCASTLE_DIR = ".sandcastle";
  * entire ignored trees to their top-level directory, marked with a trailing slash; only
  * those directory entries are returned.
  *
- * This is the single home for "which ignored dirs can be copied" — sandcastle's
- * `copyToWorktree` does a bare `cp -R src dest` (no `mkdir -p`, copied INTO the worktree),
- * so two classes of entry are dropped here rather than blowing up the copy and aborting the
- * issue pipeline:
- *   - a nested ignored dir whose parent has no tracked files (e.g. `scratch/__pycache__` where
- *     `scratch/` is itself untracked): a clean checkout omits the parent, so `cp` fails with
- *     `cannot create directory …: No such file or directory`. A nested dir whose parent IS
- *     tracked (e.g. a monorepo `packages/app/node_modules`) is kept — its parent is checked out.
+ * The ignored dirs are enumerated from the HOST (what physically exists to copy), but the
+ * parent-existence check is made against `ref` — the commit the per-issue worktree checks
+ * out (defaults to `HEAD`; see {@link worktreeCheckoutRef}). This is the single home for
+ * "which ignored dirs can be copied" — sandcastle's `copyToWorktree` does a bare
+ * `cp -R src dest` (no `mkdir -p`, copied INTO the worktree), so two classes of entry are
+ * dropped here rather than blowing up the copy and aborting the issue pipeline:
+ *   - a nested ignored dir whose parent is absent from `ref`'s checkout — either because the
+ *     parent has no committed files at all (e.g. `scratch/__pycache__` where `scratch/` is
+ *     untracked) OR because `ref` is an issue branch that DIVERGED from the host and never
+ *     had that directory (e.g. `aegis-runtime/tests/__pycache__` carried on the host's
+ *     `develop` but missing from a stale `sandcastle/issue-…` branch). A clean checkout of
+ *     `ref` omits the parent, so `cp` fails with `cannot create directory …: No such file or
+ *     directory`. A nested dir whose parent IS in `ref` (e.g. a monorepo
+ *     `packages/app/node_modules`) is kept — its parent is checked out.
  *   - `.sandcastle`, which HOLDS the worktrees (`.sandcastle/worktrees/…`): each worktree lives
  *     under it, so copying it in recurses into itself (`cp: cannot copy a directory into itself`).
  *     It is orchestration scratch, never project deps the agent's tests need.
  *
  * Gracefully returns [] when not in a git repo or when the command fails.
  */
-export function dustlessIgnoredDirs(cwd: string): string[] {
+export function dustlessIgnoredDirs(cwd: string, ref = "HEAD"): string[] {
   try {
     const output = execFileSync(
       "git",
@@ -133,7 +144,7 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
       ],
       { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
     );
-    const present = trackedDirs(cwd);
+    const present = trackedDirs(cwd, ref);
     return output
       .split("\0")
       .filter((entry) => entry.endsWith("/")) // only directories (trailing slash from --directory)
@@ -151,16 +162,55 @@ export function dustlessIgnoredDirs(cwd: string): string[] {
  * — so the agent's tests find already-installed Project Deps (`node_modules` / `vendor` /
  * `.venv` / etc.) without any install. Deduplicates overlaps (e.g. `.beads` is git-excluded
  * and would appear in both lists). Normal (Store-backed) mode only carries the base copies.
+ * `ref` is the commit the per-issue worktree checks out; it gates {@link dustlessIgnoredDirs}'
+ * parent-existence check (defaults to `HEAD`).
  */
 export function dustlessWorktreeCopies(
   cwd: string,
   dustless?: boolean,
+  ref = "HEAD",
 ): string[] {
   const base = worktreeCopies(cwd);
   if (!dustless) return base;
-  const ignored = dustlessIgnoredDirs(cwd);
+  const ignored = dustlessIgnoredDirs(cwd, ref);
   const baseSet = new Set(base);
   return [...base, ...ignored.filter((d) => !baseSet.has(d))];
+}
+
+/**
+ * Whether `ref` resolves to a commit in this repo. Used to predict which ref a per-issue
+ * worktree will check out: sandcastle reuses the issue branch when it already exists,
+ * otherwise it creates that branch off the target. Any git error (unborn/unknown ref, not
+ * a repo) is "absent" (false). `--verify --quiet` exits non-zero for the common not-found
+ * case; stdout/stderr are silenced and the throw is mapped to false.
+ */
+export function refExists(cwd: string, ref: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+      cwd,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The ref a per-issue worktree will actually check out. sandcastle's worktree `create`
+ * does `git worktree add <path> <issueBranch>` when that branch already EXISTS — reusing
+ * prior progress, which may have DIVERGED from the target — and `git worktree add -b
+ * <issueBranch> <path> <targetBranch>` otherwise. The dustless copy set's parent-existence
+ * check ({@link dustlessIgnoredDirs}) must be made against THIS ref, so a stale issue branch
+ * missing a directory the host has doesn't make a nested ignored dir's bare `cp` blow up
+ * (no parent in the worktree to copy into).
+ */
+export function worktreeCheckoutRef(
+  cwd: string,
+  issueBranch: string,
+  targetBranch: string,
+): string {
+  return refExists(cwd, issueBranch) ? issueBranch : targetBranch;
 }
 
 // {{...}} substitutions for the implement prompt.
@@ -342,9 +392,21 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
   const logger = opts.logger ?? noopLogger;
 
-  // `.beads` + any agent-context docs the isolated worktrees must carry past the
-  // git checkout (computed once from the host project root).
-  const copyToWorktree = dustlessWorktreeCopies(opts.cwd, opts.dustless);
+  // `.beads` + agent-context docs the isolated worktrees must carry past the git
+  // checkout, plus (dustless) the host's copy-safe ignored deps dirs. Computed PER
+  // ISSUE, not once: a per-issue worktree checks out the issue's branch when it already
+  // exists (carrying prior progress, possibly DIVERGED from the target), so the copy
+  // set's parent-existence check must be made against that branch's tree — else a nested
+  // ignored dir (e.g. `tests/__pycache__`) whose parent the host has but the diverged
+  // branch lacks makes sandcastle's bare `cp` abort the issue pipeline.
+  const copiesForIssue = (issue: PlannedIssue): string[] =>
+    dustlessWorktreeCopies(
+      opts.cwd,
+      opts.dustless,
+      opts.dustless
+        ? worktreeCheckoutRef(opts.cwd, issue.branch, targetBranch)
+        : undefined,
+    );
 
   // The dustless flag selects the host bracket (noSandbox) instead of the Store
   // bracket (podman). Both satisfy the same body contract so the loop is identical.
@@ -425,7 +487,7 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<void> {
             agent,
             hooks,
             targetBranch,
-            copyToWorktree,
+            copyToWorktree: copiesForIssue(issue),
             createSandbox: deps.createSandbox,
           }),
         ),

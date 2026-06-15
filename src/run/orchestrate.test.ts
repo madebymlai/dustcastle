@@ -17,7 +17,9 @@ import {
   orchestrate,
   phaseConfig,
   PLANNER_ATTEMPTS,
+  refExists,
   reviewArgs,
+  worktreeCheckoutRef,
   worktreeCopies,
 } from "./orchestrate.js";
 import type { IssueOutcome, OrchestrateDeps } from "./orchestrate.js";
@@ -975,6 +977,49 @@ describe("dustlessIgnoredDirs (git-ignored dirs enumerated at repo root)", () =>
     expect(dustlessIgnoredDirs(dir)).toEqual(["packages/app/node_modules"]);
   });
 
+  it("excludes a nested ignored dir whose parent is absent from the CHECKOUT REF even though the host has it (regression: diverged issue branch aborted the pipeline)", () => {
+    // The real failure: the copy set is built from the host, but the per-issue worktree
+    // checks out the ISSUE BRANCH, which can pre-date / diverge from the host and lack a
+    // directory the host has. A clean checkout of that ref omits the parent, so the bare
+    // `cp` of the nested ignored dir fails. The parent check must use the worktree's ref.
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), "__pycache__/\n");
+      writeFileSync(join(d, "root.txt"), "x");
+      execFileSync("git", ["add", ".gitignore", "root.txt"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+      // Stale issue branch pinned BEFORE runtime/tests exists on the host.
+      execFileSync("git", ["branch", "sandcastle/issue-x.1"], { cwd: d, stdio: "ignore" });
+      // Host (HEAD) later gains runtime/tests with a committed file + an ignored __pycache__.
+      mkdirSync(join(d, "runtime", "tests", "__pycache__"), { recursive: true });
+      writeFileSync(join(d, "runtime", "tests", "test_a.py"), "x");
+      writeFileSync(join(d, "runtime", "tests", "__pycache__", "m.pyc"), "x");
+      execFileSync("git", ["add", "runtime/tests/test_a.py"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "add tests"], { cwd: d, stdio: "ignore" });
+    });
+    // On HEAD the parent is checked out, so the dep is carried.
+    expect(dustlessIgnoredDirs(dir)).toEqual(["runtime/tests/__pycache__"]);
+    // On the diverged issue branch the parent is absent — drop it (nothing to cp into).
+    expect(dustlessIgnoredDirs(dir, "sandcastle/issue-x.1")).toEqual([]);
+  });
+
+  it("drops a nested ignored dir whose parent exists only in the host INDEX, not the committed tree (staged-but-uncommitted)", () => {
+    // A clean worktree checks out a COMMIT, not the index — so a directory whose only
+    // entry is staged-but-uncommitted is absent from the worktree. Reading `git ls-tree`
+    // (committed tree) instead of `git ls-files` (index) keeps the bare `cp` from failing.
+    const dir = gitRepo((d) => {
+      writeFileSync(join(d, ".gitignore"), "__pycache__/\n");
+      writeFileSync(join(d, "root.txt"), "x");
+      execFileSync("git", ["add", ".gitignore", "root.txt"], { cwd: d, stdio: "ignore" });
+      execFileSync("git", ["commit", "-qm", "init"], { cwd: d, stdio: "ignore" });
+      mkdirSync(join(d, "runtime", "tests", "__pycache__"), { recursive: true });
+      writeFileSync(join(d, "runtime", "tests", "test_a.py"), "x");
+      writeFileSync(join(d, "runtime", "tests", "__pycache__", "m.pyc"), "x");
+      // Staged, NOT committed — present in the index, absent from HEAD's tree.
+      execFileSync("git", ["add", "runtime/tests/test_a.py"], { cwd: d, stdio: "ignore" });
+    });
+    expect(dustlessIgnoredDirs(dir)).toEqual([]);
+  });
+
   it("excludes sandcastle's own .sandcastle dir (each worktree lives under it; copying it recurses into itself)", () => {
     const dir = gitRepo((d) => {
       writeFileSync(join(d, ".gitignore"), ".sandcastle/\nnode_modules/\n");
@@ -992,6 +1037,46 @@ describe("dustlessIgnoredDirs (git-ignored dirs enumerated at repo root)", () =>
     const dir = mkdtempSync(join(tmpdir(), "dustcastle-nonrepo-"));
     tmps.push(dir);
     expect(dustlessIgnoredDirs(dir)).toEqual([]);
+  });
+});
+
+describe("worktreeCheckoutRef / refExists (predict the per-issue worktree's checkout ref)", () => {
+  const tmps: string[] = [];
+  afterEach(() => {
+    while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+  });
+
+  const gitRepo = (setup: (dir: string) => void): string => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-ref-"));
+    tmps.push(dir);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
+    writeFileSync(join(dir, "f.txt"), "x");
+    execFileSync("git", ["add", "f.txt"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-qm", "init"], { cwd: dir, stdio: "ignore" });
+    setup(dir);
+    return dir;
+  };
+
+  it("returns the issue branch when it already exists (worktree reuses it — may have diverged)", () => {
+    const dir = gitRepo((d) => {
+      execFileSync("git", ["branch", "sandcastle/issue-42"], { cwd: d, stdio: "ignore" });
+    });
+    expect(refExists(dir, "sandcastle/issue-42")).toBe(true);
+    expect(worktreeCheckoutRef(dir, "sandcastle/issue-42", "main")).toBe("sandcastle/issue-42");
+  });
+
+  it("returns the target branch when the issue branch does not exist (worktree is created off it)", () => {
+    const dir = gitRepo(() => {});
+    expect(refExists(dir, "sandcastle/issue-42")).toBe(false);
+    expect(worktreeCheckoutRef(dir, "sandcastle/issue-42", "main")).toBe("main");
+  });
+
+  it("refExists is false (not a throw) outside a git repo", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-nonrepo-"));
+    tmps.push(dir);
+    expect(refExists(dir, "HEAD")).toBe(false);
   });
 });
 
@@ -1107,6 +1192,63 @@ describe("orchestrate dustless seam selection", () => {
     expect(copyToWorktree).toBeDefined();
     expect(copyToWorktree).toContain(".beads");
     expect(copyToWorktree).toContain("node_modules");
+  });
+
+  it("in dustless mode, drops a nested ignored dir absent from the issue branch's tree (diverged-branch regression)", async () => {
+    // Reproduces the reported abort: the issue branch already exists and diverged from
+    // the host, lacking a directory the host carries a nested ignored dep under. The copy
+    // set must be computed against THAT branch's tree, so the dir is dropped — otherwise
+    // sandcastle's bare `cp` fails with "cannot create directory … No such file or
+    // directory" and the issue pipeline aborts every loop without advancing the branch.
+    const dir = mkdtempSync(join(tmpdir(), "dustcastle-cwt-"));
+    tmps.push(dir);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
+    writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
+    execFileSync("git", ["add", ".gitignore"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-qm", "init"], { cwd: dir, stdio: "ignore" });
+    // Issue branch pinned BEFORE pkg/sub exists (the planner re-uses this branch name).
+    execFileSync("git", ["branch", branchForIssue("42")], { cwd: dir, stdio: "ignore" });
+    // Host (HEAD) gains pkg/sub with a committed file + an ignored node_modules under it.
+    mkdirSync(join(dir, "pkg", "sub", "node_modules"), { recursive: true });
+    writeFileSync(join(dir, "pkg", "sub", "node_modules", "dep.txt"), "x");
+    writeFileSync(join(dir, "pkg", "sub", "index.ts"), "export {};\n");
+    execFileSync("git", ["add", "pkg/sub/index.ts"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-qm", "add pkg/sub"], { cwd: dir, stdio: "ignore" });
+
+    let copyToWorktree: string[] | undefined;
+    const deps: Partial<OrchestrateDeps> = {
+      loadModelSelection: () => ({ model: "test/model" }),
+      buildPiAgent: () => ({}) as ReturnType<OrchestrateDeps["buildPiAgent"]>,
+      currentGitBranch: () => "main",
+      branchAheadOf: () => true,
+      withHostProvisioning: async (_opts, body) =>
+        body({
+          provider: { type: "noSandbox" },
+          withSetupHooks: () => ({}),
+        } as unknown as Parameters<Parameters<OrchestrateDeps["withHostProvisioning"]>[1]>[0]),
+      run: async () => ({ output: { issues: [issue("42")] } }),
+      createSandbox: async (args) => {
+        copyToWorktree = args.copyToWorktree as string[];
+        return { run: async () => ({ commits: [] }), close: async () => {} };
+      },
+    };
+
+    await orchestrate({
+      cwd: dir,
+      maxLoops: 1,
+      dustless: true,
+      beads: { hasBdBinary: () => true, beadsDirExists: () => true },
+      logger: createMemoryLogger().child({ mod: "orchestrate" }),
+      deps,
+    });
+
+    expect(copyToWorktree).toBeDefined();
+    expect(copyToWorktree).toContain(".beads");
+    // The host has pkg/sub/node_modules, but the issue branch's checkout lacks pkg/sub —
+    // so it must NOT be in the copy set (its bare `cp` would have no parent dir).
+    expect(copyToWorktree).not.toContain("pkg/sub/node_modules");
   });
 
   it("in normal mode, does NOT include host-ignored dirs in copyToWorktree", async () => {
