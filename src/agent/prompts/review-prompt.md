@@ -12,6 +12,8 @@ Review the code changes on branch `{{BRANCH}}` and improve code clarity, consist
 
 !`git log {{BASE_BRANCH}}..{{BRANCH}} --oneline`
 
+Note: Local git operations only.
+
 # REVIEW PROCESS
 
 1. **Understand the change**: Read the diff and commits above to understand the intent.

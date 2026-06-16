@@ -11,7 +11,7 @@ For each branch:
 3. After resolving conflicts, run this project's own typecheck and tests.
 4. If tests fail, fix the issues before proceeding to the next branch
 
-After all branches are merged, make a single commit summarizing the merge.
+After all branches are merged, make a single commit summarizing the merge. Local git operations only.
 
 # CLOSE ISSUES
 
@@ -24,3 +24,4 @@ Here are all the issues:
 {{ISSUES}}
 
 Once you've merged everything you can, output <promise>COMPLETE</promise>.
+

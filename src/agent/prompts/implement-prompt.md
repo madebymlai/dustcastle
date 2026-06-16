@@ -47,7 +47,7 @@ Make a git commit. The commit message must:
 4. Files changed
 5. Blockers or notes for next iteration
 
-Keep it concise.
+Keep it concise. Local git operations only. 
 
 # THE ISSUE
 
@@ -59,4 +59,4 @@ Once complete, output <promise>COMPLETE</promise>.
 
 # FINAL RULES
 
-ONLY WORK ON A SINGLE TASK.
+ONLY WORK ON A SINGLE TASK. 
