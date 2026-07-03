@@ -27,8 +27,8 @@ Concrete testing conventions a reviewer can check in a diff.
 
 ## Reliability
 
-- **Deterministic Tests** → Tests must produce the same result on every run. Do not depend on wall-clock time, random values, filesystem ordering, or execution order.
-  > Pick when: `Date.now()`, `Math.random()`, or real network calls appear in tests, tests pass locally but fail in CI, or test results change between runs without code changes.
+- **Deterministic Tests** → A test must produce the same result on every run when the code hasn't changed. Remove *uncontrolled* sources of variation — put time, randomness, and external dependencies under test control (inject clocks, seed RNGs, use test doubles for remote services) rather than reading the wall clock or calling live systems.
+  > Pick when: a test passes sometimes and fails sometimes with no code change, unseeded `Date.now()`/`Math.random()` appear, or a test calls a live network/DB it doesn't control.
 
 - **Test Isolation** → Tests must not depend on execution order or shared mutable state. Each test sets up its own preconditions and cleans up after itself.
   > Pick when: tests fail when run individually but pass in suite (or vice versa), `beforeAll` sets state consumed by multiple tests without `beforeEach` reset, or tests write to shared variables.
