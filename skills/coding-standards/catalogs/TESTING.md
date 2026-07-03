@@ -27,11 +27,16 @@ Concrete testing conventions a reviewer can check in a diff.
 
 ## Reliability
 
-- **Deterministic Tests** → A test must produce the same result on every run when the code hasn't changed. Remove *uncontrolled* sources of variation — put time, randomness, and external dependencies under test control (inject clocks, seed RNGs, use test doubles for remote services) rather than reading the wall clock or calling live systems.
-  > Pick when: a test passes sometimes and fails sometimes with no code change, unseeded `Date.now()`/`Math.random()` appear, or a test calls a live network/DB it doesn't control.
+- **Deterministic Tests** → A unit test must produce the same result on every run absent a code change. Remove uncontrolled variation — inject clocks, seed RNGs, use test doubles instead of live systems.
+  > Pick when: a test passes sometimes and fails sometimes with no code change, or unseeded `Date.now()`/`Math.random()` or live network/DB calls appear in a unit test.
 
 - **Test Isolation** → Tests must not depend on execution order or shared mutable state. Each test sets up its own preconditions and cleans up after itself.
   > Pick when: tests fail when run individually but pass in suite (or vice versa), `beforeAll` sets state consumed by multiple tests without `beforeEach` reset, or tests write to shared variables.
+
+## Layering
+
+- **Segregate Integration Tests** → Tests that must hit a live external system are a separate layer, not unit tests; mark them, keep them out of the fast loop, and point them at a controlled sandbox.
+  > Pick when: integration tests share the unit suite, or a broker/DB/API test is flagged for calling a live system that is its whole purpose.
 
 ### Sources
 
@@ -42,3 +47,4 @@ Concrete testing conventions a reviewer can check in a diff.
 - [Test Behavior Not Implementation](https://testing.googleblog.com/2013/08/testing-on-toilet-test-behavior-not.html) → Google Testing Blog (2013)
 - [Deterministic Tests](https://martinfowler.com/articles/nonDeterminism.html) → Martin Fowler, "Eradicating Non-Determinism in Tests"
 - [Test Isolation](https://brightsec.com/blog/unit-testing-best-practices/) → industry standard practice
+- [Segregate Integration Tests](https://abseil.io/resources/swe-book/html/ch11.html) → "Software Engineering at Google", ch. 11, test sizes (small forbids network; large permits it); Fowler, [Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
